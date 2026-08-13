@@ -86,7 +86,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, and Grok through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, and Hermes through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -147,6 +147,53 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Hermes | `~/.hermes/config.yaml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/hermes.jsonl` |
+
+#### Hermes
+
+Hermes uses snake_case shell hooks defined in the `hooks:` block of
+`~/.hermes/config.yaml`. The installer writes a marker-delimited managed block
+inside that key, so surrounding comments and formatting are left untouched:
+
+```yaml
+hooks:
+  # >>> agent-monitor hooks >>>
+  pre_tool_call:
+    - command: "… hook_entry.py --provider hermes --log …"
+      timeout: 5
+  # <<< agent-monitor hooks <<<
+```
+
+Install refuses to run if `config.yaml` already hand-defines one of the managed
+events, since a duplicate YAML key would silently shadow the existing hook.
+Remove or rename the conflicting entry first.
+
+Hermes events are translated to the provider-neutral names the rest of SidePulse
+uses:
+
+| Hermes event | SidePulse event | Status |
+| --- | --- | --- |
+| `on_session_start` | `SessionStart` | Idle / ready |
+| `pre_llm_call` | `UserPromptSubmit` | Working |
+| `pre_tool_call` | `PreToolUse` | Tool running |
+| `post_tool_call` | `PostToolUse` | Working |
+| `api_request_error` | `StopFailure` | Blocked / error |
+| `subagent_start` / `subagent_stop` | `SubagentStart` / `SubagentStop` | Working / completed |
+| `on_session_end` | `Stop` | Completed, or blocked when the turn failed |
+| `on_session_finalize` | `SessionEnd` | Completed |
+
+A Hermes `on_session_end` is a *turn* boundary rather than process exit, so its
+`completed` / `failed` / `interrupted` flags select the final status.
+
+Hermes gates shell hooks behind a consent allowlist. After installing, approve
+them once — confirm at the TTY prompt on the next run, or set
+`HERMES_ACCEPT_HOOKS=1` — otherwise the hooks are registered but never fire.
+Verify with:
+
+```sh
+hermes hooks list
+hermes hooks test pre_tool_call
+```
 
 #### Local reply classifier (Apple Silicon)
 
@@ -222,11 +269,12 @@ Set up this Mac explicitly after package install:
 sidepulse setup
 ```
 
-`sidepulse setup` installs or refreshes Codex, Claude, and Grok hooks, installs
+`sidepulse setup` installs or refreshes Codex, Claude, Grok, and Hermes hooks, installs
 SidePulse Pro Eject Prevention, writes the status-bar LaunchAgent, starts both helpers
 immediately, and enables them at login. This is intentionally an explicit
 command instead of a `pip install` side effect. To set up only one provider, use
-`sidepulse setup codex`, `sidepulse setup claude`, or `sidepulse setup grok`.
+`sidepulse setup codex`, `sidepulse setup claude`, `sidepulse setup grok`, or
+`sidepulse setup hermes`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
 
@@ -283,6 +331,7 @@ sidepulse agent-monitor install
 sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
+sidepulse agent-monitor install hermes
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -349,7 +398,7 @@ Codex `PermissionRequest` events are treated as Ask and remain sticky until the
 matching tool command finishes. This prevents unrelated same-session activity
 from hiding an approval prompt that is still waiting on the user.
 
-For Codex, Claude, or Grok projects that should report this reliably, add
+For Codex, Claude, Grok, or Hermes projects that should report this reliably, add
 guidance like this to the relevant agent instructions:
 
 ```text
@@ -384,6 +433,7 @@ sidepulse agent-monitor uninstall
 sidepulse agent-monitor uninstall codex
 sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
+sidepulse agent-monitor uninstall hermes
 ```
 
 Install and start the macOS status-bar app:
@@ -446,7 +496,7 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, and Grok hooks. The transcript
+window can install or uninstall Codex, Claude, Grok, and Hermes hooks. The transcript
 checkboxes control the file-based CLI/debug fallback; the status-bar app gets
 live updates from the local hook event socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.

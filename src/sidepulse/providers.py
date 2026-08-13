@@ -61,7 +61,38 @@ GROK_EVENTS = (
     "SessionEnd",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok")
+# Hermes fires snake_case lifecycle hooks from ~/.hermes/config.yaml. These are
+# the subset that maps onto a SidePulse status; the rest are transform hooks or
+# too chatty to drive an LED.
+HERMES_EVENTS = (
+    "on_session_start",
+    "pre_llm_call",
+    "pre_tool_call",
+    "post_tool_call",
+    "api_request_error",
+    "subagent_start",
+    "subagent_stop",
+    "on_session_end",
+    "on_session_finalize",
+)
+
+# Hermes event name -> canonical SidePulse event. Everything downstream
+# (mode_for_event, the status bar, the LED writer) keys off the canonical name,
+# so translating here is all the integration needs.
+HERMES_EVENT_ALIASES = {
+    "on_session_start": "SessionStart",
+    "pre_llm_call": "UserPromptSubmit",
+    "pre_tool_call": "PreToolUse",
+    "post_tool_call": "PostToolUse",
+    "api_request_error": "StopFailure",
+    "subagent_start": "SubagentStart",
+    "subagent_stop": "SubagentStop",
+    # A Hermes "session end" is a turn boundary, not process exit.
+    "on_session_end": "Stop",
+    "on_session_finalize": "SessionEnd",
+}
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "hermes")
 KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
 
 
@@ -101,7 +132,12 @@ def default_log_path(provider: str, home: Path | None = None) -> Path:
 
 
 def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
-    return [detect_codex_config(home), detect_claude_config(home), detect_grok_config(home)]
+    return [
+        detect_codex_config(home),
+        detect_claude_config(home),
+        detect_grok_config(home),
+        detect_hermes_config(home),
+    ]
 
 
 def detect_codex_config(home: Path | None = None) -> ProviderConfig:
@@ -243,6 +279,135 @@ def detect_grok_config(home: Path | None = None) -> ProviderConfig:
     )
 
 
+def default_hermes_config_path(home: Path | None = None) -> Path:
+    base = home or Path.home()
+    return base / ".hermes" / "config.yaml"
+
+
+def detect_hermes_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_hermes_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("hermes", config_path, False, False, (), ())
+
+    try:
+        text = config_path.read_text()
+    except OSError:
+        return ProviderConfig("hermes", config_path, True, False, (), ())
+
+    hook_events, paths = parse_hermes_hooks_block(text)
+    return ProviderConfig(
+        "hermes",
+        config_path,
+        True,
+        bool(hook_events),
+        hook_events,
+        _dedupe_paths(paths),
+    )
+
+
+def parse_hermes_hooks_block(text: str) -> tuple[tuple[str, ...], list[Path]]:
+    """Scan the top-level ``hooks:`` block for event names and hook commands.
+
+    Deliberately text-based rather than a YAML parse: sidepulse ships with no
+    YAML dependency, and the user's config.yaml is comment-heavy so we never
+    want to round-trip it through a dumper.
+    """
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if re.match(r"^hooks:\s*(#.*)?$", line):
+            start = index + 1
+            break
+
+    if start is None:
+        return (), []
+
+    hook_events: list[str] = []
+    paths: list[Path] = []
+
+    for line in lines[start:]:
+        if line.strip() and not line.startswith((" ", "\t", "#")):
+            break  # dedented back to a new top-level key
+
+        event_match = re.match(r"^[ \t]{1,4}([A-Za-z_][A-Za-z0-9_]*):\s*(#.*)?$", line)
+        if event_match:
+            canonical = canonical_event_name(event_match.group(1))
+            if canonical and event_match.group(1) in HERMES_EVENTS:
+                hook_events.append(canonical)
+            continue
+
+        command_match = re.search(r"\bcommand:\s*(.+?)\s*$", line)
+        if command_match:
+            paths.extend(extract_log_paths_from_command(_unquote_yaml_scalar(command_match.group(1))))
+
+    return tuple(sorted(set(hook_events))), paths
+
+
+def _unquote_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        if value[0] == '"':
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value[1:-1]
+        return value[1:-1].replace("''", "'")
+    return value
+
+
+# Hermes nests every event-specific kwarg under "extra"; SidePulse's collector
+# reads them at the top level.
+HERMES_FIELD_ALIASES = {
+    "result": "tool_response",
+    "final_response": "last_assistant_message",
+    "child_summary": "last_assistant_message",
+    "task_id": "turn_id",
+}
+
+
+def flatten_hermes_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Lift Hermes' ``extra`` bag to the top level and map its field names."""
+    flattened = {key: value for key, value in raw.items() if key != "extra"}
+
+    extra = raw.get("extra")
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            flattened.setdefault(key, value)
+
+    for source, target in HERMES_FIELD_ALIASES.items():
+        if source in flattened:
+            flattened.setdefault(target, flattened[source])
+
+    if not flattened.get("agent_id"):
+        parent = raw.get("parent_session_id") or (extra or {}).get("parent_session_id")
+        child_role = (extra or {}).get("child_role")
+        if parent and child_role:
+            flattened["agent_id"] = f"{parent}:{child_role}"
+
+    explicit = hermes_explicit_status(flattened)
+    if explicit:
+        flattened.setdefault("sidepulse_status", explicit)
+
+    return flattened
+
+
+def hermes_explicit_status(payload: dict[str, Any]) -> str | None:
+    """Turn Hermes' turn-outcome booleans into an explicit SidePulse status."""
+    event = payload.get("hook_event_name")
+    if event == "api_request_error":
+        return "error"
+    if event not in {"on_session_end", "subagent_stop"}:
+        return None
+
+    if payload.get("failed") is True or payload.get("child_status") == "failed":
+        return "error"
+    if payload.get("interrupted") is True:
+        return "waiting"
+    if payload.get("completed") is True or payload.get("child_status") == "completed":
+        return "completed"
+    return None
+
+
 def detect_log_path(provider: str, home: Path | None = None) -> Path:
     if provider == "codex":
         config = detect_codex_config(home)
@@ -250,6 +415,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_claude_config(home)
     elif provider == "grok":
         config = detect_grok_config(home)
+    elif provider == "hermes":
+        config = detect_hermes_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
@@ -277,6 +444,8 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
         raw = obj
         logged_at = raw.get("logged_at") or raw.get("timestamp")
     provider = infer_provider_from_payload(provider, raw)
+    if provider == "hermes":
+        raw = flatten_hermes_payload(raw)
 
     event_name = canonical_event_name(
         raw.get("hook_event_name")
@@ -350,6 +519,7 @@ def canonical_event_name(value: Any) -> str | None:
             "stop_failure": "StopFailure",
         }
     )
+    aliases.update(HERMES_EVENT_ALIASES)
     return aliases.get(normalized)
 
 
