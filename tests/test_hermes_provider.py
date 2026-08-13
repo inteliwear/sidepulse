@@ -227,6 +227,35 @@ class HermesInstallTests(unittest.TestCase):
         self.assertIn("SessionStart", detected.hook_events)
         self.assertEqual(detected.log_paths[0], self.log)
 
+    def test_detect_ignores_unmanaged_hooks(self):
+        home = self.tmp / "home"
+        (home / ".hermes").mkdir(parents=True)
+        config = home / ".hermes" / "config.yaml"
+        config.write_text(
+            SAMPLE_CONFIG + "\nhooks:\n  pre_llm_call:\n    - command: /bin/mine --log /tmp/mine.log\n"
+        )
+
+        detected = detect_hermes_config(home)
+        self.assertTrue(detected.exists)
+        self.assertFalse(detected.hooks_enabled)
+        self.assertEqual(detected.hook_events, ())
+        self.assertEqual(detected.log_paths, ())
+
+    def test_detect_separates_managed_from_unmanaged_hooks(self):
+        home = self.tmp / "home"
+        (home / ".hermes").mkdir(parents=True)
+        config = home / ".hermes" / "config.yaml"
+        config.write_text(
+            SAMPLE_CONFIG
+            + "\nhooks:\n  transform_llm_output:\n    - command: /bin/mine --log /tmp/mine.log\n"
+        )
+        install_hermes_hooks(log_path=self.log, config_path=config)
+
+        detected = detect_hermes_config(home)
+        self.assertIn("PreToolUse", detected.hook_events)
+        self.assertEqual(detected.log_paths, (self.log,))
+        self.assertNotIn(Path("/tmp/mine.log"), detected.log_paths)
+
     def test_detect_missing_config(self):
         detected = detect_hermes_config(self.tmp / "nowhere")
         self.assertFalse(detected.exists)

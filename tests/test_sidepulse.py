@@ -75,6 +75,7 @@ from sidepulse.lid_sleep import (
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus
 from sidepulse.origin import ProcessInfo, origin_from_processes
 from sidepulse.providers import (
+    detect_claude_config,
     detect_grok_config,
     default_log_path,
     default_state_dir,
@@ -2832,6 +2833,55 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertTrue(result.changed)
             self.assertFalse(stale.exists())
+
+    def test_detect_claude_config_ignores_third_party_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".claude" / "settings.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            event: [{"hooks": [{"type": "command", "command": "/opt/cc-status"}]}]
+                            for event in ("SessionStart", "PreToolUse", "Stop")
+                        }
+                    }
+                )
+            )
+
+            detected = detect_claude_config(home)
+
+            self.assertTrue(detected.exists)
+            self.assertFalse(detected.hooks_enabled)
+            self.assertEqual(detected.hook_events, ())
+
+    def test_detect_claude_config_finds_managed_hooks_beside_third_party(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".claude" / "settings.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "Notification": [
+                                {"hooks": [{"type": "command", "command": "/opt/cc-status"}]}
+                            ]
+                        }
+                    }
+                )
+            )
+            log = home / "state" / "claude.jsonl"
+            install_claude_hooks(log_path=log, config_path=config, python_executable="python3")
+
+            detected = detect_claude_config(home)
+
+            self.assertTrue(detected.hooks_enabled)
+            self.assertIn("PreToolUse", detected.hook_events)
+            # Notification carries both hooks now; only our log path is reported.
+            self.assertIn("Notification", detected.hook_events)
+            self.assertEqual(detected.log_paths, (log,))
 
     def test_detect_grok_config_reads_managed_hook_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

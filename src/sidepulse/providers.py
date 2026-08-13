@@ -229,6 +229,8 @@ def detect_claude_config(home: Path | None = None) -> ProviderConfig:
         for event_name, entries in hooks.items():
             if event_name not in CLAUDE_EVENTS or not isinstance(entries, list):
                 continue
+            if not _entries_contain_sidepulse_hook(entries):
+                continue
             hook_events.append(event_name)
             paths.extend(_paths_from_hook_entries(entries))
 
@@ -265,6 +267,8 @@ def detect_grok_config(home: Path | None = None) -> ProviderConfig:
         for event_name, entries in hooks.items():
             canonical = canonical_event_name(event_name)
             if canonical not in GROK_EVENTS or not isinstance(entries, list):
+                continue
+            if not _entries_contain_sidepulse_hook(entries):
                 continue
             hook_events.append(canonical)
             paths.extend(_paths_from_hook_entries(entries))
@@ -324,6 +328,7 @@ def parse_hermes_hooks_block(text: str) -> tuple[tuple[str, ...], list[Path]]:
 
     hook_events: list[str] = []
     paths: list[Path] = []
+    current_event: str | None = None
 
     for line in lines[start:]:
         if line.strip() and not line.startswith((" ", "\t", "#")):
@@ -331,14 +336,20 @@ def parse_hermes_hooks_block(text: str) -> tuple[tuple[str, ...], list[Path]]:
 
         event_match = re.match(r"^[ \t]{1,4}([A-Za-z_][A-Za-z0-9_]*):\s*(#.*)?$", line)
         if event_match:
-            canonical = canonical_event_name(event_match.group(1))
-            if canonical and event_match.group(1) in HERMES_EVENTS:
-                hook_events.append(canonical)
+            name = event_match.group(1)
+            current_event = name if name in HERMES_EVENTS else None
             continue
 
         command_match = re.search(r"\bcommand:\s*(.+?)\s*$", line)
         if command_match:
-            paths.extend(extract_log_paths_from_command(_unquote_yaml_scalar(command_match.group(1))))
+            command = _unquote_yaml_scalar(command_match.group(1))
+            # Only our own hooks count; the user's other hooks share this block.
+            if not is_sidepulse_hook_command(command):
+                continue
+            paths.extend(extract_log_paths_from_command(command))
+            canonical = canonical_event_name(current_event) if current_event else None
+            if canonical:
+                hook_events.append(canonical)
 
     return tuple(sorted(set(hook_events))), paths
 
@@ -551,6 +562,30 @@ def _event_alias_key(event_name: str) -> str:
 def _copy_alias(data: dict[str, Any], source: str, target: str) -> None:
     if target not in data and source in data:
         data[target] = data[source]
+
+
+def is_sidepulse_hook_command(command: Any) -> bool:
+    """True when a configured hook command is one this tool installed.
+
+    Providers share their hook config with whatever else the user has wired up
+    (iTerm2 status helpers, notifiers, ...), so detection has to look for our
+    own entry point instead of assuming any hook is ours.
+    """
+    if not isinstance(command, str):
+        return False
+    if "hook_entry.py" in command:
+        return True
+    return "hook-log" in command and "--provider" in command
+
+
+def _entries_contain_sidepulse_hook(entries: list[Any]) -> bool:
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for hook in entry.get("hooks") or []:
+            if isinstance(hook, dict) and is_sidepulse_hook_command(hook.get("command")):
+                return True
+    return False
 
 
 def _paths_from_hook_entries(entries: list[Any]) -> list[Path]:
