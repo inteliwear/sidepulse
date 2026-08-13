@@ -18,8 +18,11 @@ from typing import Any
 from .providers import (
     CLAUDE_EVENTS,
     CODEX_EVENTS,
+    CURSOR_EVENTS,
     GROK_EVENTS,
+    default_cursor_hook_config_path,
     default_grok_hook_config_path,
+    default_log_path,
     detect_log_path,
 )
 
@@ -263,6 +266,118 @@ def uninstall_grok_hooks(
                 pass
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+_CURSOR_EVENT_STATUS = {
+    "beforeSubmitPrompt": "working",
+    "stop": "done",
+}
+
+
+def cursor_status_command(status: str) -> str:
+    """Build a portable command that publishes a status-only transition.
+
+    Prefers the installed ``sidepulse`` / ``agent-monitor`` console script so
+    the hook keeps working regardless of how SidePulse was installed, and
+    falls back to ``python -m sidepulse``. The command is written into the
+    user's `~/.cursor/hooks.json` at install time.
+    """
+    status_q = shlex.quote(status)
+    bin_path = shutil.which("sidepulse") or shutil.which("agent-monitor")
+    if bin_path:
+        base = shlex.quote(bin_path)
+        if Path(bin_path).name == "agent-monitor":
+            return f"{base} publish-status {status_q}"
+        return f"{base} agent-monitor publish-status {status_q}"
+    return f"{shlex.quote(sys.executable)} -m sidepulse agent-monitor publish-status {status_q}"
+
+
+def _is_managed_cursor_entry(entry: Any) -> bool:
+    """True for a Cursor hook entry that this installer manages."""
+    return isinstance(entry, dict) and "publish-status" in str(entry.get("command", ""))
+
+
+def install_cursor_hooks(
+    config_path: Path | None = None,
+    *,
+    dry_run: bool = False,
+) -> InstallResult:
+    """Register status-only Cursor hooks in ~/.cursor/hooks.json.
+
+    Unlike the Codex / Claude / Grok hooks, nothing is logged: the Cursor
+    commands publish an explicit status transition over the status-bar socket
+    and carry no message content.
+    """
+    config = config_path or default_cursor_hook_config_path()
+    target_log = default_log_path("cursor")
+    data = read_json_config(config)
+    original = json.dumps(data if isinstance(data, dict) else {}, sort_keys=True)
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("version", 1)
+    hooks = data.setdefault("hooks", {})
+
+    for event_name, status in _CURSOR_EVENT_STATUS.items():
+        entries = hooks.get(event_name)
+        if not isinstance(entries, list):
+            entries = hooks[event_name] = []
+        cleaned = [entry for entry in entries if not _is_managed_cursor_entry(entry)]
+        cleaned.append({"command": cursor_status_command(status)})
+        hooks[event_name] = cleaned
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+
+    return InstallResult("cursor", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_cursor_hooks(
+    config_path: Path | None = None,
+    *,
+    dry_run: bool = False,
+) -> InstallResult:
+    """Remove the managed Cursor status hooks, preserving any other hooks."""
+    config = config_path or default_cursor_hook_config_path()
+    target_log = default_log_path("cursor")
+    data = read_json_config(config)
+    if not isinstance(data, dict) or not data:
+        return InstallResult("cursor", config, target_log, False, None, dry_run)
+
+    original = json.dumps(data, sort_keys=True)
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event_name in list(hooks):
+            if event_name not in CURSOR_EVENTS:
+                continue
+            entries = hooks.get(event_name)
+            if not isinstance(entries, list):
+                continue
+            cleaned = [entry for entry in entries if not _is_managed_cursor_entry(entry)]
+            if cleaned:
+                hooks[event_name] = cleaned
+            else:
+                hooks.pop(event_name, None)
+        if not hooks:
+            data.pop("hooks", None)
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        backup = backup_file(config)
+        if data:
+            config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        else:
+            try:
+                config.unlink()
+            except FileNotFoundError:
+                pass
+
+    return InstallResult("cursor", config, target_log, changed, backup, dry_run)
 
 
 def hook_command(

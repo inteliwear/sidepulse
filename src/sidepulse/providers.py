@@ -61,7 +61,16 @@ GROK_EVENTS = (
     "SessionEnd",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok")
+# Cursor's hook events that SidePulse subscribes to. Unlike the Codex / Claude
+# / Grok hooks, the Cursor integration is status-only: the registered commands
+# publish an explicit `sidepulse_status` transition and never write message
+# content to a local log.
+CURSOR_EVENTS = (
+    "beforeSubmitPrompt",
+    "stop",
+)
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor")
 KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
 
 
@@ -101,7 +110,48 @@ def default_log_path(provider: str, home: Path | None = None) -> Path:
 
 
 def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
-    return [detect_codex_config(home), detect_claude_config(home), detect_grok_config(home)]
+    return [
+        detect_codex_config(home),
+        detect_claude_config(home),
+        detect_grok_config(home),
+        detect_cursor_config(home),
+    ]
+
+
+def default_cursor_hook_config_path(home: Path | None = None) -> Path:
+    base = home or Path.home()
+    return base / ".cursor" / "hooks.json"
+
+
+def detect_cursor_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_cursor_hook_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("cursor", config_path, False, False, (), ())
+
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        return ProviderConfig("cursor", config_path, True, False, (), ())
+
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    events: list[str] = []
+    if isinstance(hooks, dict):
+        for event_name, entries in hooks.items():
+            if event_name not in CURSOR_EVENTS or not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if isinstance(entry, dict) and "publish-status" in str(entry.get("command", "")):
+                    events.append(event_name)
+                    break
+
+    return ProviderConfig(
+        "cursor",
+        config_path,
+        True,
+        bool(events),
+        tuple(sorted(set(events))),
+        (),
+    )
 
 
 def detect_codex_config(home: Path | None = None) -> ProviderConfig:
