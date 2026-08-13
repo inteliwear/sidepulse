@@ -40,6 +40,7 @@ from sidepulse.collector import (
     default_sources,
 )
 from sidepulse.cli import build_parser, visible_watch_statuses
+from sidepulse.cursor_status import VALID_STATUS, publish_status
 from sidepulse.device_writer import (
     DeviceWriteError,
     discover_devices,
@@ -51,9 +52,11 @@ from sidepulse.hook import format_hook_payload, routed_hook_payload, write_hook_
 from sidepulse.ipc import HookEventServer, send_hook_event
 from sidepulse.install import (
     hook_command,
+    install_cursor_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_grok_hooks,
+    uninstall_cursor_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_grok_hooks,
@@ -84,6 +87,7 @@ from sidepulse.lid_sleep import (
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus
 from sidepulse.origin import ProcessInfo, origin_from_processes
 from sidepulse.providers import (
+    detect_cursor_config,
     detect_grok_config,
     default_log_path,
     default_state_dir,
@@ -3066,6 +3070,124 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(detected.hooks_enabled)
             self.assertIn("PreToolUse", detected.hook_events)
             self.assertIn(log, detected.log_paths)
+
+    def test_cursor_installer_writes_status_only_hooks_and_preserves_other_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "sidepulse.install.shutil.which", return_value="/usr/local/bin/sidepulse"
+        ):
+            base = Path(tmp)
+            config = base / ".cursor" / "hooks.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "hooks": {
+                            "afterFileEdit": [
+                                {"command": "bun run .cursor/hooks/grind.ts"}
+                            ]
+                        },
+                    }
+                )
+            )
+
+            result = install_cursor_hooks(config_path=config)
+
+            self.assertTrue(result.changed)
+            data = json.loads(config.read_text())
+            self.assertEqual(data["version"], 1)
+            # User's own hook is preserved.
+            self.assertEqual(
+                data["hooks"]["afterFileEdit"],
+                [{"command": "bun run .cursor/hooks/grind.ts"}],
+            )
+            # Our status-only hooks point at publish-status and carry no content.
+            self.assertEqual(
+                data["hooks"]["beforeSubmitPrompt"],
+                [{"command": "/usr/local/bin/sidepulse agent-monitor publish-status working"}],
+            )
+            self.assertEqual(
+                data["hooks"]["stop"],
+                [{"command": "/usr/local/bin/sidepulse agent-monitor publish-status done"}],
+            )
+
+    def test_cursor_uninstaller_removes_managed_hooks_and_preserves_other_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "sidepulse.install.shutil.which", return_value="/usr/local/bin/sidepulse"
+        ):
+            base = Path(tmp)
+            config = base / ".cursor" / "hooks.json"
+            config.parent.mkdir(parents=True)
+            install_cursor_hooks(config_path=config)
+            data = json.loads(config.read_text())
+            data["hooks"]["afterFileEdit"] = [{"command": "bun run grind.ts"}]
+            config.write_text(json.dumps(data))
+
+            result = uninstall_cursor_hooks(config_path=config)
+
+            self.assertTrue(result.changed)
+            data = json.loads(config.read_text())
+            self.assertNotIn("beforeSubmitPrompt", data["hooks"])
+            self.assertNotIn("stop", data["hooks"])
+            # Unrelated hooks survive.
+            self.assertEqual(data["hooks"]["afterFileEdit"], [{"command": "bun run grind.ts"}])
+
+    def test_detect_cursor_config_reads_managed_hook_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "sidepulse.install.shutil.which", return_value="/usr/local/bin/sidepulse"
+        ):
+            home = Path(tmp)
+            config = home / ".cursor" / "hooks.json"
+            config.parent.mkdir(parents=True)
+            install_cursor_hooks(config_path=config)
+
+            detected = detect_cursor_config(home)
+
+            self.assertEqual(detected.provider, "cursor")
+            self.assertTrue(detected.exists)
+            self.assertTrue(detected.hooks_enabled)
+            self.assertIn("beforeSubmitPrompt", detected.hook_events)
+            self.assertIn("stop", detected.hook_events)
+
+    def test_cursor_publish_status_reaches_status_bar_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"XDG_STATE_HOME": tmp}, clear=False
+        ):
+            received: list[tuple[str, dict]] = []
+            server = HookEventServer(lambda provider, line: received.append((provider, line)))
+            server.start()
+            try:
+                ok = publish_status("working", cwd="/workspace")
+            finally:
+                time.sleep(0.2)
+                server.stop()
+
+            self.assertTrue(ok)
+            self.assertEqual(len(received), 1)
+            provider, line = received[0]
+            self.assertEqual(provider, "cursor")
+            self.assertEqual(line["sidepulse_status"], "working")
+            self.assertEqual(line["cwd"], "/workspace")
+
+    def test_cursor_publish_status_is_status_only_and_validates(self) -> None:
+        self.assertIn("working", VALID_STATUS)
+        with patch("sidepulse.cursor_status.send_hook_event", return_value=True) as send:
+            ok = publish_status("working", provider="cursor", cwd="/workspace")
+            self.assertTrue(ok)
+            self.assertEqual(send.call_count, 1)
+            provider, state = send.call_args.args
+            self.assertEqual(provider, "cursor")
+            self.assertEqual(state["sidepulse_status"], "working")
+            # No message content is ever included.
+            self.assertNotIn("message", state)
+            self.assertNotIn("prompt", state)
+            self.assertNotIn("last_assistant_message", state)
+
+    def test_cursor_publish_status_rejects_invalid_token(self) -> None:
+        with patch("sidepulse.cursor_status.send_hook_event", return_value=True) as send:
+            ok = publish_status("not-a-status")
+            self.assertFalse(ok)
+            send.assert_not_called()
 
     def test_sidepulse_sidepulse_command_shape(self) -> None:
         parser = build_parser(prog="sidepulse agent-monitor")
