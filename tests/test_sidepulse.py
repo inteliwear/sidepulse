@@ -2477,9 +2477,9 @@ class AgentMonitorTests(unittest.TestCase):
             key = f"{config}:pre_tool_use:0:0"
             config.write_text("[features]\nhooks = true\n")
 
-            with patch("sidepulse.install.should_refresh_codex_hook_trust", return_value=True):
+            with patch("sidepulse.install.codex.should_refresh_codex_hook_trust", return_value=True):
                 with patch(
-                    "sidepulse.install.resolve_codex_hook_hashes",
+                    "sidepulse.install.codex.resolve_codex_hook_hashes",
                     return_value={key: "sha256:new-current-hash"},
                 ):
                     result = install_codex_hooks(
@@ -4161,7 +4161,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("status-bar start --foreground", script)
 
     def test_frozen_hook_command_uses_internal_cli(self) -> None:
-        with patch("sidepulse.install.sys.frozen", True, create=True):
+        with patch("sidepulse.install._common.sys.frozen", True, create=True):
             command = hook_command("codex", Path("/tmp/codex events.jsonl"))
 
         self.assertEqual(

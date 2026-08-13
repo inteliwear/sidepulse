@@ -206,6 +206,26 @@ class HermesInstallTests(unittest.TestCase):
         self.assertIn("pre_tool_call", str(ctx.exception))
         self.assertNotIn("hook_entry.py", self.config.read_text())
 
+    def test_install_after_bare_hooks_key_without_trailing_newline(self):
+        yaml = self._require_yaml()
+        self.config.write_text(SAMPLE_CONFIG + "\nhooks:")
+        self.install()
+
+        text = self.config.read_text()
+        self.assertNotIn("hooks:  #", text)
+        data = yaml.safe_load(text)
+        for event in HERMES_EVENTS:
+            self.assertIn(event, data["hooks"])
+
+    def test_conflict_detected_below_top_level_comment(self):
+        self.config.write_text(
+            SAMPLE_CONFIG
+            + "\nhooks:\n# hand-written hooks below\n  pre_tool_call:\n    - command: /bin/mine\n"
+        )
+        with self.assertRaises(HermesHookConflict) as ctx:
+            self.install()
+        self.assertIn("pre_tool_call", str(ctx.exception))
+
     def test_dry_run_does_not_write(self):
         self.config.write_text(SAMPLE_CONFIG)
         result = self.install(dry_run=True)
