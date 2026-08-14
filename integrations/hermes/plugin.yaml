@@ -1,0 +1,29 @@
+name: hermes-sidepulse
+version: "0.1.0"
+description: Privacy-safe Hermes lifecycle status integration for SidePulse
+author: Cesar J. Garcia
+kind: standalone
+# `hooks` is consumed by Hermes v0.20; `provides_hooks` keeps the plugin
+# declaration explicit for newer doctor/index tooling.
+hooks:
+  - on_session_start
+  - on_session_reset
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - pre_approval_request
+  - post_approval_response
+  - api_request_error
+  - post_llm_call
+  - on_session_end
+provides_hooks:
+  - on_session_start
+  - on_session_reset
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - pre_approval_request
+  - post_approval_response
+  - api_request_error
+  - post_llm_call
+  - on_session_end

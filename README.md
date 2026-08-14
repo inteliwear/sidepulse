@@ -86,7 +86,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, and Grok through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, and Hermes through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -147,6 +147,10 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Hermes | [Hermes lifecycle plugin](integrations/hermes/) | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/hermes.jsonl` |
+
+Hermes uses a native, privacy-safe lifecycle plugin instead of shell hooks. Install
+and diagnose it using the instructions in [`integrations/hermes`](integrations/hermes/).
 
 #### Local reply classifier (Apple Silicon)
 
@@ -229,6 +233,10 @@ command instead of a `pip install` side effect. To set up only one provider, use
 `sidepulse setup codex`, `sidepulse setup claude`, or `sidepulse setup grok`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
+
+Hermes integration is installed separately through Hermes' plugin manager; see
+[`integrations/hermes`](integrations/hermes/). `sidepulse setup` intentionally does
+not modify Hermes configuration.
 
 SidePulse Pro Eject Prevention keeps the built-in SD reader attached after
 macOS hibernate or lock-screen mount refusals. By default setup installs it
