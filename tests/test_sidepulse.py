@@ -251,6 +251,29 @@ class AgentMonitorTests(unittest.TestCase):
                 is not None
             )
 
+    def test_hermes_session_activate_is_parsed_with_explicit_status(self) -> None:
+        record = parse_log_line(
+            "hermes",
+            json.dumps(
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "durable-session",
+                    "integration": "hermes-plugin",
+                    "agent_id": "hermes:durable-session",
+                    "sidepulse_status": "working",
+                    "logged_at": "2026-08-14T12:00:00Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.mode, AgentMode.WORKING)
+        self.assertEqual(status.event_name, "SessionActivate")
+
     def test_hook_payload_stamps_origin_from_vscode_environment(self) -> None:
         with patch.dict(os.environ, {"TERM_PROGRAM": "vscode"}, clear=True):
             line = format_hook_payload(

@@ -72,15 +72,16 @@ def _surface_metadata(platform: Any) -> tuple[str, str, str]:
     return surface, f"Hermes {surface.title()}", f"hermes_{surface.replace('-', '_')}"
 
 
-def recover_session_surface(
+def _recent_session_events(
     settings: PluginSettings,
     session_id: Any,
-) -> str:
-    """Recover safe client provenance after Hermes reloads the plugin module."""
+) -> tuple[Mapping[str, Any], ...]:
+    """Return bounded, newest-first metadata events for one durable session."""
 
     durable_session_id = str(session_id or "").strip()
     if not durable_session_id or not settings.log_events:
-        return ""
+        return ()
+    expected_agent_id = _status_agent_id(settings.agent_id, durable_session_id)
     try:
         target = settings.resolved_state_dir() / f"{settings.provider}.jsonl"
         with open(target, "rb") as handle:
@@ -91,6 +92,7 @@ def recover_session_surface(
             data = handle.read(end - start)
         if start:
             _, _, data = data.partition(b"\n")
+        events: list[Mapping[str, Any]] = []
         for raw_line in reversed(data.splitlines()):
             try:
                 event = json.loads(raw_line)
@@ -100,6 +102,24 @@ def recover_session_surface(
                 continue
             if event.get("session_id") != durable_session_id:
                 continue
+            if event.get("integration") != "hermes-plugin":
+                continue
+            if event.get("agent_id") != expected_agent_id:
+                continue
+            events.append(event)
+        return tuple(events)
+    except (OSError, TypeError, ValueError):
+        return ()
+
+
+def recover_session_surface(
+    settings: PluginSettings,
+    session_id: Any,
+) -> str:
+    """Recover safe client provenance after Hermes reloads the plugin module."""
+
+    for event in _recent_session_events(settings, session_id):
+        try:
             if event.get("hook_event_name") in _APPROVAL_EVENT_NAMES:
                 continue
             surface = str(event.get("surface") or "").strip().lower()
@@ -111,8 +131,26 @@ def recover_session_surface(
             ):
                 continue
             return surface
-    except (OSError, TypeError, ValueError):
-        return ""
+        except (RecursionError, TypeError, ValueError):
+            continue
+    return ""
+
+
+def recover_session_mode(settings: PluginSettings, session_id: Any) -> str:
+    """Recover the most recent normalized status for a durable session."""
+
+    allowed = {
+        "idle_ready",
+        "working",
+        "tool_running",
+        "waiting_for_input",
+        "completed",
+        "blocked_error",
+    }
+    for event in _recent_session_events(settings, session_id):
+        mode = str(event.get("sidepulse_mode") or "").strip().lower()
+        if mode in allowed:
+            return mode
     return ""
 
 
@@ -166,6 +204,11 @@ def _event_mapping(
 ) -> tuple[str, str] | None:
     if hook_name == "on_session_start" or hook_name == "on_session_reset":
         return "SessionStart", "idle_ready"
+    if hook_name == "on_session_activate":
+        mode = str(payload.get("activation_mode") or "idle_ready").strip().lower()
+        if mode not in {"idle_ready", "working", "waiting_for_input"}:
+            mode = "idle_ready"
+        return "SessionActivate", mode
     if hook_name == "pre_llm_call":
         return "UserPromptSubmit", "working"
     if hook_name == "pre_tool_call":

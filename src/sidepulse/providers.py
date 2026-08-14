@@ -62,7 +62,10 @@ GROK_EVENTS = (
 )
 
 HOOK_PROVIDERS = ("codex", "claude", "grok")
-KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
+HERMES_EVENTS = ("SessionActivate",)
+KNOWN_EVENTS = tuple(
+    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + HERMES_EVENTS)
+)
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ kind: standalone
 # declaration explicit for newer doctor/index tooling.
 hooks:
   - on_session_start
+  - on_session_activate
   - on_session_reset
   - pre_llm_call
   - pre_tool_call
@@ -18,6 +19,7 @@ hooks:
   - on_session_end
 provides_hooks:
   - on_session_start
+  - on_session_activate
   - on_session_reset
   - pre_llm_call
   - pre_tool_call

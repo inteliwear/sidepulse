@@ -349,7 +349,9 @@ class HermesBridgeTests(unittest.TestCase):
             event_log.write_text(
                 json.dumps(
                     {
+                        "agent_id": bridge._status_agent_id("Hermes", "session-a"),
                         "hook_event_name": "SessionStart",
+                        "integration": "hermes-plugin",
                         "session_id": "session-a",
                         "surface": "desktop",
                     }
@@ -374,7 +376,9 @@ class HermesBridgeTests(unittest.TestCase):
         initial = (
             json.dumps(
                 {
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
                     "hook_event_name": "SessionStart",
+                    "integration": "hermes-plugin",
                     "session_id": "session-a",
                     "surface": "desktop",
                 }
@@ -422,17 +426,23 @@ class HermesBridgeTests(unittest.TestCase):
             event_log = state_dir / "hermes.jsonl"
             records = (
                 {
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
                     "hook_event_name": "SessionStart",
+                    "integration": "hermes-plugin",
                     "session_id": "session-a",
                     "surface": "desktop",
                 },
                 {
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
                     "hook_event_name": "PermissionRequest",
+                    "integration": "hermes-plugin",
                     "session_id": "session-a",
                     "surface": "cli",
                 },
                 {
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
                     "hook_event_name": "PermissionDenied",
+                    "integration": "hermes-plugin",
                     "session_id": "session-a",
                     "surface": "cli",
                 },
@@ -499,6 +509,7 @@ class HermesPluginRegistrationTests(unittest.TestCase):
                 set(ctx.hooks),
                 {
                     "on_session_start",
+                    "on_session_activate",
                     "on_session_reset",
                     "pre_llm_call",
                     "pre_tool_call",
@@ -522,6 +533,129 @@ class HermesPluginRegistrationTests(unittest.TestCase):
             self.assertRegex(event["agent_id"], r"^EDI:[0-9a-f]{12}$")
             self.assertEqual(event["surface"], "desktop")
             self.assertNotIn("private prompt", json.dumps(event))
+
+    def test_session_activation_reasserts_running_wait_state_or_idle(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = FakePluginContext(
+                {
+                    "agent_id": "EDI",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+            plugin.register(ctx)
+
+            ctx.hooks["pre_tool_call"](
+                session_id="session-ask",
+                platform="desktop",
+                tool_name="clarify",
+            )
+            ctx.hooks["on_session_activate"](
+                session_id="session-ask",
+                platform="desktop",
+                running=True,
+            )
+            ctx.hooks["on_session_activate"](
+                session_id="session-idle",
+                platform="desktop",
+                running=False,
+            )
+
+            events = [
+                json.loads(line)
+                for line in (state_dir / "hermes.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(events[-2]["hook_event_name"], "SessionActivate")
+            self.assertEqual(events[-2]["sidepulse_mode"], "waiting_for_input")
+            self.assertEqual(events[-1]["hook_event_name"], "SessionActivate")
+            self.assertEqual(events[-1]["sidepulse_mode"], "idle_ready")
+
+    def test_running_session_activation_defaults_to_working(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = FakePluginContext(
+                {
+                    "agent_id": "EDI",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+            plugin.register(ctx)
+
+            ctx.hooks["on_session_activate"](
+                session_id="session-working",
+                platform="desktop",
+                running=True,
+            )
+
+            event = json.loads((state_dir / "hermes.jsonl").read_text().strip())
+            self.assertEqual(event["sidepulse_mode"], "working")
+
+    def test_session_activation_recovery_is_scoped_to_agent_provenance(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            shared_config = {
+                "state_dir": str(state_dir),
+                "socket_path": str(state_dir / "missing.sock"),
+            }
+            agent_a = FakePluginContext({**shared_config, "agent_id": "Agent A"})
+            agent_b = FakePluginContext({**shared_config, "agent_id": "Agent B"})
+            plugin.register(agent_a)
+            plugin.register(agent_b)
+
+            agent_a.hooks["pre_tool_call"](
+                session_id="shared-session",
+                platform="desktop",
+                tool_name="clarify",
+            )
+            agent_b.hooks["on_session_activate"](
+                session_id="shared-session",
+                running=True,
+            )
+
+            events = [
+                json.loads(line)
+                for line in (state_dir / "hermes.jsonl").read_text().splitlines()
+            ]
+            activation = events[-1]
+            self.assertEqual(activation["hook_event_name"], "SessionActivate")
+            self.assertEqual(activation["sidepulse_mode"], "working")
+            self.assertEqual(activation["surface"], "unknown")
+            self.assertNotEqual(activation["agent_id"], events[-2]["agent_id"])
+
+    def test_running_activation_does_not_reuse_wait_state_from_other_session(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = FakePluginContext(
+                {
+                    "agent_id": "EDI",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+            plugin.register(ctx)
+
+            ctx.hooks["pre_tool_call"](
+                session_id="session-a",
+                platform="desktop",
+                tool_name="clarify",
+            )
+            ctx.hooks["on_session_activate"](
+                session_id="session-b",
+                platform="desktop",
+                running=True,
+            )
+
+            events = [
+                json.loads(line)
+                for line in (state_dir / "hermes.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(events[-1]["sidepulse_mode"], "working")
 
     def test_approval_surface_does_not_replace_desktop_session_surface(self) -> None:
         plugin = load_plugin_module()

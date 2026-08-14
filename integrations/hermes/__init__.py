@@ -5,11 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .bridge import PluginSettings, emit_hook, recover_session_surface
+from .bridge import (
+    PluginSettings,
+    emit_hook,
+    recover_session_mode,
+    recover_session_surface,
+)
 from .diagnostics import handle_cli, setup_cli
 
 HOOK_NAMES = (
     "on_session_start",
+    "on_session_activate",
     "on_session_reset",
     "pre_llm_call",
     "pre_tool_call",
@@ -84,6 +90,16 @@ def _observer(
             surfaces_by_session[session_id] = client_surface
 
         updates: dict[str, str] = {}
+        if hook_name == "on_session_activate":
+            if bool(kwargs.get("running")):
+                previous_mode = recover_session_mode(settings, session_id)
+                updates["activation_mode"] = (
+                    "waiting_for_input"
+                    if previous_mode == "waiting_for_input"
+                    else "working"
+                )
+            else:
+                updates["activation_mode"] = "idle_ready"
         if is_approval_hook and "surface" in kwargs:
             kwargs = {key: value for key, value in kwargs.items() if key != "surface"}
         if session_id and not kwargs.get("session_id"):
