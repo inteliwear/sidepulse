@@ -1562,7 +1562,7 @@ class AgentMonitorTests(unittest.TestCase):
             device_errors={device.device_id: "old"},
             last_led_display_kind_by_device={},
             reset_led_controllers_for_device=lambda device_id: None,
-            active_led_display_kind_for_device=lambda _device, _battery: LED_DISPLAY_CUSTOM,
+            active_led_display_kind_for_device=lambda _device, _battery, _mode=None: LED_DISPLAY_CUSTOM,
             agent_controller_for_device=lambda _device: self.fail("agent LEDs should not sync"),
             battery_controller_for_device=lambda _device: self.fail("battery LEDs should not sync"),
         )
@@ -1712,7 +1712,7 @@ class AgentMonitorTests(unittest.TestCase):
             ),
             last_battery_snapshot=object(),
             reset_led_controllers_for_display_change=lambda: calls.append(("reset", None)),
-            active_led_display_kind=lambda snapshot: "agent",
+            active_led_display_kind=lambda snapshot, _mode=None: "agent",
             sync_leds=lambda mode, snapshot, display: calls.append(
                 ("sync", (mode, snapshot, display))
             ),
