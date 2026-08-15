@@ -23,6 +23,7 @@ class PluginSettings:
     """Privacy-safe identity and transport settings for SidePulse events."""
 
     agent_id: str = "Hermes"
+    profile_name: str = ""
     provider: str = "hermes"
     state_dir: Path | None = None
     socket_path: Path | None = None
@@ -53,11 +54,17 @@ class DeliveryResult:
     delivered: bool
 
 
-def _status_agent_id(label: str, session_id: Any) -> str:
+def _status_agent_id(
+    label: str,
+    session_id: Any,
+    profile_name: Any = "",
+) -> str:
     durable_session_id = str(session_id or "").strip()
     if not durable_session_id:
         return label
-    suffix = hashlib.sha256(durable_session_id.encode("utf-8")).hexdigest()[:12]
+    profile = str(profile_name or "").strip()
+    identity = f"{profile}\0{durable_session_id}" if profile else durable_session_id
+    suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     return f"{label}:{suffix}"
 
 
@@ -79,9 +86,14 @@ def _recent_session_events(
     """Return bounded, newest-first metadata events for one durable session."""
 
     durable_session_id = str(session_id or "").strip()
-    if not durable_session_id or not settings.log_events:
+    expected_profile = str(settings.profile_name or "").strip()
+    if not durable_session_id or not settings.log_events or not expected_profile:
         return ()
-    expected_agent_id = _status_agent_id(settings.agent_id, durable_session_id)
+    expected_agent_id = _status_agent_id(
+        settings.agent_id,
+        durable_session_id,
+        expected_profile,
+    )
     try:
         target = settings.resolved_state_dir() / f"{settings.provider}.jsonl"
         with open(target, "rb") as handle:
@@ -103,6 +115,8 @@ def _recent_session_events(
             if event.get("session_id") != durable_session_id:
                 continue
             if event.get("integration") != "hermes-plugin":
+                continue
+            if event.get("hermes_profile") != expected_profile:
                 continue
             if event.get("agent_id") != expected_agent_id:
                 continue
@@ -251,6 +265,8 @@ def translate_hook(
     mapping = _event_mapping(hook_name, payload)
     if mapping is None:
         return None
+    if not str(settings.profile_name or "").strip():
+        return None
     target_event, mode = mapping
 
     surface, origin, origin_kind = _surface_metadata(
@@ -261,13 +277,20 @@ def translate_hook(
         "logged_at": now,
         "hook_event_name": target_event,
         "integration": "hermes-plugin",
-        "agent_id": _status_agent_id(settings.agent_id, session_id),
+        "agent_id": _status_agent_id(
+            settings.agent_id,
+            session_id,
+            settings.profile_name,
+        ),
         "agent_origin": origin,
         "agent_origin_kind": origin_kind,
         "sidepulse_mode": mode,
     }
     if isinstance(session_id, str) and session_id.strip():
         event["session_id"] = session_id.strip()
+    profile_name = str(settings.profile_name or "").strip()
+    if profile_name:
+        event["hermes_profile"] = profile_name
     turn_id = payload.get("turn_id")
     if isinstance(turn_id, str) and turn_id.strip():
         event["turn_id"] = turn_id.strip()

@@ -46,7 +46,7 @@ def _boolean_setting(value: Any, *, default: bool) -> bool:
 
 
 def _settings_from_context(ctx) -> PluginSettings:
-    profile_name = str(getattr(ctx, "profile_name", "") or "Hermes").strip()
+    profile_name = str(getattr(ctx, "profile_name", "") or "").strip()
     agent_id = str(ctx.get_config("agent_id", default="") or "").strip() or profile_name
     timeout_value = ctx.get_config("socket_timeout", default=0.2)
     try:
@@ -55,6 +55,7 @@ def _settings_from_context(ctx) -> PluginSettings:
         socket_timeout = 0.2
     return PluginSettings(
         agent_id=agent_id,
+        profile_name=profile_name,
         state_dir=_optional_path(ctx.get_config("state_dir", default="")),
         socket_path=_optional_path(ctx.get_config("socket_path", default="")),
         socket_timeout=socket_timeout,
@@ -78,6 +79,14 @@ def _observer(
             sessions_by_turn[turn_id] = session_id
         elif turn_id:
             session_id = sessions_by_turn.get(turn_id, "")
+
+        # SidePulse identities are session-scoped. A shared observer can see
+        # tool hooks without durable session context; emitting those would
+        # create an independent active agent that no completion can clear.
+        if not session_id:
+            return
+        if not str(settings.profile_name or "").strip():
+            return
 
         platform = str(kwargs.get("platform") or "").strip()
         hook_surface = str(kwargs.get("surface") or "").strip()

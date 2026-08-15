@@ -56,10 +56,39 @@ class FakePluginContext:
 
 
 class HermesBridgeTests(unittest.TestCase):
+    def test_event_carries_profile_selector_for_scoped_session_lookup(self) -> None:
+        bridge = importlib.import_module("bridge")
+        self.assertIn("profile_name", bridge.PluginSettings.__dataclass_fields__)
+        settings = bridge.PluginSettings(
+            agent_id="Homelab",
+            profile_name="homelab",
+        )
+
+        event = bridge.translate_hook(
+            "pre_llm_call",
+            {"session_id": "session-1", "platform": "desktop"},
+            settings,
+            now="2026-08-14T14:00:00Z",
+        )
+
+        self.assertEqual(event["hermes_profile"], "homelab")
+
+    def test_translate_hook_rejects_missing_profile_provenance(self) -> None:
+        bridge = importlib.import_module("bridge")
+
+        event = bridge.translate_hook(
+            "pre_llm_call",
+            {"session_id": "private-session", "platform": "desktop"},
+            bridge.PluginSettings(agent_id="EDI", profile_name=""),
+            now="2026-08-14T14:00:00Z",
+        )
+
+        self.assertIsNone(event)
+
     def test_pre_llm_event_exposes_only_status_metadata(self) -> None:
         bridge = importlib.import_module("bridge")
 
-        settings = bridge.PluginSettings(agent_id="EDI")
+        settings = bridge.PluginSettings(agent_id="EDI", profile_name="default")
         event = bridge.translate_hook(
             "pre_llm_call",
             {
@@ -81,11 +110,12 @@ class HermesBridgeTests(unittest.TestCase):
                 "logged_at": "2026-08-14T14:00:00Z",
                 "hook_event_name": "UserPromptSubmit",
                 "integration": "hermes-plugin",
-                "agent_id": "EDI:84097828fc31",
+                "agent_id": "EDI:4c60b8409c66",
                 "agent_origin": "Hermes Desktop",
                 "agent_origin_kind": "hermes_desktop",
                 "sidepulse_mode": "working",
                 "session_id": "session-1",
+                "hermes_profile": "default",
                 "turn_id": "turn-1",
                 "surface": "desktop",
             },
@@ -102,7 +132,7 @@ class HermesBridgeTests(unittest.TestCase):
                 "session_key": "telegram:private-chat-12345",
                 "surface": "gateway",
             },
-            bridge.PluginSettings(agent_id="EDI"),
+            bridge.PluginSettings(agent_id="EDI", profile_name="default"),
             now="2026-08-14T14:00:00Z",
         )
 
@@ -124,7 +154,7 @@ class HermesBridgeTests(unittest.TestCase):
                 "turn_id": "turn-1",
                 "platform": "desktop",
             },
-            bridge.PluginSettings(agent_id="EDI"),
+            bridge.PluginSettings(agent_id="EDI", profile_name="default"),
             now="2026-08-14T12:00:00+00:00",
         )
         serialized = json.dumps(event)
@@ -133,7 +163,7 @@ class HermesBridgeTests(unittest.TestCase):
 
     def test_lifecycle_hooks_map_to_expected_sidepulse_states(self) -> None:
         bridge = importlib.import_module("bridge")
-        settings = bridge.PluginSettings(agent_id="EDI")
+        settings = bridge.PluginSettings(agent_id="EDI", profile_name="default")
         cases = [
             ("on_session_start", {}, "SessionStart", "idle_ready"),
             ("pre_tool_call", {"tool_name": "terminal"}, "PreToolUse", "tool_running"),
@@ -194,7 +224,7 @@ class HermesBridgeTests(unittest.TestCase):
 
     def test_approval_delivery_failures_map_to_blocked_error(self) -> None:
         bridge = importlib.import_module("bridge")
-        settings = bridge.PluginSettings(agent_id="EDI")
+        settings = bridge.PluginSettings(agent_id="EDI", profile_name="default")
         failure_choices = (
             "notify_failed",
             "transport_busy",
@@ -222,7 +252,7 @@ class HermesBridgeTests(unittest.TestCase):
 
     def test_same_profile_sessions_emit_distinct_status_identities(self) -> None:
         bridge = importlib.import_module("bridge")
-        settings = bridge.PluginSettings(agent_id="EDI")
+        settings = bridge.PluginSettings(agent_id="EDI", profile_name="default")
         first = bridge.translate_hook(
             "pre_llm_call",
             {"session_id": "session-a", "platform": "desktop"},
@@ -253,7 +283,7 @@ class HermesBridgeTests(unittest.TestCase):
                 "platform": "desktop",
                 "assistant_response": "Sensitive response text.\n<!-- sidepulse:ask -->",
             },
-            bridge.PluginSettings(agent_id="EDI"),
+            bridge.PluginSettings(agent_id="EDI", profile_name="default"),
             now="2026-08-14T14:00:00Z",
         )
 
@@ -302,6 +332,7 @@ class HermesBridgeTests(unittest.TestCase):
                 },
                 bridge.PluginSettings(
                     agent_id="EDI",
+                    profile_name="default",
                     state_dir=state_dir,
                     socket_path=socket_path,
                 ),
@@ -329,6 +360,7 @@ class HermesBridgeTests(unittest.TestCase):
                     "pre_llm_call",
                     {"session_id": "session-1", "platform": "desktop"},
                     bridge.PluginSettings(
+                        profile_name="default",
                         state_dir=state_dir,
                         socket_path=state_dir / "missing.sock",
                     ),
@@ -341,6 +373,63 @@ class HermesBridgeTests(unittest.TestCase):
             mode = (state_dir / "hermes.jsonl").stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    def test_surface_recovery_requires_matching_profile_provenance(self) -> None:
+        bridge = importlib.import_module("bridge")
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            alpha = bridge.PluginSettings(
+                agent_id="EDI",
+                profile_name="alpha",
+                state_dir=state_dir,
+                log_events=True,
+            )
+            beta = bridge.PluginSettings(
+                agent_id="EDI",
+                profile_name="beta",
+                state_dir=state_dir,
+                log_events=True,
+            )
+            alpha_event = bridge.translate_hook(
+                "on_session_activate",
+                {
+                    "session_id": "imported-session",
+                    "platform": "desktop",
+                    "activation_mode": "working",
+                },
+                alpha,
+                now="2026-08-14T14:00:00Z",
+            )
+            missing_profile_event = {
+                **alpha_event,
+                "surface": "cli",
+                "sidepulse_mode": "blocked_error",
+            }
+            missing_profile_event.pop("hermes_profile")
+            (state_dir / "hermes.jsonl").write_text(
+                json.dumps(alpha_event)
+                + "\n"
+                + json.dumps(missing_profile_event)
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                bridge.recover_session_surface(alpha, "imported-session"),
+                "desktop",
+            )
+            self.assertEqual(
+                bridge.recover_session_mode(alpha, "imported-session"),
+                "working",
+            )
+            self.assertEqual(
+                bridge.recover_session_surface(beta, "imported-session"),
+                "",
+            )
+            self.assertEqual(
+                bridge.recover_session_mode(beta, "imported-session"),
+                "",
+            )
+
     def test_surface_recovery_skips_deeply_nested_corrupt_line(self) -> None:
         bridge = importlib.import_module("bridge")
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
@@ -349,9 +438,12 @@ class HermesBridgeTests(unittest.TestCase):
             event_log.write_text(
                 json.dumps(
                     {
-                        "agent_id": bridge._status_agent_id("Hermes", "session-a"),
+                        "agent_id": bridge._status_agent_id(
+                            "Hermes", "session-a", "default"
+                        ),
                         "hook_event_name": "SessionStart",
                         "integration": "hermes-plugin",
+                        "hermes_profile": "default",
                         "session_id": "session-a",
                         "surface": "desktop",
                     }
@@ -365,7 +457,11 @@ class HermesBridgeTests(unittest.TestCase):
             )
 
             recovered = bridge.recover_session_surface(
-                bridge.PluginSettings(state_dir=state_dir, log_events=True),
+                bridge.PluginSettings(
+                    profile_name="default",
+                    state_dir=state_dir,
+                    log_events=True,
+                ),
                 "session-a",
             )
 
@@ -376,9 +472,10 @@ class HermesBridgeTests(unittest.TestCase):
         initial = (
             json.dumps(
                 {
-                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a", "default"),
                     "hook_event_name": "SessionStart",
                     "integration": "hermes-plugin",
+                    "hermes_profile": "default",
                     "session_id": "session-a",
                     "surface": "desktop",
                 }
@@ -411,7 +508,7 @@ class HermesBridgeTests(unittest.TestCase):
         growing_log = GrowingLog()
         with patch("builtins.open", return_value=growing_log):
             recovered = bridge.recover_session_surface(
-                bridge.PluginSettings(log_events=True),
+                bridge.PluginSettings(profile_name="default", log_events=True),
                 "session-a",
             )
 
@@ -426,23 +523,26 @@ class HermesBridgeTests(unittest.TestCase):
             event_log = state_dir / "hermes.jsonl"
             records = (
                 {
-                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a", "default"),
                     "hook_event_name": "SessionStart",
                     "integration": "hermes-plugin",
+                    "hermes_profile": "default",
                     "session_id": "session-a",
                     "surface": "desktop",
                 },
                 {
-                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a", "default"),
                     "hook_event_name": "PermissionRequest",
                     "integration": "hermes-plugin",
+                    "hermes_profile": "default",
                     "session_id": "session-a",
                     "surface": "cli",
                 },
                 {
-                    "agent_id": bridge._status_agent_id("Hermes", "session-a"),
+                    "agent_id": bridge._status_agent_id("Hermes", "session-a", "default"),
                     "hook_event_name": "PermissionDenied",
                     "integration": "hermes-plugin",
+                    "hermes_profile": "default",
                     "session_id": "session-a",
                     "surface": "cli",
                 },
@@ -453,7 +553,11 @@ class HermesBridgeTests(unittest.TestCase):
             )
 
             recovered = bridge.recover_session_surface(
-                bridge.PluginSettings(state_dir=state_dir, log_events=True),
+                bridge.PluginSettings(
+                    profile_name="default",
+                    state_dir=state_dir,
+                    log_events=True,
+                ),
                 "session-a",
             )
 
@@ -467,6 +571,7 @@ class HermesBridgeTests(unittest.TestCase):
                 "pre_llm_call",
                 {"session_id": "session-1", "platform": "desktop"},
                 bridge.PluginSettings(
+                    profile_name="default",
                     state_dir=state_dir,
                     socket_path=state_dir / "missing.sock",
                 ),
@@ -593,6 +698,52 @@ class HermesPluginRegistrationTests(unittest.TestCase):
 
             event = json.loads((state_dir / "hermes.jsonl").read_text().strip())
             self.assertEqual(event["sidepulse_mode"], "working")
+
+    def test_sessionless_tool_hook_is_not_emitted(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = FakePluginContext(
+                {
+                    "agent_id": "EDI",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+            plugin.register(ctx)
+
+            ctx.hooks["pre_tool_call"](tool_name="terminal")
+
+            self.assertFalse((state_dir / "hermes.jsonl").exists())
+
+    def test_profileless_context_does_not_emit_observer_status(self) -> None:
+        plugin = load_plugin_module()
+
+        class ProfilelessContext(FakePluginContext):
+            profile_name = None
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = ProfilelessContext(
+                {
+                    "agent_id": "EDI",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+
+            settings = plugin._settings_from_context(ctx)
+            self.assertEqual(settings.profile_name, "")
+            plugin.register(ctx)
+            with patch.object(plugin, "emit_hook") as emit:
+                ctx.hooks["pre_llm_call"](
+                    session_id="private-session",
+                    turn_id="private-turn",
+                    platform="desktop",
+                )
+
+            emit.assert_not_called()
+            self.assertFalse((state_dir / "hermes.jsonl").exists())
 
     def test_session_activation_recovery_is_scoped_to_agent_provenance(self) -> None:
         plugin = load_plugin_module()
@@ -725,11 +876,10 @@ class HermesPluginRegistrationTests(unittest.TestCase):
                 json.loads(line)
                 for line in (state_dir / "hermes.jsonl").read_text().splitlines()
             ]
-            approval = events[-1]
-            self.assertNotIn("session_id", approval)
-            self.assertEqual(approval["surface"], "unknown")
-            self.assertEqual(approval["agent_origin"], "Hermes")
-            self.assertNotIn("private-chat-12345", json.dumps(approval))
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["hook_event_name"], "UserPromptSubmit")
+            self.assertEqual(events[0]["session_id"], "session-1")
+            self.assertNotIn("private-chat-12345", json.dumps(events))
 
     def test_tool_hook_reuses_desktop_surface_from_same_session(self) -> None:
         plugin = load_plugin_module()
@@ -816,6 +966,10 @@ class HermesPluginRegistrationTests(unittest.TestCase):
             )
 
             self.assertFalse((state_dir / "hermes.jsonl").exists())
+
+    def test_manifest_declares_cross_profile_shared_scope(self) -> None:
+        manifest = (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
+        self.assertRegex(manifest, r"(?m)^profile_scope:\s*shared\s*$")
 
     def test_doctor_command_reports_transport_paths_as_json(self) -> None:
         plugin = load_plugin_module()

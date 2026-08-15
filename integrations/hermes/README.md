@@ -9,6 +9,7 @@ The plugin sends only lifecycle metadata needed to render status:
 - event name and normalized SidePulse mode
 - timestamp
 - configured agent/profile label plus an opaque, session-scoped status suffix
+- active Hermes profile name (never its filesystem path), used to resolve that profile's session lineage safely
 - Hermes provider label
 - durable Hermes session and turn identifiers
 - client surface/origin label
@@ -51,7 +52,29 @@ hermes plugins install inteliwear/sidepulse/integrations/hermes \
   --enable
 ```
 
-Restart each long-running Hermes runtime after installation. For Hermes Desktop, quit and reopen the application.
+SidePulse declares `profile_scope: shared`. On Hermes versions that support shared
+user plugins, the single root installation above is discovered by every local
+profile, including agents launched from the Desktop **Bots** screen. Root
+`plugins.enabled` remains the global consent gate; no per-profile plugin copy is
+needed.
+
+An individual profile may opt out and later rejoin without changing the root
+installation:
+
+```bash
+hermes --profile homelab plugins disable hermes-sidepulse
+hermes --profile homelab plugins enable hermes-sidepulse
+```
+
+`hermes --profile homelab plugins list --plain --no-bundled` reports the plugin
+with source `shared`. Older Hermes releases that do not understand
+`profile_scope` keep their existing profile-isolated behavior and require a
+separate installation in each profile.
+
+Restart each long-running Hermes runtime after installation or after adding
+shared-plugin support. For Hermes Desktop, wait for active turns to finish and
+restart only the affected profile backend when possible; a full application
+restart is not intrinsically required.
 
 ## Configuration
 

@@ -3,6 +3,7 @@ version: "0.1.0"
 description: Privacy-safe Hermes lifecycle status integration for SidePulse
 author: Cesar J. Garcia
 kind: standalone
+profile_scope: shared
 # `hooks` is consumed by Hermes v0.20; `provides_hooks` keeps the plugin
 # declaration explicit for newer doctor/index tooling.
 hooks:
