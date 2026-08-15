@@ -112,6 +112,26 @@ Available test modes are `idle`, `working`, `tool`, `ask`, `done`, and `error`.
 
 The status-bar socket is intentionally best-effort. If the monitor is not running, Hermes continues normally and, when `log_events` is enabled, the plugin still writes the privacy-safe event log for diagnosis.
 
+## Status LEDs
+
+The plugin reports the modes in the main [SidePulse README](../../README.md#ai-agent-monitoring). Hermes does not emit Long Task Progress. Visually, SidePulse uses four LED patterns:
+
+| Plugin mode | Typical Hermes hook | LED |
+|---|---|---|
+| `idle_ready` | session start / inactive activate | Dim idle pulse |
+| `working` | `pre_llm_call`, successful `post_tool_call` | Cyan roll |
+| `tool_running` | `pre_tool_call` | Cyan roll |
+| `waiting_for_input` | `pre_approval_request`, `clarify`, a final `?` | Amber pulse |
+| `blocked_error` | denied approval, API error | Amber pulse |
+| `completed` | successful `post_llm_call` | Solid green for 12s, then idle |
+
+The status-bar app then applies these display rules so the device stays glanceable:
+
+- Completed is a 12-second green flash, then Idle / Ready.
+- A `PermissionRequest` shorter than two seconds stays Working. Hermes fires that hook around auto-approved `terminal` / `execute_code` calls; amber is only for an approval that actually waits.
+- Hermes `PostToolUseFailure` stays Working. A failed tool the agent continues past is not Blocked on the LEDs.
+- Battery plug/unplug preview never overrides an active agent mode.
+
 ## Migrate from shell hooks
 
 If Hermes was previously connected to SidePulse with custom shell hooks, disable those hooks after confirming the plugin works. Running both integrations duplicates events. Keep a backup until a live Hermes turn has produced the expected SidePulse state transitions.
