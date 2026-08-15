@@ -106,19 +106,61 @@ hermes sidepulse doctor --json
 hermes sidepulse test --mode working
 hermes sidepulse test --mode ask
 hermes sidepulse test --mode done
-hermes sidepulse compat
-```
-
-`hermes sidepulse compat` (or the standalone script below) is the post-upgrade check. It fails if Hermes dropped a required lifecycle hook, the plugin is missing/disabled, the status-bar socket is down, or synthetic Working/Ask/Done events no longer emit.
-
-```bash
-python3 integrations/hermes/scripts/check_hermes_compat.py
-python3 integrations/hermes/scripts/check_hermes_compat.py --update-baseline
 ```
 
 Available test modes are `idle`, `working`, `tool`, `ask`, `done`, and `error`.
 
 The status-bar socket is intentionally best-effort. If the monitor is not running, Hermes continues normally and, when `log_events` is enabled, the plugin still writes the privacy-safe event log for diagnosis.
+
+## Compatibility check after a Hermes update
+
+Run this after upgrading Hermes, or whenever the LEDs look wrong. It is the
+check that tells you whether SidePulse still matches the live Hermes plugin
+API.
+
+Preferred, if the plugin still loads:
+
+```bash
+hermes sidepulse compat
+```
+
+Standalone, even if the plugin failed to register after the upgrade:
+
+```bash
+python3 integrations/hermes/scripts/check_hermes_compat.py
+```
+
+What it checks:
+
+1. Hermes is on `PATH` and reports a version.
+2. The live Hermes `VALID_HOOKS` set still includes every hook this plugin
+   needs (`on_session_start`, `on_session_activate`, `on_session_reset`,
+   `pre_llm_call`, `pre_tool_call`, `post_tool_call`, `pre_approval_request`,
+   `post_approval_response`, `api_request_error`, `post_llm_call`,
+   `on_session_end`).
+3. `hermes-sidepulse` is listed and enabled.
+4. The SidePulse status-bar socket is up.
+5. Synthetic Working, Ask, and Done events still emit and get logged.
+
+Exit codes:
+
+- `0` — contract intact. SidePulse should still work.
+- `1` — something needs a fix before trusting the LEDs.
+
+Useful flags:
+
+```bash
+hermes sidepulse compat --json
+python3 integrations/hermes/scripts/check_hermes_compat.py --json
+python3 integrations/hermes/scripts/check_hermes_compat.py --update-baseline
+```
+
+`--update-baseline` writes the current Hermes version and hook set to
+`~/.local/state/sidepulse/agent-monitor/hermes-compat-baseline.json`. The next
+run will also report version drift and any required hooks that disappeared.
+
+If the check fails, use the recovery runbook and the custom-work checklist
+rather than reinstalling blindly.
 
 ## Status LEDs
 
