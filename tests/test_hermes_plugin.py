@@ -1031,5 +1031,29 @@ class HermesPluginRegistrationTests(unittest.TestCase):
             self.assertEqual(event["sidepulse_mode"], "completed")
 
 
+class HermesCompatScriptTests(unittest.TestCase):
+    def test_compare_hooks_fails_when_required_hook_disappears(self) -> None:
+        script_path = PLUGIN_ROOT / "scripts" / "check_hermes_compat.py"
+        spec = importlib.util.spec_from_file_location("sidepulse_hermes_compat", script_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.compare_hooks(
+            ["pre_llm_call", "post_llm_call", "on_session_activate"],
+            ["pre_llm_call", "post_llm_call"],
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["missing"], ["on_session_activate"])
+
+    def test_plugin_yaml_lists_every_required_hook(self) -> None:
+        script_path = PLUGIN_ROOT / "scripts" / "check_hermes_compat.py"
+        spec = importlib.util.spec_from_file_location("sidepulse_hermes_compat_yaml", script_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        hooks = module.hooks_from_plugin_yaml(PLUGIN_ROOT / "plugin.yaml")
+        self.assertEqual(sorted(hooks), sorted(module.REQUIRED_HOOKS))
+
+
 if __name__ == "__main__":
     unittest.main()

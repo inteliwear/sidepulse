@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +57,12 @@ def setup_cli(parser) -> None:
     test = subcommands.add_parser("test", help="Emit a synthetic SidePulse status")
     test.add_argument("--mode", choices=sorted(_TEST_HOOKS), default="working")
     test.add_argument("--json", action="store_true", dest="as_json")
+    compat = subcommands.add_parser(
+        "compat",
+        help="Check that SidePulse still works after a Hermes update",
+    )
+    compat.add_argument("--json", action="store_true", dest="as_json")
+    compat.add_argument("--update-baseline", action="store_true")
     parser.set_defaults(sidepulse_command="doctor", as_json=False)
 
 
@@ -73,9 +81,40 @@ def _test_report(settings: PluginSettings, mode: str) -> dict[str, Any]:
     }
 
 
+def _compat_script() -> Path | None:
+    here = Path(__file__).resolve().parent
+    candidate = here / "scripts" / "check_hermes_compat.py"
+    return candidate if candidate.is_file() else None
+
+
 def handle_cli(args, settings: PluginSettings) -> None:
+    if getattr(args, "sidepulse_command", "doctor") == "compat":
+        script = _compat_script()
+        if script is None:
+            print("compat script missing: integrations/hermes/scripts/check_hermes_compat.py")
+            raise SystemExit(1)
+        command = [sys.executable, str(script)]
+        if getattr(args, "as_json", False):
+            command.append("--json")
+        if getattr(args, "update_baseline", False):
+            command.append("--update-baseline")
+        raise SystemExit(subprocess.call(command))
+
     if getattr(args, "sidepulse_command", "doctor") == "test":
-        report = _test_report(settings, getattr(args, "mode", "working"))
+        extra = dict(_TEST_HOOKS[getattr(args, "mode", "working")][1])
+        hook_name = _TEST_HOOKS[getattr(args, "mode", "working")][0]
+        payload = {
+            "platform": "cli",
+            "session_id": "hermes-sidepulse-test",
+            **extra,
+        }
+        result = emit_hook(hook_name, payload, settings)
+        report = {
+            "requested_mode": getattr(args, "mode", "working"),
+            "mode": (result.event or {}).get("sidepulse_mode"),
+            "logged": result.logged,
+            "delivered": result.delivered,
+        }
         if getattr(args, "as_json", False):
             print(json.dumps(report, sort_keys=True))
         else:

@@ -106,6 +106,14 @@ hermes sidepulse doctor --json
 hermes sidepulse test --mode working
 hermes sidepulse test --mode ask
 hermes sidepulse test --mode done
+hermes sidepulse compat
+```
+
+`hermes sidepulse compat` (or the standalone script below) is the post-upgrade check. It fails if Hermes dropped a required lifecycle hook, the plugin is missing/disabled, the status-bar socket is down, or synthetic Working/Ask/Done events no longer emit.
+
+```bash
+python3 integrations/hermes/scripts/check_hermes_compat.py
+python3 integrations/hermes/scripts/check_hermes_compat.py --update-baseline
 ```
 
 Available test modes are `idle`, `working`, `tool`, `ask`, `done`, and `error`.
