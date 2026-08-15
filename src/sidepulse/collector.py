@@ -32,7 +32,7 @@ CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
-COMPLETED_VISIBLE_SECONDS = 20 * 60.0
+COMPLETED_VISIBLE_SECONDS = 12.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
 
@@ -1281,6 +1281,7 @@ def status_for_snapshot(
     if (
         status.mode == AgentMode.WORKING
         and status.event_name == "PostToolUse"
+        and status.provider != "hermes"
         and post_tool_working_visible_seconds >= 0
         and status.age_seconds(now) > post_tool_working_visible_seconds
     ):
