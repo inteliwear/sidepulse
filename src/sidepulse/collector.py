@@ -35,6 +35,7 @@ CODEX_SESSION_INDEX_MAX_LINES = 5000
 COMPLETED_VISIBLE_SECONDS = 12.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
+PERMISSION_ASK_DEBOUNCE_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -1286,6 +1287,18 @@ def status_for_snapshot(
         and status.age_seconds(now) > post_tool_working_visible_seconds
     ):
         return _replace_mode(status, AgentMode.COMPLETED)
+    if (
+        status.mode == AgentMode.WAITING_FOR_INPUT
+        and status.event_name == "PermissionRequest"
+        and status.age_seconds(now) < PERMISSION_ASK_DEBOUNCE_SECONDS
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
+    if (
+        status.provider == "hermes"
+        and status.mode == AgentMode.BLOCKED_ERROR
+        and status.event_name == "PostToolUseFailure"
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
     return status
 
 

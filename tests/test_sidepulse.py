@@ -5538,6 +5538,73 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertFalse(should_arm_battery_power_preview(None, True, now=50.0, last_armed_at=None))
         self.assertFalse(should_arm_battery_power_preview(True, True, now=50.0, last_armed_at=None))
 
+    def test_brief_permission_request_does_not_flash_ask(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:ask",
+            display_name="developer",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now - timedelta(seconds=0.4),
+            event_name="PermissionRequest",
+            session_id="hermes-session",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+
+    def test_sustained_permission_request_still_shows_ask(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:ask",
+            display_name="developer",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now - timedelta(seconds=3.0),
+            event_name="PermissionRequest",
+            session_id="hermes-session",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
+
+    def test_hermes_tool_failure_does_not_hold_blocked_led(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:fail",
+            display_name="developer",
+            mode=AgentMode.BLOCKED_ERROR,
+            updated_at=now,
+            event_name="PostToolUseFailure",
+            session_id="hermes-session",
+            tool_name="terminal",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+
     def test_internal_codex_helper_sessions_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "codex.jsonl"
