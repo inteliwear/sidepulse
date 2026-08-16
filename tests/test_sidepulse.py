@@ -294,6 +294,30 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(status.mode, AgentMode.WORKING)
         self.assertEqual(status.event_name, "SessionActivate")
 
+    def test_hermes_session_finalize_is_parsed_as_completed(self) -> None:
+        record = parse_log_line(
+            "hermes",
+            json.dumps(
+                {
+                    "hook_event_name": "SessionFinalize",
+                    "session_id": "durable-session",
+                    "hermes_profile": "default",
+                    "integration": "hermes-plugin",
+                    "agent_id": "hermes:durable-session",
+                    "sidepulse_mode": "completed",
+                    "logged_at": "2026-08-16T12:01:00Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.mode, AgentMode.COMPLETED)
+        self.assertEqual(status.event_name, "SessionFinalize")
+
     def test_sessionless_hermes_tool_event_does_not_create_active_status(self) -> None:
         record = parse_log_line(
             "hermes",

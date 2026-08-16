@@ -166,6 +166,7 @@ class HermesBridgeTests(unittest.TestCase):
         settings = bridge.PluginSettings(agent_id="EDI", profile_name="default")
         cases = [
             ("on_session_start", {}, "SessionStart", "idle_ready"),
+            ("on_session_finalize", {"reason": "shutdown"}, "SessionFinalize", "completed"),
             ("pre_tool_call", {"tool_name": "terminal"}, "PreToolUse", "tool_running"),
             (
                 "pre_tool_call",
@@ -640,6 +641,7 @@ class HermesPluginRegistrationTests(unittest.TestCase):
                     "api_request_error",
                     "post_llm_call",
                     "on_session_end",
+                    "on_session_finalize",
                 },
             )
             self.assertEqual(set(ctx.cli_commands), {"sidepulse"})
@@ -654,6 +656,35 @@ class HermesPluginRegistrationTests(unittest.TestCase):
             self.assertRegex(event["agent_id"], r"^EDI:[0-9a-f]{12}$")
             self.assertEqual(event["surface"], "desktop")
             self.assertNotIn("private prompt", json.dumps(event))
+
+    def test_session_finalize_emits_completed_event(self) -> None:
+        plugin = load_plugin_module()
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            state_dir = Path(tmp)
+            ctx = FakePluginContext(
+                {
+                    "agent_id": "EDI",
+                    "profile_name": "default",
+                    "state_dir": str(state_dir),
+                    "socket_path": str(state_dir / "missing.sock"),
+                }
+            )
+            plugin.register(ctx)
+
+            ctx.hooks["on_session_finalize"](
+                session_id="session-finalize",
+                platform="desktop",
+                reason="shutdown",
+            )
+
+            events = [
+                json.loads(line)
+                for line in (state_dir / "hermes.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["hook_event_name"], "SessionFinalize")
+            self.assertEqual(events[0]["sidepulse_mode"], "completed")
+            self.assertEqual(events[0]["surface"], "desktop")
 
     def test_session_activation_reasserts_running_wait_state_or_idle(self) -> None:
         plugin = load_plugin_module()

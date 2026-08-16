@@ -25,6 +25,7 @@ HOOK_NAMES = (
     "api_request_error",
     "post_llm_call",
     "on_session_end",
+    "on_session_finalize",
 )
 
 
@@ -129,7 +130,7 @@ def _observer(
         except Exception:  # noqa: BLE001, S110 - observer must never break Hermes
             pass
         finally:
-            if hook_name == "on_session_end" and session_id:
+            if hook_name in {"on_session_end", "on_session_finalize"} and session_id:
                 surfaces_by_session.pop(session_id, None)
                 for known_turn, known_session in list(sessions_by_turn.items()):
                     if known_session == session_id:

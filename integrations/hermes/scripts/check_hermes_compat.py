@@ -34,6 +34,7 @@ REQUIRED_HOOKS = (
     "api_request_error",
     "post_llm_call",
     "on_session_end",
+    "on_session_finalize",
 )
 
 PLUGIN_NAME = "hermes-sidepulse"

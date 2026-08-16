@@ -66,7 +66,7 @@ GROK_EVENTS = (
 )
 
 HOOK_PROVIDERS = ("codex", "claude", "grok")
-HERMES_EVENTS = ("SessionActivate",)
+HERMES_EVENTS = ("SessionActivate", "SessionFinalize")
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + HERMES_EVENTS)
 )

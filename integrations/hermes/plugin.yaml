@@ -18,6 +18,7 @@ hooks:
   - api_request_error
   - post_llm_call
   - on_session_end
+  - on_session_finalize
 provides_hooks:
   - on_session_start
   - on_session_activate
@@ -30,3 +31,4 @@ provides_hooks:
   - api_request_error
   - post_llm_call
   - on_session_end
+  - on_session_finalize

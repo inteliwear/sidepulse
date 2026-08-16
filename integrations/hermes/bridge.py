@@ -245,6 +245,8 @@ def _event_mapping(
         return "StopFailure", "blocked_error"
     if hook_name == "post_llm_call":
         return "Stop", _final_mode(payload.get("assistant_response"))
+    if hook_name == "on_session_finalize":
+        return "SessionFinalize", "completed"
     if hook_name == "on_session_end":
         if bool(payload.get("completed")) and not bool(payload.get("interrupted")):
             return None
