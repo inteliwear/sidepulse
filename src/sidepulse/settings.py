@@ -116,6 +116,7 @@ class AgentMonitorSettings:
     led_display: str = LED_DISPLAY_AGENT
     devices: tuple[DeviceDisplaySetting, ...] = ()
     virtual_status_device_enabled: bool = False
+    keep_awake_enabled: bool = True
     closed_lid_awake_policy: str = CLOSED_LID_AWAKE_NEVER
     closed_lid_system_override_enabled: bool = False
     lid_closed_animation: LedAnimationSetting = field(
@@ -374,6 +375,9 @@ class AgentMonitorSettings:
             raise ValueError(f"Unknown closed-lid awake policy: {policy}")
         return replace(self, closed_lid_awake_policy=policy)
 
+    def with_keep_awake_enabled(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, keep_awake_enabled=bool(enabled))
+
     def with_closed_lid_system_override(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, closed_lid_system_override_enabled=bool(enabled))
 
@@ -423,6 +427,7 @@ class AgentMonitorSettings:
             "led_display": self.led_display,
             "devices": [device.to_dict() for device in self.devices],
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
+            "keep_awake_enabled": self.keep_awake_enabled,
             "closed_lid_awake_policy": self.closed_lid_awake_policy,
             "closed_lid_system_override_enabled": self.closed_lid_system_override_enabled,
             "lid_closed_animation": self.lid_closed_animation.to_dict(),
@@ -514,6 +519,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         virtual_status_device_enabled=_bool_setting(
             data.get("virtual_status_device_enabled"), False
         ),
+        keep_awake_enabled=_bool_setting(data.get("keep_awake_enabled"), True),
         closed_lid_awake_policy=_closed_lid_awake_policy(
             data.get("closed_lid_awake_policy"),
         ),

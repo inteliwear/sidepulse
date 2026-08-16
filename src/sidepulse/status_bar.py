@@ -159,6 +159,7 @@ from .settings import (
     TERMINAL_APP_CHOICES,
     TERMINAL_APP_WARP,
     TERMINAL_APP_WEZTERM,
+    AgentMonitorSettings,
     LedAnimationSetting,
     default_settings_path,
     default_lid_animation,
@@ -303,6 +304,15 @@ def replay_recent_debug_logs(
     return replayed
 
 
+def build_keep_awake_controller(settings: AgentMonitorSettings) -> KeepAwakeController:
+    """Build the keep-awake controller from persisted settings.
+
+    Kept module-level so the wiring between settings and controller is testable
+    without instantiating the Objective-C status bar controller.
+    """
+    return KeepAwakeController(enabled=settings.keep_awake_enabled)
+
+
 class StatusBarController(NSObject):
     def init(self):
         self = objc.super(StatusBarController, self).init()
@@ -339,7 +349,7 @@ class StatusBarController(NSObject):
         self.last_led_error = None
         self.last_led_display_kind = LED_DISPLAY_AGENT
         self.last_connected_device_signature = None
-        self.keep_awake = KeepAwakeController()
+        self.keep_awake = build_keep_awake_controller(self.settings)
         self.closed_lid_awake = ClosedLidAwakeController(
             use_system_disable=sleep_helper_installed(),
         )
@@ -532,9 +542,7 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def toggleKeepAwake_(self, _sender):
-        self.keep_awake.set_enabled(not self.keep_awake.enabled)
-        log_status_bar(f"keep_awake={'on' if self.keep_awake.enabled else 'off'}")
-        self.refresh_(None)
+        self.set_keep_awake_enabled(not self.keep_awake.enabled)
 
     @objc.IBAction
     def setClosedLidAwakePolicy_(self, sender):
@@ -1248,6 +1256,23 @@ class StatusBarController(NSObject):
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
+        self.refresh_(None)
+
+    def set_keep_awake_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        previous = self.settings
+        try:
+            self.settings = self.settings.with_keep_awake_enabled(enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save keep awake setting: {exc}")
+            self.settings = previous
+            return
+
+        self.keep_awake.set_enabled(enabled)
+        self.set_settings_message(f"Keep awake: {'on' if enabled else 'off'}.")
+        log_status_bar(f"keep_awake={'on' if enabled else 'off'}")
+        self.refresh_settings_window()
         self.refresh_(None)
 
     def set_closed_lid_awake_policy(self, policy: str | None) -> None:
@@ -2056,6 +2081,15 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         menu.addItem_(virtual_toggle)
 
     menu.addItem_(NSMenuItem.separatorItem())
+    keep_awake_toggle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Keep Awake While Agents Run",
+        "toggleKeepAwake:",
+        "",
+    )
+    keep_awake_toggle.setTarget_(target)
+    keep_awake_toggle.setState_(1 if target.settings.keep_awake_enabled else 0)
+    menu.addItem_(keep_awake_toggle)
+
     menu.addItem_(disabled_menu_item("Keep Awake With Lid Closed"))
     for policy in CLOSED_LID_AWAKE_CHOICES:
         menu.addItem_(build_closed_lid_awake_policy_item(policy, target))

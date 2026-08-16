@@ -55,7 +55,11 @@ from sidepulse.install import (
     uninstall_grok_hooks,
     update_codex_trusted_hashes,
 )
-from sidepulse.keep_awake import KeepAwakeController, status_file_for_target
+from sidepulse.keep_awake import (
+    KeepAwakeController,
+    read_on_battery_power,
+    status_file_for_target,
+)
 from sidepulse.led_status import (
     AgentLedController,
     LedDisplayState,
@@ -3521,6 +3525,7 @@ class AgentMonitorTests(unittest.TestCase):
         controller = KeepAwakeController(
             grace_seconds=300,
             process_factory=factory,
+            on_battery_reader=lambda: False,
         )
 
         self.assertTrue(controller.update(AgentMode.WORKING, now=100))
@@ -3548,6 +3553,7 @@ class AgentMonitorTests(unittest.TestCase):
         controller = KeepAwakeController(
             grace_seconds=300,
             process_factory=factory,
+            on_battery_reader=lambda: False,
         )
 
         self.assertTrue(controller.update(AgentMode.WAITING_FOR_INPUT, now=100))
@@ -3581,6 +3587,270 @@ class AgentMonitorTests(unittest.TestCase):
                 status_path,
             )
             self.assertEqual(reads, [status_path, status_path])
+
+    def test_keep_awake_enabled_defaults_true(self) -> None:
+        self.assertTrue(AgentMonitorSettings().keep_awake_enabled)
+
+    def test_keep_awake_enabled_round_trips_through_settings_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+
+            save_settings(AgentMonitorSettings().with_keep_awake_enabled(False), path)
+            self.assertFalse(load_settings(path).keep_awake_enabled)
+
+            save_settings(load_settings(path).with_keep_awake_enabled(True), path)
+            self.assertTrue(load_settings(path).keep_awake_enabled)
+
+    def test_keep_awake_enabled_defaults_true_when_key_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps({"led_display": "agent"}))
+
+            self.assertTrue(load_settings(path).keep_awake_enabled)
+
+    def test_keep_awake_skips_caffeinate_on_battery_power(self) -> None:
+        processes: list[FakeProcess] = []
+
+        def factory(*_args, **_kwargs):
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        controller = KeepAwakeController(
+            process_factory=factory,
+            on_battery_reader=lambda: True,
+        )
+
+        self.assertFalse(controller.update(AgentMode.WORKING, now=100))
+        self.assertEqual(processes, [])
+        self.assertIn("battery", controller.detail(now=100).lower())
+
+    def test_keep_awake_holds_on_ac_power(self) -> None:
+        processes: list[FakeProcess] = []
+
+        def factory(*_args, **_kwargs):
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        controller = KeepAwakeController(
+            process_factory=factory,
+            on_battery_reader=lambda: False,
+        )
+
+        self.assertTrue(controller.update(AgentMode.WORKING, now=100))
+        self.assertEqual(len(processes), 1)
+
+    def test_keep_awake_releases_when_power_switches_to_battery(self) -> None:
+        processes: list[FakeProcess] = []
+        on_battery = [False]
+
+        def factory(*_args, **_kwargs):
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        controller = KeepAwakeController(
+            process_factory=factory,
+            on_battery_reader=lambda: on_battery[0],
+            power_poll_seconds=30,
+        )
+
+        self.assertTrue(controller.update(AgentMode.WORKING, now=100))
+        on_battery[0] = True
+        self.assertFalse(controller.update(AgentMode.WORKING, now=200))
+        self.assertTrue(processes[0].terminated)
+
+    def test_keep_awake_caches_power_source_between_polls(self) -> None:
+        reads: list[float] = []
+
+        def reader() -> bool:
+            reads.append(1.0)
+            return False
+
+        controller = KeepAwakeController(
+            process_factory=lambda *_a, **_k: FakeProcess(),
+            on_battery_reader=reader,
+            power_poll_seconds=30,
+        )
+
+        controller.update(AgentMode.WORKING, now=100)
+        controller.update(AgentMode.WORKING, now=110)
+        controller.update(AgentMode.WORKING, now=125)
+        self.assertEqual(len(reads), 1)
+
+        controller.update(AgentMode.WORKING, now=131)
+        self.assertEqual(len(reads), 2)
+
+    def test_keep_awake_battery_guard_can_be_disabled(self) -> None:
+        processes: list[FakeProcess] = []
+
+        def factory(*_args, **_kwargs):
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        controller = KeepAwakeController(
+            process_factory=factory,
+            on_battery_reader=lambda: True,
+            skip_on_battery=False,
+        )
+
+        self.assertTrue(controller.update(AgentMode.WORKING, now=100))
+        self.assertEqual(len(processes), 1)
+
+    def test_keep_awake_holds_when_power_source_is_unknown(self) -> None:
+        processes: list[FakeProcess] = []
+
+        def factory(*_args, **_kwargs):
+            process = FakeProcess()
+            processes.append(process)
+            return process
+
+        controller = KeepAwakeController(
+            process_factory=factory,
+            on_battery_reader=lambda: None,
+        )
+
+        self.assertTrue(controller.update(AgentMode.WORKING, now=100))
+        self.assertEqual(len(processes), 1)
+
+    def test_read_on_battery_power_parses_pmset_output(self) -> None:
+        def runner_for(text: str):
+            def runner(*_args, **_kwargs):
+                return subprocess.CompletedProcess([], 0, stdout=text, stderr="")
+
+            return runner
+
+        battery_text = (
+            "Now drawing from 'Battery Power'\n"
+            " -InternalBattery-0 (id=7340131)\t84%; discharging; 2:11 remaining present: true\n"
+        )
+        ac_text = (
+            "Now drawing from 'AC Power'\n"
+            " -InternalBattery-0 (id=7340131)\t84%; charging; 0:21 remaining present: true\n"
+        )
+
+        self.assertTrue(read_on_battery_power(runner=runner_for(battery_text)))
+        self.assertFalse(read_on_battery_power(runner=runner_for(ac_text)))
+        self.assertIsNone(read_on_battery_power(runner=runner_for("gibberish\n")))
+
+    def test_read_on_battery_power_returns_none_when_command_fails(self) -> None:
+        def runner(*_args, **_kwargs):
+            raise OSError("boom")
+
+        self.assertIsNone(read_on_battery_power(runner=runner))
+
+    def test_build_keep_awake_controller_honours_persisted_setting(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        disabled = status_bar.build_keep_awake_controller(
+            AgentMonitorSettings().with_keep_awake_enabled(False)
+        )
+        self.assertFalse(disabled.enabled)
+
+        enabled = status_bar.build_keep_awake_controller(AgentMonitorSettings())
+        self.assertTrue(enabled.enabled)
+
+    def test_status_bar_keep_awake_toggle_persists_to_settings(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        saved: dict[str, object] = {}
+        target = SimpleNamespace(
+            settings=AgentMonitorSettings(),
+            keep_awake=KeepAwakeController(
+                enabled=True,
+                on_battery_reader=lambda: False,
+            ),
+            set_settings_message=lambda _message: None,
+            refresh_settings_window=lambda: None,
+            refresh_=lambda _sender: None,
+        )
+
+        with patch.object(
+            status_bar,
+            "save_settings",
+            lambda settings: saved.update(settings.to_dict()),
+        ):
+            status_bar.StatusBarController.set_keep_awake_enabled(target, False)
+
+        self.assertFalse(target.settings.keep_awake_enabled)
+        self.assertFalse(target.keep_awake.enabled)
+        self.assertIs(saved["keep_awake_enabled"], False)
+
+    def test_status_bar_keep_awake_toggle_reverts_settings_when_save_fails(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        messages: list[str] = []
+        target = SimpleNamespace(
+            settings=AgentMonitorSettings(),
+            keep_awake=KeepAwakeController(
+                enabled=True,
+                on_battery_reader=lambda: False,
+            ),
+            set_settings_message=messages.append,
+            refresh_settings_window=lambda: None,
+            refresh_=lambda _sender: None,
+        )
+
+        def boom(_settings):
+            raise OSError("disk full")
+
+        with patch.object(status_bar, "save_settings", boom), patch.object(
+            status_bar, "load_settings", lambda: AgentMonitorSettings()
+        ):
+            status_bar.StatusBarController.set_keep_awake_enabled(target, False)
+
+        self.assertTrue(target.settings.keep_awake_enabled)
+        self.assertTrue(target.keep_awake.enabled)
+        self.assertTrue(any("disk full" in message for message in messages))
+
+    def test_status_bar_menu_exposes_keep_awake_toggle(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        snapshot = SimpleNamespace(
+            statuses=[],
+            collected_at=datetime.now(timezone.utc),
+        )
+        target = SimpleNamespace(
+            settings=AgentMonitorSettings().with_keep_awake_enabled(True),
+            closed_lid_awake=SimpleNamespace(last_error=None),
+            status_bar_devices=lambda: [],
+        )
+
+        menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
+        item = next(
+            (
+                menu.itemAtIndex_(index)
+                for index in range(menu.numberOfItems())
+                if menu.itemAtIndex_(index).action() == "toggleKeepAwake:"
+            ),
+            None,
+        )
+
+        self.assertIsNotNone(item)
+        self.assertEqual(item.state(), 1)
+
+        target.settings = target.settings.with_keep_awake_enabled(False)
+        menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
+        item = next(
+            menu.itemAtIndex_(index)
+            for index in range(menu.numberOfItems())
+            if menu.itemAtIndex_(index).action() == "toggleKeepAwake:"
+        )
+        self.assertEqual(item.state(), 0)
 
     def test_closed_lid_awake_policy_decisions(self) -> None:
         self.assertFalse(
