@@ -318,6 +318,51 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(status.mode, AgentMode.COMPLETED)
         self.assertEqual(status.event_name, "SessionFinalize")
 
+    def test_hermes_completion_clears_prior_agent_identity_in_same_session(self) -> None:
+        def hermes_event(event_name: str, agent_id: str, logged_at: str):
+            return parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": event_name,
+                        "session_id": "same-session",
+                        "hermes_profile": "default",
+                        "integration": "hermes-plugin",
+                        "agent_id": agent_id,
+                        "sidepulse_mode": "working" if event_name == "UserPromptSubmit" else "completed",
+                        "logged_at": logged_at,
+                    }
+                ),
+            )
+
+        monitor = LiveAgentMonitor(
+            sources=(),
+            stale_after_seconds=999999999,
+            completed_visible_seconds=999999999,
+        )
+        active = hermes_event(
+            "UserPromptSubmit",
+            "EDI:old-agent",
+            "2026-08-16T12:00:00Z",
+        )
+        completed = hermes_event(
+            "Stop",
+            "EDI:new-agent",
+            "2026-08-16T12:00:01Z",
+        )
+
+        self.assertIsNotNone(active)
+        self.assertIsNotNone(completed)
+        assert active is not None
+        assert completed is not None
+        monitor.ingest_record(active)
+        monitor.ingest_record(completed)
+
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
+        self.assertEqual(len(snapshot.statuses), 1)
+        self.assertEqual(snapshot.statuses[0].event_name, "Stop")
+
     def test_sessionless_hermes_tool_event_does_not_create_active_status(self) -> None:
         record = parse_log_line(
             "hermes",

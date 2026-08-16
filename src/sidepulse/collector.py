@@ -37,6 +37,7 @@ COMPLETED_VISIBLE_SECONDS = 12.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
 PERMISSION_ASK_DEBOUNCE_SECONDS = 2.0
+SESSION_COMPLETION_EVENTS = frozenset({"Stop", "SessionEnd", "SessionFinalize"})
 
 
 @dataclass(frozen=True)
@@ -413,6 +414,13 @@ class LiveAgentMonitor:
             if status is None:
                 return
 
+            if (
+                record.session_id
+                and record.event_name in SESSION_COMPLETION_EVENTS
+                and status.mode == AgentMode.COMPLETED
+            ):
+                self.clear_session_statuses(record)
+
             track_pending_permissions(record, self.pending_permissions_by_key)
             previous = self.statuses_by_key.get(status.agent_id)
             if should_ignore_status_transition(
@@ -423,6 +431,40 @@ class LiveAgentMonitor:
                 return
             self.statuses_by_key[status.agent_id] = status
             self.write_latest_state()
+
+    def clear_session_statuses(self, record: HookEvent) -> None:
+        """Remove prior agent identities completed by the same logical session."""
+        session_id = record.session_id
+        if not session_id:
+            return
+
+        identity_prefix = f"{record.identity_prefix}:"
+        removed_status_keys = {
+            key
+            for key, status in self.statuses_by_key.items()
+            if status.provider == record.provider
+            and status.session_id == session_id
+            and status.agent_id.startswith(identity_prefix)
+        }
+        if not removed_status_keys:
+            return
+
+        self.statuses_by_key = {
+            key: status
+            for key, status in self.statuses_by_key.items()
+            if key not in removed_status_keys
+        }
+        self.metadata_by_status = {
+            key: metadata
+            for key, metadata in self.metadata_by_status.items()
+            if key not in removed_status_keys
+        }
+        self.pending_permissions_by_key = {
+            key: pending
+            for key, pending in self.pending_permissions_by_key.items()
+            if key not in removed_status_keys
+        }
+        self.metadata_by_session.pop(record.session_key, None)
 
     def prepare_replay_records(
         self,
