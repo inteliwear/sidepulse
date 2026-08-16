@@ -455,6 +455,15 @@ Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`
 and shows the path from provider hook event to interpreted SidePulse status.
 
+The `Keep Awake While Agents Run` menu item controls the baseline sleep
+prevention: while it is checked, SidePulse holds a `caffeinate` assertion
+whenever agents are Working / Tool Running / Progressing, plus the five-minute
+Ask / Done / Error grace period. It is on by default, persists to
+`settings.json` as `keep_awake_enabled`, and is skipped entirely while the Mac
+is running on battery so an overnight agent run cannot drain the battery. If
+the power source cannot be determined, SidePulse keeps the machine awake rather
+than silently disabling itself.
+
 The `Keep Awake With Lid Closed` menu section controls the stronger sleep
 prevention policy:
 

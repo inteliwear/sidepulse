@@ -13,9 +13,42 @@ from .models import AgentMode
 
 AWAKE_GRACE_SECONDS = 300.0
 SD_STATUS_READ_SECONDS = 60.0
+POWER_SOURCE_POLL_SECONDS = 30.0
 KEEPALIVE_FILE_NAME = "keepalive"
 STATUS_FILE_NAME = KEEPALIVE_FILE_NAME
 CAFFEINATE_COMMAND = ("/usr/bin/caffeinate", "-dimsu")
+PMSET_POWER_SOURCE_COMMAND = ("/usr/bin/pmset", "-g", "ps")
+
+
+def read_on_battery_power(
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    command: Sequence[str] = PMSET_POWER_SOURCE_COMMAND,
+) -> bool | None:
+    """Return True on battery, False on AC, None when the source is unknown.
+
+    Unknown is deliberately distinct from "on battery" so that a failure to read
+    the power source never silently disables keep-awake.
+    """
+    try:
+        result = runner(
+            list(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    text = result.stdout or ""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    if "'Battery Power'" in text:
+        return True
+    if "'AC Power'" in text:
+        return False
+    return None
 
 
 class KeepAwakeController:
@@ -30,6 +63,9 @@ class KeepAwakeController:
         status_reader: Callable[[Path], None] | None = None,
         status_read_async: bool = True,
         watch_current_process: bool = True,
+        skip_on_battery: bool = True,
+        on_battery_reader: Callable[[], bool | None] | None = None,
+        power_poll_seconds: float = POWER_SOURCE_POLL_SECONDS,
     ) -> None:
         self.enabled = enabled
         self.grace_seconds = grace_seconds
@@ -39,6 +75,9 @@ class KeepAwakeController:
         self.status_reader = status_reader or touch_keepalive_file
         self.status_read_async = status_read_async
         self.watch_current_process = watch_current_process
+        self.skip_on_battery = skip_on_battery
+        self.on_battery_reader = on_battery_reader or read_on_battery_power
+        self.power_poll_seconds = power_poll_seconds
         self.process = None
         self.last_mode: AgentMode | None = None
         self.holding_requested = False
@@ -47,6 +86,9 @@ class KeepAwakeController:
         self.last_status_read_monotonic_by_path: dict[Path, float] = {}
         self.last_status_error: str | None = None
         self.status_read_in_flight_by_path: set[Path] = set()
+        self.on_battery: bool | None = None
+        self.last_power_read_monotonic: float | None = None
+        self.deferred_for_battery = False
 
     def set_enabled(self, enabled: bool) -> None:
         if self.enabled == enabled:
@@ -67,11 +109,31 @@ class KeepAwakeController:
         self.last_mode = mode
 
         if not self.enabled or not should_hold:
+            self.deferred_for_battery = False
             self.release()
             return False
 
+        if self.skip_on_battery and self.read_power_source(current) is True:
+            self.deferred_for_battery = True
+            self.release()
+            return False
+
+        self.deferred_for_battery = False
         self.ensure_awake()
         return self.process_running()
+
+    def read_power_source(self, now: float) -> bool | None:
+        """Cached power-source read; the subprocess runs at most once per poll window."""
+        last = self.last_power_read_monotonic
+        if last is not None and now - last < self.power_poll_seconds:
+            return self.on_battery
+
+        self.last_power_read_monotonic = now
+        try:
+            self.on_battery = self.on_battery_reader()
+        except Exception:
+            self.on_battery = None
+        return self.on_battery
 
     def should_hold_for_mode(self, mode: AgentMode, now: float) -> bool:
         if mode in {
@@ -174,6 +236,8 @@ class KeepAwakeController:
             return "Keep awake disabled"
         if self.last_error:
             return f"Keep awake error: {self.last_error}"
+        if self.deferred_for_battery:
+            return "Keep awake paused on battery"
         current = time.monotonic() if now is None else now
         if self.grace_until_monotonic is not None and current < self.grace_until_monotonic:
             remaining = int(self.grace_until_monotonic - current)
