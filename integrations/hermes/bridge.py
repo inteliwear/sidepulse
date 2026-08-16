@@ -207,6 +207,7 @@ def _final_mode(response: Any) -> str:
         "anything else?",
         "what else can i help with?",
         "need anything else?",
+        "what do you want to work on?",
     )
     if any(visible.lower().endswith(question) for question in casual_questions):
         return "completed"

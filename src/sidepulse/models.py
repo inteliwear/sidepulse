@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -54,14 +55,31 @@ class HookEvent:
     tool_name: str | None = None
     message: str | None = None
     origin: str | None = None
+    hermes_profile: str | None = None
+
+    @property
+    def identity_prefix(self) -> str:
+        if self.provider != "hermes":
+            return self.provider
+        profile = str(self.hermes_profile or "").strip()
+        if not profile:
+            return f"{self.provider}:profile:missing"
+        profile_digest = hashlib.sha256(profile.encode("utf-8")).hexdigest()[:12]
+        return f"{self.provider}:profile:{profile_digest}"
+
+    @property
+    def session_key(self) -> str:
+        if self.session_id:
+            return f"{self.identity_prefix}:session:{self.session_id}"
+        return f"{self.identity_prefix}:session:unknown"
 
     @property
     def status_key(self) -> str:
         if self.agent_id:
-            return f"{self.provider}:agent:{self.agent_id}"
+            return f"{self.identity_prefix}:agent:{self.agent_id}"
         if self.session_id:
-            return f"{self.provider}:session:{self.session_id}"
-        return f"{self.provider}:unknown"
+            return self.session_key
+        return f"{self.identity_prefix}:unknown"
 
 
 @dataclass(frozen=True)

@@ -291,6 +291,22 @@ class HermesBridgeTests(unittest.TestCase):
         self.assertEqual(event["sidepulse_mode"], "waiting_for_input")
         self.assertNotIn("Sensitive response text", json.dumps(event))
 
+    def test_casual_work_invitation_does_not_leave_agent_waiting(self) -> None:
+        bridge = importlib.import_module("bridge")
+        event = bridge.translate_hook(
+            "post_llm_call",
+            {
+                "session_id": "session-1",
+                "platform": "desktop",
+                "assistant_response": "Got it — I'm here. What do you want to work on?",
+            },
+            bridge.PluginSettings(agent_id="EDI", profile_name="developer"),
+            now="2026-08-16T00:49:43Z",
+        )
+
+        self.assertEqual(event["hook_event_name"], "Stop")
+        self.assertEqual(event["sidepulse_mode"], "completed")
+
     def test_emit_hook_logs_metadata_and_sends_sidepulse_socket_event(self) -> None:
         bridge = importlib.import_module("bridge")
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
