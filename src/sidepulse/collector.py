@@ -38,6 +38,9 @@ IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
 PERMISSION_ASK_DEBOUNCE_SECONDS = 2.0
 SESSION_COMPLETION_EVENTS = frozenset({"Stop", "SessionEnd", "SessionFinalize"})
+SESSION_IDENTITY_RECONCILIATION_EVENTS = frozenset(
+    {"SessionStart", "SessionActivate", *SESSION_COMPLETION_EVENTS}
+)
 
 
 @dataclass(frozen=True)
@@ -414,10 +417,24 @@ class LiveAgentMonitor:
             if status is None:
                 return
 
+            idle_boundary = (
+                record.event_name in {"SessionStart", "SessionActivate"}
+                and status.mode == AgentMode.IDLE_READY
+            )
+            same_session_prefix = f"{record.identity_prefix}:"
+            has_completed_status = bool(record.session_id) and any(
+                existing.provider == record.provider
+                and existing.session_id == record.session_id
+                and existing.agent_id.startswith(same_session_prefix)
+                and existing.mode == AgentMode.COMPLETED
+                for existing in self.statuses_by_key.values()
+            )
+            if idle_boundary and has_completed_status:
+                return
+
             if (
                 record.session_id
-                and record.event_name in SESSION_COMPLETION_EVENTS
-                and status.mode == AgentMode.COMPLETED
+                and record.event_name in SESSION_IDENTITY_RECONCILIATION_EVENTS
             ):
                 self.clear_session_statuses(record)
 

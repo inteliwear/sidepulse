@@ -363,6 +363,63 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(len(snapshot.statuses), 1)
         self.assertEqual(snapshot.statuses[0].event_name, "Stop")
 
+    def test_hermes_session_activation_clears_prior_agent_identity_in_same_session(self) -> None:
+        def hermes_event(event_name: str, agent_id: str, mode: str, logged_at: str):
+            return parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": event_name,
+                        "session_id": "same-session",
+                        "hermes_profile": "default",
+                        "integration": "hermes-plugin",
+                        "agent_id": agent_id,
+                        "sidepulse_mode": mode,
+                        "logged_at": logged_at,
+                    }
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            latest_state_path = Path(tmp) / "latest.json"
+            monitor = LiveAgentMonitor(
+                sources=(),
+                stale_after_seconds=999999999,
+                idle_visible_seconds=999999999,
+                latest_state_path=latest_state_path,
+            )
+            active = hermes_event(
+                "UserPromptSubmit",
+                "EDI:old-agent",
+                "working",
+                "2026-08-16T12:00:00Z",
+            )
+            reopened = hermes_event(
+                "SessionActivate",
+                "EDI:new-agent",
+                "idle_ready",
+                "2026-08-16T12:00:01Z",
+            )
+
+            self.assertIsNotNone(active)
+            self.assertIsNotNone(reopened)
+            assert active is not None
+            assert reopened is not None
+            monitor.ingest_record(active)
+
+            restarted = LiveAgentMonitor(
+                sources=(),
+                stale_after_seconds=999999999,
+                idle_visible_seconds=999999999,
+                latest_state_path=latest_state_path,
+            )
+            restarted.ingest_record(reopened)
+
+            snapshot = restarted.snapshot()
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.IDLE_READY)
+            self.assertEqual(len(snapshot.statuses), 1)
+            self.assertEqual(snapshot.statuses[0].event_name, "SessionActivate")
+
     def test_sessionless_hermes_tool_event_does_not_create_active_status(self) -> None:
         record = parse_log_line(
             "hermes",
