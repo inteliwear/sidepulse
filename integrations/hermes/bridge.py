@@ -264,6 +264,11 @@ def translate_hook(
     now: str,
 ) -> dict[str, Any] | None:
     """Return a SidePulse event containing status metadata only."""
+    # Background memory/skill reviews reuse the foreground session id and
+    # platform for prompt-cache warmth. They are not user-facing activity and
+    # must not change the agent's Working/Done/Ask state.
+    if bool(payload.get("background_review")):
+        return None
 
     mapping = _event_mapping(hook_name, payload)
     if mapping is None:

@@ -35,6 +35,8 @@ from sidepulse.battery import (
     should_arm_battery_power_preview,
 )
 from sidepulse import collector as collector_module
+from integrations.hermes.bridge import PluginSettings as HermesPluginSettings
+from integrations.hermes.bridge import translate_hook as translate_hermes_hook
 from sidepulse import cli as cli_module
 from sidepulse.collector import (
     AgentMonitor,
@@ -293,6 +295,33 @@ class AgentMonitorTests(unittest.TestCase):
         assert status is not None
         self.assertEqual(status.mode, AgentMode.WORKING)
         self.assertEqual(status.event_name, "SessionActivate")
+
+    def test_hermes_background_review_events_are_ignored(self) -> None:
+        settings = HermesPluginSettings(agent_id="Hermes", profile_name="developer")
+        payload = {
+            "session_id": "durable-session",
+            "platform": "desktop",
+            "background_review": True,
+        }
+
+        self.assertIsNone(
+            translate_hermes_hook(
+                "pre_llm_call",
+                payload,
+                settings,
+                now="2026-08-16T12:00:00Z",
+            )
+        )
+
+        foreground_event = translate_hermes_hook(
+            "pre_llm_call",
+            {**payload, "background_review": False},
+            settings,
+            now="2026-08-16T12:00:00Z",
+        )
+        self.assertIsNotNone(foreground_event)
+        assert foreground_event is not None
+        self.assertEqual(foreground_event["hook_event_name"], "UserPromptSubmit")
 
     def test_hermes_session_finalize_is_parsed_as_completed(self) -> None:
         record = parse_log_line(

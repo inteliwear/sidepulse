@@ -88,6 +88,11 @@ def _observer(
             return
         if not str(settings.profile_name or "").strip():
             return
+        # Hermes background memory/skill reviews reuse the foreground session id
+        # and platform. They are hidden maintenance work, not user activity, so
+        # never let them create or refresh SidePulse status.
+        if bool(kwargs.get("background_review")):
+            return
 
         platform = str(kwargs.get("platform") or "").strip()
         hook_surface = str(kwargs.get("surface") or "").strip()
