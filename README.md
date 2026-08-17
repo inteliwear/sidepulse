@@ -422,10 +422,11 @@ The status-bar item shows one of four collapsed states:
 
 Do Not Disturb keeps all physical SidePulse LEDs and the optional Screen Bar off while
 agent monitoring continues normally. Toggle it immediately from the menu-bar dropdown,
-or open **Settings... → Devices & LEDs** to enable manual DND or a recurring daily
-schedule such as `22:00`–`07:00`. Overnight schedules that cross midnight are supported.
-Changes take effect immediately, and normal LED status resumes automatically when DND
-ends.
+or open **Settings... → Devices & LEDs** to use the same DND toggle and optionally set a
+recurring daily schedule such as `21:00`–`07:00`. The schedule switches the toggle on at
+the start time and off at the end time. You can override the toggle at any time; that
+choice remains in effect until the next scheduled boundary, including across app
+restarts. Overnight schedules that cross midnight are supported.
 
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the

@@ -159,10 +159,11 @@ class AgentMonitorSettings:
     idle_timeout_seconds: float = DEFAULT_IDLE_TIMEOUT_SECONDS
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
-    dnd_manual_enabled: bool = False
+    dnd_enabled: bool = False
     dnd_schedule_enabled: bool = False
     dnd_start_time: str = DEFAULT_DND_START_TIME
     dnd_end_time: str = DEFAULT_DND_END_TIME
+    dnd_last_schedule_transition: str = ""
     setup_screen_completed: bool = False
 
     def transcript_enabled(self, provider: str) -> bool:
@@ -466,17 +467,18 @@ class AgentMonitorSettings:
     def with_dnd(
         self,
         *,
-        manual_enabled: bool | None = None,
+        enabled: bool | None = None,
         schedule_enabled: bool | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
+        schedule_transition: str | None = None,
     ) -> "AgentMonitorSettings":
         return replace(
             self,
-            dnd_manual_enabled=(
-                self.dnd_manual_enabled
-                if manual_enabled is None
-                else bool(manual_enabled)
+            dnd_enabled=(
+                self.dnd_enabled
+                if enabled is None
+                else bool(enabled)
             ),
             dnd_schedule_enabled=(
                 self.dnd_schedule_enabled
@@ -492,6 +494,11 @@ class AgentMonitorSettings:
                 self.dnd_end_time
                 if end_time is None
                 else normalize_dnd_time(end_time)
+            ),
+            dnd_last_schedule_transition=(
+                self.dnd_last_schedule_transition
+                if schedule_transition is None
+                else str(schedule_transition)
             ),
         )
 
@@ -530,10 +537,11 @@ class AgentMonitorSettings:
                 "timeframe_seconds": self.history_timeframe_seconds,
             },
             "do_not_disturb": {
-                "manual_enabled": self.dnd_manual_enabled,
+                "enabled": self.dnd_enabled,
                 "schedule_enabled": self.dnd_schedule_enabled,
                 "start_time": self.dnd_start_time,
                 "end_time": self.dnd_end_time,
+                "last_schedule_transition": self.dnd_last_schedule_transition,
             },
             "setup_screen_completed": self.setup_screen_completed,
         }
@@ -668,7 +676,10 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
                 data.get("history_timeframe_seconds", DEFAULT_HISTORY_TIMEFRAME_SECONDS),
             )
         ),
-        dnd_manual_enabled=_bool_setting(dnd.get("manual_enabled"), False),
+        dnd_enabled=_bool_setting(
+            dnd.get("enabled"),
+            _bool_setting(dnd.get("manual_enabled"), False),
+        ),
         dnd_schedule_enabled=_bool_setting(dnd.get("schedule_enabled"), False),
         dnd_start_time=_dnd_time_setting(
             dnd.get("start_time"),
@@ -677,6 +688,9 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         dnd_end_time=_dnd_time_setting(
             dnd.get("end_time"),
             DEFAULT_DND_END_TIME,
+        ),
+        dnd_last_schedule_transition=_string_setting(
+            dnd.get("last_schedule_transition")
         ),
         setup_screen_completed=_bool_setting(data.get("setup_screen_completed"), False),
     )

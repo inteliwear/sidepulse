@@ -1684,33 +1684,67 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertNotIn("Sleep Helper Missing", titles)
         self.assertIn("Setup...", titles)
 
-    def test_dnd_schedule_handles_overnight_and_daytime_ranges(self) -> None:
+    def test_dnd_schedule_switches_the_toggle_at_overnight_boundaries(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
             self.skipTest(str(exc))
 
-        overnight = AgentMonitorSettings().with_dnd(
+        settings = AgentMonitorSettings().with_dnd(
             schedule_enabled=True,
-            start_time="22:00",
+            start_time="21:00",
             end_time="07:00",
         )
-        self.assertTrue(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 23, 0)))
-        self.assertTrue(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 6, 59)))
-        self.assertFalse(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 7, 0)))
-        self.assertFalse(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 12, 0)))
+        before_start = status_bar.settings_after_dnd_schedule_transition(
+            settings,
+            datetime(2026, 8, 17, 20, 59),
+            force=True,
+        )
+        self.assertFalse(before_start.dnd_enabled)
 
-        daytime = overnight.with_dnd(start_time="09:00", end_time="17:00")
-        self.assertTrue(status_bar.dnd_is_active(daytime, datetime(2026, 8, 17, 12, 0)))
-        self.assertFalse(status_bar.dnd_is_active(daytime, datetime(2026, 8, 17, 18, 0)))
+        after_start = status_bar.settings_after_dnd_schedule_transition(
+            before_start,
+            datetime(2026, 8, 17, 21, 0),
+        )
+        self.assertTrue(after_start.dnd_enabled)
 
-    def test_manual_dnd_overrides_schedule(self) -> None:
+        manual_override = after_start.with_dnd(enabled=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            save_settings(manual_override, settings_path)
+            restarted = load_settings(settings_path)
+            before_end = status_bar.settings_after_dnd_schedule_transition(
+                restarted,
+                datetime(2026, 8, 18, 6, 59),
+            )
+        self.assertEqual(before_end, manual_override)
+        self.assertFalse(status_bar.dnd_is_active(before_end))
+
+        after_end = status_bar.settings_after_dnd_schedule_transition(
+            before_end,
+            datetime(2026, 8, 18, 7, 0),
+        )
+        self.assertFalse(after_end.dnd_enabled)
+        self.assertNotEqual(
+            after_end.dnd_last_schedule_transition,
+            before_end.dnd_last_schedule_transition,
+        )
+
+    def test_dnd_toggle_can_override_schedule_in_either_direction(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
             self.skipTest(str(exc))
 
-        settings = AgentMonitorSettings().with_dnd(manual_enabled=True)
+        settings = AgentMonitorSettings().with_dnd(
+            enabled=False,
+            schedule_enabled=True,
+            start_time="21:00",
+            end_time="07:00",
+        )
+        self.assertFalse(status_bar.dnd_is_active(settings, datetime(2026, 8, 17, 23, 0)))
+
+        settings = settings.with_dnd(enabled=True)
         self.assertTrue(status_bar.dnd_is_active(settings, datetime(2026, 8, 17, 12, 0)))
         self.assertIn("LEDs are off", status_bar.dnd_status_text(settings))
 
@@ -1751,7 +1785,7 @@ class AgentMonitorTests(unittest.TestCase):
         snapshot = SimpleNamespace(statuses=[], collected_at=datetime.now(timezone.utc))
         target = SimpleNamespace(
             settings=AgentMonitorSettings().with_dnd(
-                manual_enabled=True,
+                enabled=True,
                 schedule_enabled=True,
             ),
             closed_lid_awake=SimpleNamespace(last_error=None),
@@ -1765,7 +1799,7 @@ class AgentMonitorTests(unittest.TestCase):
         }
 
         self.assertIn("Do Not Disturb", by_title)
-        self.assertEqual(by_title["Turn DND On Manually"].state(), 1)
+        self.assertEqual(by_title["DND On"].state(), 1)
 
     def test_lid_animation_program_uses_device_brightness(self) -> None:
         try:
@@ -1841,7 +1875,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("dnd_start_time", target.settings_fields)
         self.assertIn("dnd_end_time", target.settings_fields)
         self.assertIn("dnd_status", target.settings_fields)
-        self.assertIn("dnd_manual", target.settings_buttons)
+        self.assertIn("dnd_enabled", target.settings_buttons)
         self.assertIn("dnd_schedule", target.settings_buttons)
         self.assertIn("closed_animation_program", target.settings_fields)
         self.assertIn("closed_animation_duration", target.settings_fields)
@@ -4410,23 +4444,28 @@ class AgentMonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
             settings = AgentMonitorSettings().with_dnd(
-                manual_enabled=True,
+                enabled=True,
                 schedule_enabled=True,
                 start_time="21:30",
                 end_time="6:15",
+                schedule_transition="2026-08-17:start:21:30",
             )
 
             save_settings(settings, settings_path)
             loaded = load_settings(settings_path)
 
-            self.assertTrue(loaded.dnd_manual_enabled)
+            self.assertTrue(loaded.dnd_enabled)
             self.assertTrue(loaded.dnd_schedule_enabled)
             self.assertEqual(loaded.dnd_start_time, "21:30")
             self.assertEqual(loaded.dnd_end_time, "06:15")
+            self.assertEqual(
+                loaded.dnd_last_schedule_transition,
+                "2026-08-17:start:21:30",
+            )
 
     def test_settings_dnd_defaults_and_validation(self) -> None:
         settings = AgentMonitorSettings()
-        self.assertFalse(settings.dnd_manual_enabled)
+        self.assertFalse(settings.dnd_enabled)
         self.assertFalse(settings.dnd_schedule_enabled)
         self.assertEqual(settings.dnd_start_time, DEFAULT_DND_START_TIME)
         self.assertEqual(settings.dnd_end_time, DEFAULT_DND_END_TIME)
@@ -4434,6 +4473,17 @@ class AgentMonitorTests(unittest.TestCase):
             settings.with_dnd(start_time="25:00")
         with self.assertRaises(ValueError):
             settings.with_dnd(end_time="night")
+
+    def test_settings_migrates_legacy_manual_dnd_toggle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"do_not_disturb": {"manual_enabled": True}})
+            )
+
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.dnd_enabled)
 
     def test_settings_migrates_missing_agent_list_timing_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
