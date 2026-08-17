@@ -276,20 +276,57 @@ Check the current hook configuration:
 sidepulse agent-monitor doctor
 ```
 
-### Remote Codex and Claude sessions over SSH
+### Remote Claude and Codex sessions over SSH
 
-SidePulse can monitor sessions whose Codex or Claude process runs on another Mac while
-the SidePulse device remains connected to this Mac. Install SidePulse and its hooks on
-the remote host, then add that host on the Mac connected to the device:
+SidePulse can monitor both Claude and Codex sessions whose agent process runs on
+another Mac while the SidePulse device remains connected to a client Mac. In this
+setup:
+
+- the **remote host** runs Claude and/or Codex and owns the project files;
+- the **SidePulse client** is any Mac with SidePulse Pro or SidePulse Dot plugged in;
+- each SidePulse client makes its own outbound SSH connection to the remote host.
+
+#### 1. Prepare each remote host
+
+Install SidePulse and both provider hooks once on every remote host that runs Claude
+or Codex:
 
 ```sh
-# Run on the remote Mac.
+# Run in a SidePulse checkout on the remote Mac.
 ./scripts/install-user.sh
 ~/.local/bin/sidepulse agent-monitor install codex
 ~/.local/bin/sidepulse agent-monitor install claude
+~/.local/bin/sidepulse agent-monitor doctor
+```
 
-# Run on the Mac connected to SidePulse. The SSH target may be a ~/.ssh/config alias.
-sidepulse remote add macmini --ssh mini
+The hooks cover Claude and Codex independently, so either provider can be running and
+both can be monitored at the same time.
+
+#### 2. Prepare every Mac with SidePulse plugged in
+
+Install SidePulse on each client Mac, confirm that its SSH alias can reach the remote
+host without an interactive password prompt, and add the host:
+
+```sh
+# Run in a SidePulse checkout on each Mac connected to a SidePulse device.
+./scripts/install-user.sh
+
+# Replace these values with a local display name and a working SSH host or alias.
+~/.local/bin/sidepulse remote add macmini --ssh mini
+~/.local/bin/sidepulse remote list
+```
+
+`remote add` monitors both Claude and Codex by default, installs a per-user
+LaunchAgent, starts it immediately, and enables it at login. Repeat the client steps
+on every Mac that has a SidePulse device plugged in. Multiple SidePulse clients can
+monitor the same remote host independently.
+
+To limit a connection to one provider, pass `--provider codex` or
+`--provider claude`. To monitor another remote host from the same SidePulse client,
+repeat `remote add` with another name and SSH target:
+
+```sh
+~/.local/bin/sidepulse remote add build-mac --ssh build-mac
 ```
 
 The local monitor opens an outbound SSH connection, reconnects automatically, and
@@ -300,10 +337,10 @@ session IDs are namespaced by host, and the status list identifies origins such 
 Manage configured hosts and the background monitor with:
 
 ```sh
-sidepulse remote list
-sidepulse remote start
-sidepulse remote stop
-sidepulse remote remove macmini
+~/.local/bin/sidepulse remote list
+~/.local/bin/sidepulse remote start
+~/.local/bin/sidepulse remote stop
+~/.local/bin/sidepulse remote remove macmini
 ```
 
 Only hook events are streamed. Project files and command execution remain on the SSH
