@@ -115,6 +115,8 @@ from sidepulse.settings import (
     CLOSED_LID_AWAKE_AGENTS,
     CLOSED_LID_AWAKE_ALWAYS,
     CLOSED_LID_AWAKE_NEVER,
+    DEFAULT_DND_END_TIME,
+    DEFAULT_DND_START_TIME,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_HISTORY_TIMEFRAME_SECONDS,
     DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
@@ -1552,6 +1554,7 @@ class AgentMonitorTests(unittest.TestCase):
             brightness=128,
         )
         fake = SimpleNamespace(
+            settings=AgentMonitorSettings(),
             status_bar_devices=lambda remember=True: [device],
             ensure_device_selection=lambda: None,
             last_led_error="old",
@@ -1681,6 +1684,89 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertNotIn("Sleep Helper Missing", titles)
         self.assertIn("Setup...", titles)
 
+    def test_dnd_schedule_handles_overnight_and_daytime_ranges(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        overnight = AgentMonitorSettings().with_dnd(
+            schedule_enabled=True,
+            start_time="22:00",
+            end_time="07:00",
+        )
+        self.assertTrue(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 23, 0)))
+        self.assertTrue(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 6, 59)))
+        self.assertFalse(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 7, 0)))
+        self.assertFalse(status_bar.dnd_is_active(overnight, datetime(2026, 8, 17, 12, 0)))
+
+        daytime = overnight.with_dnd(start_time="09:00", end_time="17:00")
+        self.assertTrue(status_bar.dnd_is_active(daytime, datetime(2026, 8, 17, 12, 0)))
+        self.assertFalse(status_bar.dnd_is_active(daytime, datetime(2026, 8, 17, 18, 0)))
+
+    def test_manual_dnd_overrides_schedule(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        settings = AgentMonitorSettings().with_dnd(manual_enabled=True)
+        self.assertTrue(status_bar.dnd_is_active(settings, datetime(2026, 8, 17, 12, 0)))
+        self.assertIn("LEDs are off", status_bar.dnd_status_text(settings))
+
+    def test_dnd_writes_off_once_per_physical_device(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        device = status_bar.StatusBarDevice(
+            device_id="/Volumes/SidePulseDot",
+            name="SidePulse Dot",
+            root=Path("/Volumes/SidePulseDot"),
+            target=Path("/Volumes/SidePulseDot/LEDS.LED"),
+            connected=True,
+            display="agent",
+        )
+        fake = SimpleNamespace(
+            status_bar_devices=lambda: [device],
+            dnd_off_targets=set(),
+            device_errors={},
+            last_led_error=None,
+        )
+        with patch("sidepulse.status_bar.write_led_program", return_value=device.target) as write:
+            status_bar.StatusBarController.sync_dnd_leds_now(fake)
+            status_bar.StatusBarController.sync_dnd_leds_now(fake)
+
+        write.assert_called_once_with("off", device_path=device.target)
+        self.assertEqual(fake.dnd_off_targets, {str(device.target)})
+        self.assertIsNone(fake.last_led_error)
+
+    def test_status_bar_menu_shows_dnd_toggle_and_schedule(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        snapshot = SimpleNamespace(statuses=[], collected_at=datetime.now(timezone.utc))
+        target = SimpleNamespace(
+            settings=AgentMonitorSettings().with_dnd(
+                manual_enabled=True,
+                schedule_enabled=True,
+            ),
+            closed_lid_awake=SimpleNamespace(last_error=None),
+            status_bar_devices=lambda: [],
+        )
+        menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
+        by_title = {
+            menu.itemAtIndex_(index).title(): menu.itemAtIndex_(index)
+            for index in range(menu.numberOfItems())
+            if menu.itemAtIndex_(index).title()
+        }
+
+        self.assertIn("Do Not Disturb", by_title)
+        self.assertEqual(by_title["Turn DND On Manually"].state(), 1)
+
     def test_lid_animation_program_uses_device_brightness(self) -> None:
         try:
             from sidepulse import status_bar
@@ -1752,6 +1838,11 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("idle_timeout_minutes", target.settings_fields)
         self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
         self.assertIn("status_history_timeframe", target.settings_fields)
+        self.assertIn("dnd_start_time", target.settings_fields)
+        self.assertIn("dnd_end_time", target.settings_fields)
+        self.assertIn("dnd_status", target.settings_fields)
+        self.assertIn("dnd_manual", target.settings_buttons)
+        self.assertIn("dnd_schedule", target.settings_buttons)
         self.assertIn("closed_animation_program", target.settings_fields)
         self.assertIn("closed_animation_duration", target.settings_fields)
         self.assertIn("open_animation_program", target.settings_fields)
@@ -4314,6 +4405,35 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(loaded.recent_session_retention_seconds, 36 * 60 * 60)
             self.assertEqual(loaded.idle_timeout_seconds, 15 * 60)
+
+    def test_settings_round_trip_dnd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings().with_dnd(
+                manual_enabled=True,
+                schedule_enabled=True,
+                start_time="21:30",
+                end_time="6:15",
+            )
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.dnd_manual_enabled)
+            self.assertTrue(loaded.dnd_schedule_enabled)
+            self.assertEqual(loaded.dnd_start_time, "21:30")
+            self.assertEqual(loaded.dnd_end_time, "06:15")
+
+    def test_settings_dnd_defaults_and_validation(self) -> None:
+        settings = AgentMonitorSettings()
+        self.assertFalse(settings.dnd_manual_enabled)
+        self.assertFalse(settings.dnd_schedule_enabled)
+        self.assertEqual(settings.dnd_start_time, DEFAULT_DND_START_TIME)
+        self.assertEqual(settings.dnd_end_time, DEFAULT_DND_END_TIME)
+        with self.assertRaises(ValueError):
+            settings.with_dnd(start_time="25:00")
+        with self.assertRaises(ValueError):
+            settings.with_dnd(end_time="night")
 
     def test_settings_migrates_missing_agent_list_timing_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

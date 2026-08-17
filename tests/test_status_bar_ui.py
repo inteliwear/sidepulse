@@ -376,6 +376,14 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.settings_fields,
             "settings window built no addressable fields; saving would be a no-op",
         )
+        for key in (
+            "dnd_start_time",
+            "dnd_end_time",
+            "dnd_status",
+        ):
+            self.assertIn(key, self.controller.settings_fields)
+        self.assertIn("dnd_manual", self.controller.settings_buttons)
+        self.assertIn("dnd_schedule", self.controller.settings_buttons)
 
     def test_settings_window_is_not_visible(self):
         window = sb.build_settings_window(self.controller)
