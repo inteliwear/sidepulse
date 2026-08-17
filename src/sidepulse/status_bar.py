@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -202,43 +202,75 @@ class StatusBarDevice:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class DndScheduleTransition:
+    key: str
+    enabled: bool
+
+
 def dnd_is_active(
     settings: AgentMonitorSettings,
     now: datetime | None = None,
 ) -> bool:
-    if settings.dnd_manual_enabled:
-        return True
+    return settings.dnd_enabled
+
+
+def latest_dnd_schedule_transition(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+) -> DndScheduleTransition | None:
     if not settings.dnd_schedule_enabled:
-        return False
+        return None
 
     current = now or datetime.now().astimezone()
-    current_minutes = current.hour * 60 + current.minute
-    start_minutes = dnd_time_minutes(settings.dnd_start_time)
-    end_minutes = dnd_time_minutes(settings.dnd_end_time)
-    if start_minutes == end_minutes:
-        return True
-    if start_minutes < end_minutes:
-        return start_minutes <= current_minutes < end_minutes
-    return current_minutes >= start_minutes or current_minutes < end_minutes
+    start_parts = tuple(int(part) for part in settings.dnd_start_time.split(":", 1))
+    end_parts = tuple(int(part) for part in settings.dnd_end_time.split(":", 1))
+    boundaries = [("start", start_parts, True)]
+    if start_parts != end_parts:
+        boundaries.append(("end", end_parts, False))
+
+    due: list[tuple[datetime, str, bool]] = []
+    for day_offset in (-1, 0):
+        day = current + timedelta(days=day_offset)
+        for label, (hour, minute), enabled in boundaries:
+            boundary = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if boundary <= current:
+                due.append((boundary, label, enabled))
+
+    boundary, label, enabled = max(due, key=lambda item: item[0])
+    key = f"{boundary:%Y-%m-%d}:{label}:{boundary:%H:%M}"
+    return DndScheduleTransition(key=key, enabled=enabled)
 
 
-def dnd_time_minutes(value: str) -> int:
-    hour, minute = (int(part) for part in value.split(":", 1))
-    return hour * 60 + minute
+def settings_after_dnd_schedule_transition(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+    *,
+    force: bool = False,
+) -> AgentMonitorSettings:
+    transition = latest_dnd_schedule_transition(settings, now)
+    if transition is None:
+        return settings
+    if not force and transition.key == settings.dnd_last_schedule_transition:
+        return settings
+    return settings.with_dnd(
+        enabled=transition.enabled,
+        schedule_transition=transition.key,
+    )
 
 
 def dnd_status_text(
     settings: AgentMonitorSettings,
     now: datetime | None = None,
 ) -> str:
-    if settings.dnd_manual_enabled:
-        return "DND is active manually. LEDs are off."
+    if settings.dnd_enabled:
+        status = "DND is on. LEDs are off."
+    else:
+        status = "DND is off."
     if settings.dnd_schedule_enabled:
         schedule = f"{settings.dnd_start_time}–{settings.dnd_end_time}"
-        if dnd_is_active(settings, now):
-            return f"Scheduled DND is active ({schedule}). LEDs are off."
-        return f"DND is off. Scheduled for {schedule}."
-    return "DND is off."
+        return f"{status} Schedule: {schedule}."
+    return status
 
 
 @dataclass(frozen=True)
@@ -457,6 +489,7 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def refresh_(self, _sender):
+        self.apply_due_dnd_schedule()
         try:
             snapshot = self.monitor.snapshot(include_stale=False)
         except Exception as exc:
@@ -668,11 +701,11 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def toggleDnd_(self, _sender):
-        self.set_dnd_manual(not self.settings.dnd_manual_enabled)
+        self.set_dnd_enabled(not self.settings.dnd_enabled)
 
     @objc.IBAction
-    def setDndManualFromCheckbox_(self, sender):
-        self.set_dnd_manual(sender.state() == NSOnState)
+    def setDndFromCheckbox_(self, sender):
+        self.set_dnd_enabled(sender.state() == NSOnState)
 
     @objc.IBAction
     def saveDndSettings_(self, _sender):
@@ -1016,8 +1049,8 @@ class StatusBarController(NSObject):
             self.settings.battery_show_on_power_change,
         )
         set_checkbox_state(
-            self.settings_buttons.get("dnd_manual"),
-            self.settings.dnd_manual_enabled,
+            self.settings_buttons.get("dnd_enabled"),
+            self.settings.dnd_enabled,
         )
         set_checkbox_state(
             self.settings_buttons.get("dnd_schedule"),
@@ -1643,9 +1676,9 @@ class StatusBarController(NSObject):
         self.refresh_settings_window()
         self.refresh_(None)
 
-    def set_dnd_manual(self, enabled: bool) -> None:
+    def set_dnd_enabled(self, enabled: bool) -> None:
         try:
-            self.settings = self.settings.with_dnd(manual_enabled=enabled)
+            self.settings = self.settings.with_dnd(enabled=enabled)
             save_settings(self.settings)
         except Exception as exc:
             self.set_settings_message(f"Could not save DND setting: {exc}")
@@ -1673,7 +1706,13 @@ class StatusBarController(NSObject):
                 schedule_enabled=schedule_enabled,
                 start_time=start_time,
                 end_time=end_time,
+                schedule_transition="",
             )
+            if schedule_enabled:
+                self.settings = settings_after_dnd_schedule_transition(
+                    self.settings,
+                    force=True,
+                )
             save_settings(self.settings)
         except Exception as exc:
             self.set_settings_message(f"Could not save DND schedule: {exc}")
@@ -1688,6 +1727,25 @@ class StatusBarController(NSObject):
         )
         self.refresh_settings_window()
         self.refresh_(None)
+
+    def apply_due_dnd_schedule(self, now: datetime | None = None) -> bool:
+        updated = settings_after_dnd_schedule_transition(self.settings, now)
+        if updated == self.settings:
+            return False
+
+        previous_enabled = self.settings.dnd_enabled
+        self.settings = updated
+        try:
+            save_settings(self.settings)
+        except Exception as exc:
+            log_status_bar(f"dnd schedule save error: {exc}")
+        self.prepare_for_dnd_change()
+        self.refresh_settings_window()
+        if previous_enabled != self.settings.dnd_enabled:
+            log_status_bar(
+                f"dnd schedule switched {'on' if self.settings.dnd_enabled else 'off'}"
+            )
+        return True
 
     def prepare_for_dnd_change(self) -> None:
         self.last_dnd_active = None
@@ -2382,19 +2440,18 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Do Not Disturb"))
-    dnd_manual = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Turn DND On Manually",
+    dnd_enabled = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "DND On",
         "toggleDnd:",
         "",
     )
-    dnd_manual.setTarget_(target)
-    dnd_manual.setState_(1 if target.settings.dnd_manual_enabled else 0)
-    menu.addItem_(dnd_manual)
+    dnd_enabled.setTarget_(target)
+    dnd_enabled.setState_(1 if target.settings.dnd_enabled else 0)
+    menu.addItem_(dnd_enabled)
     if target.settings.dnd_schedule_enabled:
-        active_label = "Active" if dnd_is_active(target.settings) else "Scheduled"
         menu.addItem_(
             disabled_menu_item(
-                f"{active_label}: {target.settings.dnd_start_time}–{target.settings.dnd_end_time}"
+                f"Schedule: {target.settings.dnd_start_time}–{target.settings.dnd_end_time}"
             )
         )
 
@@ -2799,15 +2856,15 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     )
     add_separator(devices_tab, 24, 282, tab_width - 48)
     add_label(devices_tab, "Do Not Disturb", 24, 248, 240, 24)
-    dnd_manual = add_checkbox(
+    dnd_enabled = add_checkbox(
         devices_tab,
-        "Turn DND on manually",
+        "DND On",
         32,
         210,
         240,
         24,
         target,
-        "setDndManualFromCheckbox:",
+        "setDndFromCheckbox:",
     )
     dnd_schedule = add_checkbox(
         devices_tab,
@@ -2837,7 +2894,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     dnd_status = add_label(devices_tab, "", 32, 94, 590, 22)
     add_label(
         devices_tab,
-        "Monitoring continues during DND; all physical and on-screen LEDs stay off.",
+        "The schedule switches this toggle on/off; you can override it at any time.",
         32,
         62,
         590,
@@ -2966,7 +3023,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_transcripts": claude_transcripts,
         "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
-        "dnd_manual": dnd_manual,
+        "dnd_enabled": dnd_enabled,
         "dnd_schedule": dnd_schedule,
     }
     return window
