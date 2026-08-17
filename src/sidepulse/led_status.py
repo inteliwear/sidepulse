@@ -32,7 +32,6 @@ LED_STATE_LABELS: dict[LedDisplayState, str] = {
 ASK_AMBER = "#FF3A00"
 WORKING_CYAN = "#00E5FF"
 DONE_GREEN = "#00FF66"
-IDLE_DIM = "#020204"
 DEVICE_LED_COUNTS = {
     "sidepulsedot": 2,
     "sidepulsepro": 8,
@@ -73,16 +72,7 @@ def program_for_display_state(
     brightness: int | float = 255,
 ) -> str:
     if state == LedDisplayState.IDLE:
-        return apply_brightness(
-            "\n".join(
-                [
-                    "off",
-                    f"{IDLE_DIM} 6s pulse",
-                    "repeat",
-                ]
-            ),
-            brightness,
-        )
+        return "off"
     if state == LedDisplayState.ASK:
         return apply_brightness(
             "\n".join(
