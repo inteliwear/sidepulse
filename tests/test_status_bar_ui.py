@@ -376,6 +376,86 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.settings_fields,
             "settings window built no addressable fields; saving would be a no-op",
         )
+        for key in (
+            "remote_host_popup",
+            "remote_host_name",
+            "remote_ssh_target",
+            "remote_host_status",
+            "remote_config_path",
+        ):
+            self.assertIn(key, self.controller.settings_fields)
+
+    def test_remote_tab_loads_configured_host(self):
+        window = sb.build_settings_window(self.controller)
+        self.controller.settings_window = window
+        with patch.object(
+            sb,
+            "load_remote_hosts",
+            return_value=(sb.RemoteHost("macmini", "mini"),),
+        ):
+            self.controller.refresh_remote_host_controls()
+
+        fields = self.controller.settings_fields
+        self.assertEqual(fields["remote_host_name"].stringValue(), "macmini")
+        self.assertEqual(fields["remote_ssh_target"].stringValue(), "mini")
+        self.assertEqual(
+            fields["remote_host_popup"].selectedItem().representedObject(),
+            "macmini",
+        )
+
+    def test_remote_host_status_describes_monitor_installation(self):
+        hosts = (sb.RemoteHost("macmini", "mini"),)
+        with patch.object(Path, "exists", return_value=True):
+            self.assertIn("Automatic monitor installed", sb.remote_hosts_status_text(hosts))
+        self.assertEqual(sb.remote_hosts_status_text(()), "No remote hosts configured.")
+
+    def test_save_remote_host_from_fields_starts_monitor(self):
+        sb.build_settings_window(self.controller)
+        fields = self.controller.settings_fields
+        fields["remote_host_name"].setStringValue_("macmini")
+        fields["remote_ssh_target"].setStringValue_("mini")
+        messages = []
+        fake = type("FakeRemoteController", (), {})()
+        fake.settings_fields = fields
+        fake.set_settings_message = messages.append
+        fake.refresh_remote_host_controls = lambda: None
+        fake.reload_monitor = lambda: None
+        fake.refresh_ = lambda _sender: None
+
+        with (
+            patch.object(sb, "upsert_remote_host") as upsert,
+            patch.object(sb, "install_remote_launch_agent") as install,
+        ):
+            sb.StatusBarController.save_remote_host_from_fields(fake)
+
+        upsert.assert_called_once_with(sb.RemoteHost("macmini", "mini"))
+        install.assert_called_once_with(start=True)
+        self.assertIn("Claude and Codex", messages[-1])
+
+    def test_remove_last_remote_host_stops_monitor(self):
+        sb.build_settings_window(self.controller)
+        popup = self.controller.settings_fields["remote_host_popup"]
+        popup.removeAllItems()
+        popup.addItemWithTitle_("macmini — mini")
+        popup.lastItem().setRepresentedObject_("macmini")
+        messages = []
+        fake = type("FakeRemoteController", (), {})()
+        fake.settings_fields = {"remote_host_popup": popup}
+        fake.set_settings_message = messages.append
+        fake.refresh_remote_host_controls = lambda: None
+        fake.reload_monitor = lambda: None
+        fake.refresh_ = lambda _sender: None
+
+        with (
+            patch.object(sb, "remove_remote_host", return_value=(Path("/tmp/config"), True)) as remove,
+            patch.object(sb, "load_remote_hosts", return_value=()),
+            patch.object(sb, "uninstall_remote_launch_agent") as uninstall,
+        ):
+            sb.StatusBarController.remove_selected_remote_host(fake)
+
+        remove.assert_called_once_with("macmini")
+        uninstall.assert_called_once_with()
+        self.assertEqual(messages[-1], "Remote host macmini removed.")
 
     def test_settings_window_is_not_visible(self):
         window = sb.build_settings_window(self.controller)

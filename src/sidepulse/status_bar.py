@@ -123,6 +123,18 @@ from .providers import (
     default_state_dir,
     parse_log_line,
 )
+from .remote_hosts import (
+    RemoteHost,
+    default_remote_config_path,
+    load_remote_hosts,
+    remove_remote_host,
+    upsert_remote_host,
+)
+from .remote_launch import (
+    install_remote_launch_agent,
+    remote_launch_agent_path,
+    uninstall_remote_launch_agent,
+)
 from .sd_eject_guard_launch import (
     SD_EJECT_GUARD_DISPLAY_NAME,
     install_sd_eject_guard,
@@ -613,6 +625,25 @@ class StatusBarController(NSObject):
         self.save_agent_list_timing_from_fields()
 
     @objc.IBAction
+    def selectRemoteHost_(self, sender):
+        item = sender.selectedItem()
+        name = item.representedObject() if item is not None else None
+        if isinstance(name, str):
+            self.populate_remote_host_fields(name)
+
+    @objc.IBAction
+    def saveRemoteHost_(self, _sender):
+        self.save_remote_host_from_fields()
+
+    @objc.IBAction
+    def removeRemoteHost_(self, _sender):
+        self.remove_selected_remote_host()
+
+    @objc.IBAction
+    def refreshRemoteHosts_(self, _sender):
+        self.refresh_remote_host_controls()
+
+    @objc.IBAction
     def setDeviceDisplayAgent_(self, sender):
         self.set_device_display(sender.representedObject(), LED_DISPLAY_AGENT)
 
@@ -972,11 +1003,117 @@ class StatusBarController(NSObject):
             self.settings_fields.get("idle_timeout_minutes"),
             f"{self.settings.idle_timeout_seconds / 60:g}",
         )
+        self.refresh_remote_host_controls()
 
     def set_settings_message(self, message: str) -> None:
         set_field_value(self.settings_fields.get("message"), message)
         if message:
             log_status_bar(f"settings: {message}")
+
+    def refresh_remote_host_controls(self) -> None:
+        popup = self.settings_fields.get("remote_host_popup")
+        if popup is None:
+            return
+
+        preferred = text_control_value(
+            self.settings_fields.get("remote_host_name")
+        ).strip()
+        hosts = load_remote_hosts()
+        popup.removeAllItems()
+        if not hosts:
+            popup.addItemWithTitle_("No remote hosts configured")
+            popup.lastItem().setEnabled_(False)
+            set_text_control_value(self.settings_fields.get("remote_host_name"), "")
+            set_text_control_value(self.settings_fields.get("remote_ssh_target"), "")
+        else:
+            selected_index = 0
+            for index, host in enumerate(hosts):
+                popup.addItemWithTitle_(f"{host.name} — {host.ssh_target}")
+                popup.lastItem().setRepresentedObject_(host.name)
+                if host.name == preferred:
+                    selected_index = index
+            popup.selectItemAtIndex_(selected_index)
+            self.populate_remote_host_fields(hosts[selected_index].name, hosts=hosts)
+
+        set_field_value(
+            self.settings_fields.get("remote_host_status"),
+            remote_hosts_status_text(hosts),
+        )
+        set_field_value(
+            self.settings_fields.get("remote_config_path"),
+            f"Configuration: {default_remote_config_path()}",
+        )
+
+    def populate_remote_host_fields(
+        self,
+        name: str,
+        *,
+        hosts: tuple[RemoteHost, ...] | None = None,
+    ) -> None:
+        selected = next(
+            (host for host in (hosts or load_remote_hosts()) if host.name == name),
+            None,
+        )
+        if selected is None:
+            return
+        set_text_control_value(
+            self.settings_fields.get("remote_host_name"),
+            selected.name,
+        )
+        set_text_control_value(
+            self.settings_fields.get("remote_ssh_target"),
+            selected.ssh_target,
+        )
+
+    def save_remote_host_from_fields(self) -> None:
+        name = text_control_value(
+            self.settings_fields.get("remote_host_name")
+        ).strip()
+        ssh_target = text_control_value(
+            self.settings_fields.get("remote_ssh_target")
+        ).strip()
+        try:
+            host = RemoteHost(name, ssh_target)
+            upsert_remote_host(host)
+            install_remote_launch_agent(start=True)
+        except Exception as exc:
+            self.set_settings_message(f"Remote host could not be saved: {exc}")
+            self.refresh_remote_host_controls()
+            return
+
+        self.reload_monitor()
+        self.set_settings_message(
+            f"Monitoring Claude and Codex on {host.name} via {host.ssh_target}."
+        )
+        self.refresh_remote_host_controls()
+        self.refresh_(None)
+
+    def remove_selected_remote_host(self) -> None:
+        popup = self.settings_fields.get("remote_host_popup")
+        item = popup.selectedItem() if popup is not None else None
+        name = item.representedObject() if item is not None else None
+        if not isinstance(name, str):
+            self.set_settings_message("Select a remote host to remove.")
+            return
+
+        try:
+            _path, changed = remove_remote_host(name)
+            remaining = load_remote_hosts()
+            if remaining:
+                install_remote_launch_agent(start=True)
+            else:
+                uninstall_remote_launch_agent()
+        except Exception as exc:
+            self.set_settings_message(f"Remote host could not be removed: {exc}")
+            self.refresh_remote_host_controls()
+            return
+
+        self.reload_monitor()
+        self.set_settings_message(
+            f"Remote host {name} removed." if changed else f"Remote host {name} was not configured."
+        )
+        self.refresh_remote_host_controls()
+        self.refresh_(None)
 
     def set_session_terminal(
         self,
@@ -2364,6 +2501,13 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         tab_width,
         tab_height,
     )
+    remote_tab = add_settings_tab(
+        tab_view,
+        "remote",
+        "Remote",
+        tab_width,
+        tab_height,
+    )
     diagnostics_tab = add_settings_tab(
         tab_view,
         "diagnostics",
@@ -2473,6 +2617,61 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "minutes", 292, 316, 80, 22)
     add_button(behavior_tab, "Save", 32, 266, 90, 28, target, "saveAgentListTiming:")
 
+    add_label(remote_tab, "Remote Claude & Codex", 24, 398, 260, 24)
+    add_label(
+        remote_tab,
+        "Monitor sessions running on another Mac while SidePulse stays connected here.",
+        32,
+        364,
+        590,
+        22,
+    )
+    add_label(
+        remote_tab,
+        "SSH must connect without an interactive password prompt. Both providers are enabled.",
+        32,
+        338,
+        590,
+        22,
+    )
+
+    remote_host_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+        ((32, 292), (420, 28)), False
+    )
+    remote_host_popup.setTarget_(target)
+    remote_host_popup.setAction_("selectRemoteHost:")
+    remote_tab.addSubview_(remote_host_popup)
+    add_button(remote_tab, "Refresh", 466, 292, 76, 28, target, "refreshRemoteHosts:")
+    add_button(remote_tab, "Remove", 550, 292, 76, 28, target, "removeRemoteHost:")
+
+    add_label(remote_tab, "Display Name", 32, 244, 110, 22)
+    remote_host_name = add_editable_field(remote_tab, "", 160, 242, 250, 24)
+    add_label(remote_tab, "SSH Host / Alias", 32, 202, 120, 22)
+    remote_ssh_target = add_editable_field(remote_tab, "", 160, 200, 250, 24)
+    add_label(remote_tab, "Example: macmini", 424, 244, 170, 22)
+    add_label(remote_tab, "Example: mini or user@host", 424, 202, 190, 22)
+
+    add_button(
+        remote_tab,
+        "Add or Update Host",
+        160,
+        150,
+        170,
+        30,
+        target,
+        "saveRemoteHost:",
+    )
+    remote_host_status = add_label(remote_tab, "", 32, 104, 590, 22)
+    remote_config_path = add_label(remote_tab, "", 32, 74, 590, 22)
+    add_label(
+        remote_tab,
+        "The client uses an outbound SSH connection; no listening port or relay is created.",
+        32,
+        34,
+        590,
+        22,
+    )
+
     add_label(diagnostics_tab, "Debug Log", 24, 398, 240, 24)
     debug_log_status = add_label(diagnostics_tab, "", 32, 360, 588, 22)
     add_button(diagnostics_tab, "Export CSV", 32, 318, 110, 28, target, "exportDebugCsv:")
@@ -2499,6 +2698,11 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "open_animation_duration": open_duration,
         "recent_session_retention_hours": retention_hours,
         "idle_timeout_minutes": idle_minutes,
+        "remote_host_popup": remote_host_popup,
+        "remote_host_name": remote_host_name,
+        "remote_ssh_target": remote_ssh_target,
+        "remote_host_status": remote_host_status,
+        "remote_config_path": remote_config_path,
         "message": message,
         "settings_path": settings_path,
     }
@@ -2509,6 +2713,16 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "battery_power_preview": battery_power_preview,
     }
     return window
+
+
+def remote_hosts_status_text(hosts: tuple[RemoteHost, ...]) -> str:
+    count = len(hosts)
+    host_label = "host" if count == 1 else "hosts"
+    if not hosts:
+        return "No remote hosts configured."
+    if remote_launch_agent_path().exists():
+        return f"{count} remote {host_label} configured. Automatic monitor installed."
+    return f"{count} remote {host_label} configured. Automatic monitor not installed."
 
 
 def add_settings_tab(tab_view, identifier: str, title: str, width: int, height: int):
