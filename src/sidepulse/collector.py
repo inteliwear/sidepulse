@@ -475,6 +475,8 @@ class LiveAgentMonitor:
 
 
 def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[SourceSpec, ...]:
+    from .remote_hosts import configured_remote_logs
+
     active_settings = load_settings() if settings is None else settings
     sources = [
         SourceSpec("codex", detect_log_path("codex")),
@@ -485,6 +487,7 @@ def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[Sourc
     if active_settings.claude_transcripts_enabled:
         sources.append(SourceSpec(CLAUDE_TRANSCRIPT_PROVIDER, Path.home() / ".claude" / "projects"))
     sources.append(SourceSpec("grok", detect_log_path("grok")))
+    sources.extend(SourceSpec(provider, path) for provider, path in configured_remote_logs())
     return unique_sources(sources)
 
 
