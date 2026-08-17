@@ -493,6 +493,15 @@ The status-bar item shows one of four collapsed states:
 | Done | The most recent active agent completed successfully. |
 | Ask | An agent needs input, permission, or attention. |
 
+### Do Not Disturb
+
+Do Not Disturb keeps all physical SidePulse LEDs and the optional Screen Bar off while
+agent monitoring continues normally. Toggle it immediately from the menu-bar dropdown,
+or open **Settings... → Devices & LEDs** to enable manual DND or a recurring daily
+schedule such as `22:00`–`07:00`. Overnight schedules that cross midnight are supported.
+Changes take effect immediately, and normal LED status resumes automatically when DND
+ends.
+
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the

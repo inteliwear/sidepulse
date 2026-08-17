@@ -382,8 +382,13 @@ class WindowBuildTests(StatusBarTestCase):
             "remote_ssh_target",
             "remote_host_status",
             "remote_config_path",
+            "dnd_start_time",
+            "dnd_end_time",
+            "dnd_status",
         ):
             self.assertIn(key, self.controller.settings_fields)
+        self.assertIn("dnd_manual", self.controller.settings_buttons)
+        self.assertIn("dnd_schedule", self.controller.settings_buttons)
 
     def test_remote_tab_loads_configured_host(self):
         window = sb.build_settings_window(self.controller)

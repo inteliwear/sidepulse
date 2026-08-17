@@ -77,6 +77,8 @@ DEFAULT_LID_CLOSED_ANIMATION_SECONDS = 0.9
 DEFAULT_LID_OPEN_ANIMATION_SECONDS = 1.0
 DEFAULT_RECENT_SESSION_RETENTION_SECONDS = 48 * 60 * 60
 DEFAULT_IDLE_TIMEOUT_SECONDS = 60 * 60
+DEFAULT_DND_START_TIME = "22:00"
+DEFAULT_DND_END_TIME = "07:00"
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,10 @@ class AgentMonitorSettings:
     custom_terminal_path: str = ""
     recent_session_retention_seconds: float = DEFAULT_RECENT_SESSION_RETENTION_SECONDS
     idle_timeout_seconds: float = DEFAULT_IDLE_TIMEOUT_SECONDS
+    dnd_manual_enabled: bool = False
+    dnd_schedule_enabled: bool = False
+    dnd_start_time: str = DEFAULT_DND_START_TIME
+    dnd_end_time: str = DEFAULT_DND_END_TIME
     setup_screen_completed: bool = False
 
     def transcript_enabled(self, provider: str) -> bool:
@@ -418,6 +424,38 @@ class AgentMonitorSettings:
             idle_timeout_seconds=idle_timeout,
         )
 
+    def with_dnd(
+        self,
+        *,
+        manual_enabled: bool | None = None,
+        schedule_enabled: bool | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> "AgentMonitorSettings":
+        return replace(
+            self,
+            dnd_manual_enabled=(
+                self.dnd_manual_enabled
+                if manual_enabled is None
+                else bool(manual_enabled)
+            ),
+            dnd_schedule_enabled=(
+                self.dnd_schedule_enabled
+                if schedule_enabled is None
+                else bool(schedule_enabled)
+            ),
+            dnd_start_time=(
+                self.dnd_start_time
+                if start_time is None
+                else normalize_dnd_time(start_time)
+            ),
+            dnd_end_time=(
+                self.dnd_end_time
+                if end_time is None
+                else normalize_dnd_time(end_time)
+            ),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "led_display": self.led_display,
@@ -445,6 +483,12 @@ class AgentMonitorSettings:
             "agent_list": {
                 "recent_session_retention_seconds": self.recent_session_retention_seconds,
                 "idle_timeout_seconds": self.idle_timeout_seconds,
+            },
+            "do_not_disturb": {
+                "manual_enabled": self.dnd_manual_enabled,
+                "schedule_enabled": self.dnd_schedule_enabled,
+                "start_time": self.dnd_start_time,
+                "end_time": self.dnd_end_time,
             },
             "setup_screen_completed": self.setup_screen_completed,
         }
@@ -492,6 +536,10 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
     agent_list = data.get("agent_list")
     if not isinstance(agent_list, dict):
         agent_list = {}
+
+    dnd = data.get("do_not_disturb")
+    if not isinstance(dnd, dict):
+        dnd = {}
 
     led_display = _led_display_setting(data.get("led_display"), LED_DISPLAY_AGENT)
     session_open_preferences = _session_open_preferences(
@@ -554,6 +602,16 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         idle_timeout_seconds=_nonnegative_float_setting(
             agent_list.get("idle_timeout_seconds", data.get("idle_timeout_seconds")),
             DEFAULT_IDLE_TIMEOUT_SECONDS,
+        ),
+        dnd_manual_enabled=_bool_setting(dnd.get("manual_enabled"), False),
+        dnd_schedule_enabled=_bool_setting(dnd.get("schedule_enabled"), False),
+        dnd_start_time=_dnd_time_setting(
+            dnd.get("start_time"),
+            DEFAULT_DND_START_TIME,
+        ),
+        dnd_end_time=_dnd_time_setting(
+            dnd.get("end_time"),
+            DEFAULT_DND_END_TIME,
         ),
         setup_screen_completed=_bool_setting(data.get("setup_screen_completed"), False),
     )
@@ -680,6 +738,27 @@ def _nonnegative_float_setting(value: object, default: float) -> float:
     if isinstance(value, (int, float)):
         return normalize_seconds_setting(value)
     return default
+
+
+def normalize_dnd_time(value: str) -> str:
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if match is None:
+        raise ValueError("DND times must use 24-hour HH:MM format.")
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError("DND times must use 24-hour HH:MM format.")
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _dnd_time_setting(value: object, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    try:
+        return normalize_dnd_time(value)
+    except ValueError:
+        return default
 
 
 def normalize_seconds_setting(value: object) -> float:
