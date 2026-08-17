@@ -3375,7 +3375,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
-            "off\n#020204 6s pulse\nrepeat",
+            "off",
         )
         self.assertEqual(program_for_display_state(LedDisplayState.DONE), "#00FF66")
         self.assertIn("#FF3A00 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
@@ -3416,7 +3416,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(
                 (device / "LEDS.LED").read_text(),
-                "off\n#020204 6s pulse\nrepeat",
+                "off",
             )
 
             write_mode_to_leds(AgentMode.COMPLETED, device_path=device, brightness=64)

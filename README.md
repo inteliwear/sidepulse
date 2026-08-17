@@ -93,7 +93,7 @@ Agent status modes:
 
 | Mode | Meaning | LED pattern |
 | --- | --- | --- |
-| Idle / Ready | The agent is available and not currently running a task. | Very dim idle pulse. |
+| Idle / Ready | The agent is available and not currently running a task. | Off. |
 | Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation. |
 | Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation. |
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
@@ -397,9 +397,8 @@ Working.
 
 `Completed` remains visible for 20 minutes so the status bar and LEDs can show
 Done long enough to be noticed. After that it drops out instead of counting as
-an active session for the full stale window, and the LEDs return to the very
-dim Idle pattern. Idle/session-start records also do not count as active
-sessions.
+an active session for the full stale window, and the LEDs turn off. Idle/session-start
+records also do not count as active sessions.
 
 Status detection is strongest when the agent tells the monitor its intended
 handoff state explicitly. A final assistant message can include a hidden marker
