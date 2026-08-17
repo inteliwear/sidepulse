@@ -321,6 +321,11 @@ LaunchAgent, starts it immediately, and enables it at login. Repeat the client s
 on every Mac that has a SidePulse device plugged in. Multiple SidePulse clients can
 monitor the same remote host independently.
 
+The same configuration is available in the macOS menu-bar app: open
+**Settings...**, select the **Remote** tab, enter a display name and SSH host or
+`~/.ssh/config` alias, then click **Add or Update Host**. The app can also select,
+refresh, and remove configured hosts and manages the background monitor automatically.
+
 To limit a connection to one provider, pass `--provider codex` or
 `--provider claude`. To monitor another remote host from the same SidePulse client,
 repeat `remote add` with another name and SSH target:
