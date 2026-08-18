@@ -95,9 +95,11 @@ from .install import (
     install_claude_hooks,
     install_codex_hooks,
     install_grok_hooks,
+    install_kiro_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_grok_hooks,
+    uninstall_kiro_hooks,
 )
 from .led_status import (
     AgentLedController,
@@ -125,6 +127,7 @@ from .providers import (
     detect_claude_config,
     detect_codex_config,
     detect_grok_config,
+    detect_kiro_config,
     detect_log_path,
     default_state_dir,
     parse_log_line,
@@ -695,6 +698,14 @@ class StatusBarController(NSObject):
         self.update_hooks("grok", install=False)
 
     @objc.IBAction
+    def installKiroHooks_(self, _sender):
+        self.update_hooks("kiro", install=True)
+
+    @objc.IBAction
+    def uninstallKiroHooks_(self, _sender):
+        self.update_hooks("kiro", install=False)
+
+    @objc.IBAction
     def toggleCodexTranscripts_(self, sender):
         self.set_transcript_monitoring("codex", sender.state() == NSOnState)
 
@@ -1000,6 +1011,7 @@ class StatusBarController(NSObject):
         codex = detect_codex_config()
         claude = detect_claude_config()
         grok = detect_grok_config()
+        kiro = detect_kiro_config()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1012,6 +1024,7 @@ class StatusBarController(NSObject):
             self.settings_fields.get("grok_hook_status"),
             hook_status_text(grok),
         )
+        set_field_value(self.settings_fields.get("kiro_hook_status"), hook_status_text(kiro))
         set_field_value(
             self.settings_fields.get("settings_path"),
             f"Settings: {default_settings_path()}",
@@ -1187,10 +1200,14 @@ class StatusBarController(NSObject):
                 result = install_claude_hooks()
             elif provider == "claude":
                 result = uninstall_claude_hooks()
-            elif install:
+            elif provider == "grok" and install:
                 result = install_grok_hooks()
-            else:
+            elif provider == "grok":
                 result = uninstall_grok_hooks()
+            elif install:
+                result = install_kiro_hooks()
+            else:
+                result = uninstall_kiro_hooks()
         except Exception as exc:
             self.set_settings_message(f"{provider.title()} hooks failed: {exc}")
             self.refresh_settings_window()
@@ -3259,7 +3276,12 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_button(agents_tab, "Install", 400, 288, 90, 28, target, "installGrokHooks:")
     add_button(agents_tab, "Uninstall", 500, 288, 100, 28, target, "uninstallGrokHooks:")
 
-    add_separator(agents_tab, 24, 258, tab_width - 48)
+    add_label(agents_tab, "Kiro", 32, 264, 80, 22)
+    kiro_status = add_label(agents_tab, "", 130, 264, 240, 22)
+    add_button(agents_tab, "Install", 400, 260, 90, 28, target, "installKiroHooks:")
+    add_button(agents_tab, "Uninstall", 500, 260, 100, 28, target, "uninstallKiroHooks:")
+
+    add_separator(agents_tab, 24, 250, tab_width - 48)
     add_label(agents_tab, "Session Opening", 24, 224, 240, 24)
     add_label(agents_tab, "Codex", 32, 188, 100, 22)
     codex_opener = add_provider_opener_popup(agents_tab, "codex", 160, 186, target)
@@ -3378,6 +3400,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "codex_hook_status": codex_status,
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
+        "kiro_hook_status": kiro_status,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,
@@ -4053,6 +4076,11 @@ def provider_icon_for_provider(provider: str):
         if image is not None:
             return image
         return grok_badge_icon()
+    if provider == "kiro":
+        image = first_app_icon(("/Applications/Kiro.app", str(Path.home() / "Applications" / "Kiro.app")))
+        if image is not None:
+            return image
+        return image_for_symbol("wand.and.stars", "Kiro")
     return image_for_symbol("terminal", provider.title() or "Agent")
 
 
