@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from .providers import (
+    ANTIGRAVITY_EVENTS,
     CLAUDE_EVENTS,
     CODEX_EVENTS,
     GROK_EVENTS,
+    default_antigravity_hook_config_path,
     default_grok_hook_config_path,
     detect_log_path,
 )
@@ -167,6 +169,38 @@ def install_grok_hooks(
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
 
 
+def install_antigravity_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    config = config_path or default_antigravity_hook_config_path()
+    target_log = (log_path or detect_log_path("antigravity")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    integration: dict[str, Any] = {}
+    for event_name in ANTIGRAVITY_EVENTS:
+        integration[event_name] = [
+            antigravity_hook_entry(
+                event_name,
+                antigravity_hook_command(event_name, target_log, python_executable),
+            )
+        ]
+    data["sidepulse-agent-monitor"] = integration
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+
+    return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
+
+
 def uninstall_codex_hooks(
     log_path: Path | None = None,
     config_path: Path | None = None,
@@ -278,6 +312,33 @@ def uninstall_grok_hooks(
         clean_grok_live_backup_hook_files(config)
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_antigravity_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_antigravity_hook_config_path()
+    target_log = (log_path or detect_log_path("antigravity")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    data.pop("sidepulse-agent-monitor", None)
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        if data:
+            config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        else:
+            try:
+                config.unlink()
+            except FileNotFoundError:
+                pass
+
+    return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
 
 
 def hook_command(
@@ -427,6 +488,36 @@ def grok_hook_entry(event_name: str, command: str) -> dict[str, Any]:
     if event_name in {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied", "Notification"}:
         entry["matcher"] = "*"
     return entry
+
+
+def antigravity_hook_command(
+    event_name: str,
+    log_path: Path,
+    python_executable: str | None = None,
+) -> str:
+    executable = python_executable or sys.executable or "python3"
+    return " ".join(
+        [
+            shlex.quote(executable),
+            "-m",
+            "sidepulse.antigravity_hook",
+            "--event",
+            shlex.quote(event_name),
+            "--log",
+            shlex.quote(str(log_path.expanduser())),
+        ]
+    )
+
+
+def antigravity_hook_entry(event_name: str, command: str) -> dict[str, Any]:
+    hook: dict[str, Any] = {
+        "type": "command",
+        "command": command,
+        "timeout": 5,
+    }
+    if event_name in {"PreToolUse", "PostToolUse"}:
+        return {"matcher": "*", "hooks": [hook]}
+    return hook
 
 
 def hook_pythonpath_assignment() -> str:
