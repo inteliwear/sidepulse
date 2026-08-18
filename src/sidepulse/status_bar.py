@@ -76,7 +76,13 @@ from .audit import (
     read_status_history_records,
     status_history_record,
 )
-from .collector import LiveAgentMonitor, SourceSpec, read_recent_lines
+from .collector import (
+    CODEX_TRANSCRIPT_PROVIDER,
+    AgentMonitor,
+    LiveAgentMonitor,
+    SourceSpec,
+    read_recent_lines,
+)
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -362,6 +368,19 @@ def replay_recent_debug_logs(
     return replayed
 
 
+def reconcile_codex_terminal_transcripts(
+    monitor: LiveAgentMonitor,
+    transcript_monitor: AgentMonitor,
+) -> int:
+    """Recover terminal Codex states that can be omitted from live hooks."""
+    terminal = (
+        status
+        for status in transcript_monitor.latest_statuses()
+        if status.provider == "codex" and status.event_name == "Stop"
+    )
+    return monitor.reconcile_statuses(terminal)
+
+
 class StatusBarController(NSObject):
     def init(self):
         self = objc.super(StatusBarController, self).init()
@@ -370,6 +389,7 @@ class StatusBarController(NSObject):
 
         self.settings = load_settings()
         self.monitor = self.build_monitor()
+        self.codex_terminal_monitor = self.build_codex_terminal_monitor()
         self.event_server = None
         self.status_item = None
         self.timer = None
@@ -467,6 +487,10 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def refresh_(self, _sender):
         try:
+            reconcile_codex_terminal_transcripts(
+                self.monitor,
+                self.codex_terminal_monitor,
+            )
             snapshot = self.monitor.snapshot(include_stale=False)
         except Exception as exc:
             log_status_bar(f"refresh error: {exc}")
@@ -809,8 +833,19 @@ class StatusBarController(NSObject):
             latest_state_path=default_latest_state_path(),
         )
 
+    def build_codex_terminal_monitor(self) -> AgentMonitor:
+        return AgentMonitor(
+            sources=(
+                SourceSpec(
+                    CODEX_TRANSCRIPT_PROVIDER,
+                    Path.home() / ".codex" / "sessions",
+                ),
+            ),
+        )
+
     def reload_monitor(self) -> None:
         self.monitor = self.build_monitor()
+        self.codex_terminal_monitor = self.build_codex_terminal_monitor()
 
     def start_event_server(self) -> None:
         self.stop_event_server()
