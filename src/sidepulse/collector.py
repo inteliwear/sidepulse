@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -32,9 +33,14 @@ CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
-COMPLETED_VISIBLE_SECONDS = 20 * 60.0
+COMPLETED_VISIBLE_SECONDS = 12.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
+PERMISSION_ASK_DEBOUNCE_SECONDS = 2.0
+SESSION_COMPLETION_EVENTS = frozenset({"Stop", "SessionEnd", "SessionFinalize"})
+SESSION_IDENTITY_RECONCILIATION_EVENTS = frozenset(
+    {"SessionStart", "SessionActivate", *SESSION_COMPLETION_EVENTS}
+)
 
 
 @dataclass(frozen=True)
@@ -411,6 +417,27 @@ class LiveAgentMonitor:
             if status is None:
                 return
 
+            idle_boundary = (
+                record.event_name in {"SessionStart", "SessionActivate"}
+                and status.mode == AgentMode.IDLE_READY
+            )
+            same_session_prefix = f"{record.identity_prefix}:"
+            has_completed_status = bool(record.session_id) and any(
+                existing.provider == record.provider
+                and existing.session_id == record.session_id
+                and existing.agent_id.startswith(same_session_prefix)
+                and existing.mode == AgentMode.COMPLETED
+                for existing in self.statuses_by_key.values()
+            )
+            if idle_boundary and has_completed_status:
+                return
+
+            if (
+                record.session_id
+                and record.event_name in SESSION_IDENTITY_RECONCILIATION_EVENTS
+            ):
+                self.clear_session_statuses(record)
+
             track_pending_permissions(record, self.pending_permissions_by_key)
             previous = self.statuses_by_key.get(status.agent_id)
             if should_ignore_status_transition(
@@ -421,6 +448,143 @@ class LiveAgentMonitor:
                 return
             self.statuses_by_key[status.agent_id] = status
             self.write_latest_state()
+
+    def clear_session_statuses(self, record: HookEvent) -> None:
+        """Remove prior agent identities completed by the same logical session."""
+        session_id = record.session_id
+        if not session_id:
+            return
+
+        identity_prefix = f"{record.identity_prefix}:"
+        removed_status_keys = {
+            key
+            for key, status in self.statuses_by_key.items()
+            if status.provider == record.provider
+            and status.session_id == session_id
+            and status.agent_id.startswith(identity_prefix)
+        }
+        if not removed_status_keys:
+            return
+
+        self.statuses_by_key = {
+            key: status
+            for key, status in self.statuses_by_key.items()
+            if key not in removed_status_keys
+        }
+        self.metadata_by_status = {
+            key: metadata
+            for key, metadata in self.metadata_by_status.items()
+            if key not in removed_status_keys
+        }
+        self.pending_permissions_by_key = {
+            key: pending
+            for key, pending in self.pending_permissions_by_key.items()
+            if key not in removed_status_keys
+        }
+        self.metadata_by_session.pop(record.session_key, None)
+
+    def prepare_replay_records(
+        self,
+        provider: str,
+        records: tuple[HookEvent, ...],
+    ) -> tuple[HookEvent, ...]:
+        """Reconcile replayed identities without discarding newer live state."""
+
+        with self.lock:
+            protected_status_keys: set[str] = set()
+            protected_current_status_keys: set[str] = set()
+            for current_key, status in self.statuses_by_key.items():
+                if status.provider != provider:
+                    continue
+                matching = tuple(
+                    record
+                    for record in records
+                    if record.status_key == status.agent_id
+                    or (
+                        record.session_id is not None
+                        and record.session_id == status.session_id
+                    )
+                )
+                if matching and status.updated_at > max(
+                    record.logged_at for record in matching
+                ):
+                    protected_current_status_keys.add(current_key)
+                    protected_status_keys.update(
+                        record.status_key for record in matching
+                    )
+
+            replay_records = tuple(
+                record
+                for record in records
+                if record.status_key not in protected_status_keys
+            )
+            represented_session_ids = {
+                record.session_id
+                for record in records
+                if record.session_id is not None
+            }
+            represented_status_keys = {
+                record.status_key for record in records
+            }
+            removed_status_keys = {
+                key
+                for key, status in self.statuses_by_key.items()
+                if status.provider == provider
+                and key not in protected_current_status_keys
+                and (
+                    key in represented_status_keys
+                    or status.session_id in represented_session_ids
+                )
+            }
+            if not removed_status_keys:
+                return replay_records
+
+            removed_session_ids = {
+                status.session_id
+                for key, status in self.statuses_by_key.items()
+                if key in removed_status_keys and status.session_id is not None
+            }
+            self.statuses_by_key = {
+                key: status
+                for key, status in self.statuses_by_key.items()
+                if key not in removed_status_keys
+            }
+            self.metadata_by_session = {
+                key: metadata
+                for key, metadata in self.metadata_by_session.items()
+                if not (
+                    key.startswith(f"{provider}:")
+                    and any(
+                        key.endswith(f":session:{session_id}")
+                        for session_id in removed_session_ids
+                    )
+                )
+            }
+            self.metadata_by_status = {
+                key: metadata
+                for key, metadata in self.metadata_by_status.items()
+                if key not in removed_status_keys
+            }
+            self.pending_permissions_by_key = {
+                key: pending
+                for key, pending in self.pending_permissions_by_key.items()
+                if key not in removed_status_keys
+            }
+            return replay_records
+
+    def ingest_replay_records(
+        self,
+        provider: str,
+        records: tuple[HookEvent, ...],
+    ) -> int:
+        """Reconcile and ingest one replay batch without interleaving live events."""
+
+        with self.lock:
+            replay_records = self.prepare_replay_records(provider, records)
+            for record in replay_records:
+                self.ingest_record(record)
+            self.write_latest_state()
+            return len(replay_records)
 
     def snapshot(self, include_stale: bool = False) -> MonitorSnapshot:
         now = datetime.now(timezone.utc)
@@ -466,10 +630,28 @@ class LiveAgentMonitor:
             ],
         }
         try:
-            self.latest_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.latest_state_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=0o700,
+            )
+            self.latest_state_path.parent.chmod(0o700)
             temp_path = self.latest_state_path.with_suffix(".json.tmp")
-            temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            descriptor = os.open(
+                temp_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    descriptor = -1
+                    handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
             temp_path.replace(self.latest_state_path)
+            self.latest_state_path.chmod(0o600)
         except OSError:
             pass
 
@@ -957,7 +1139,7 @@ def metadata_for_record(
     session_metadata = None
     if record.session_id:
         session_metadata = metadata_by_session.setdefault(
-            f"{record.provider}:session:{record.session_id}",
+            record.session_key,
             StatusMetadata(),
         )
         update_metadata(session_metadata, record)
@@ -990,15 +1172,30 @@ def update_metadata(metadata: StatusMetadata, record: HookEvent) -> None:
 def is_provider_session_title(record: HookEvent, title: str) -> bool:
     if record.provider == "codex":
         return title == codex_session_title(record.session_id)
+    if record.provider == "hermes":
+        session_title = record.raw.get("session_title")
+        return isinstance(session_title, str) and title == session_title.strip()
     return False
 
 
 def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None) -> AgentStatus | None:
+    if record.provider == "hermes" and (
+        not record.session_id
+        or (
+            not record.hermes_profile
+            and record.raw.get("_hermes_session_metadata_scoped") is not True
+        )
+    ):
+        return None
+
     mode = mode_for_event(record)
     if mode is None:
         return None
 
-    metadata = metadata or StatusMetadata(cwd=record.cwd)
+    metadata = metadata or StatusMetadata(
+        cwd=record.cwd,
+        title=title_from_event(record),
+    )
     if should_ignore_record(record, metadata):
         return None
 
@@ -1281,10 +1478,24 @@ def status_for_snapshot(
     if (
         status.mode == AgentMode.WORKING
         and status.event_name == "PostToolUse"
+        and status.provider != "hermes"
         and post_tool_working_visible_seconds >= 0
         and status.age_seconds(now) > post_tool_working_visible_seconds
     ):
         return _replace_mode(status, AgentMode.COMPLETED)
+    if (
+        status.provider == "hermes"
+        and status.mode == AgentMode.WAITING_FOR_INPUT
+        and status.event_name == "PermissionRequest"
+        and status.age_seconds(now) < PERMISSION_ASK_DEBOUNCE_SECONDS
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
+    if (
+        status.provider == "hermes"
+        and status.mode == AgentMode.BLOCKED_ERROR
+        and status.event_name == "PostToolUseFailure"
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
     return status
 
 
@@ -1374,7 +1585,13 @@ def should_ignore_status_transition(
     if (
         previous is not None
         and previous.mode == AgentMode.COMPLETED
-        and current.event_name == "Notification"
+        and (
+            current.event_name == "Notification"
+            or (
+                current.event_name in {"SessionActivate", "SessionStart"}
+                and current.mode == AgentMode.IDLE_READY
+            )
+        )
     ):
         return True
 
@@ -1436,6 +1653,46 @@ def read_recent_lines(path: Path, max_lines: int) -> list[str]:
     return lines[-max_lines:]
 
 
+def replay_recent_debug_logs(
+    monitor: LiveAgentMonitor,
+    *,
+    providers: tuple[str, ...] = ("codex", "claude", "grok", "hermes"),
+    max_lines: int = 500,
+    detect_log_path_fn: Callable[[str], Path] = detect_log_path,
+    error_handler: Callable[[str], None] | None = None,
+) -> int:
+    replayed = 0
+    for provider in providers:
+        try:
+            path = detect_log_path_fn(provider)
+            lines = read_recent_lines(path, max_lines) if path.exists() else []
+            records = tuple(
+                record
+                for line in lines
+                if (record := parse_log_line(provider, line)) is not None
+            )
+        except Exception as exc:
+            if error_handler is not None:
+                error_handler(f"startup_replay_error provider={provider} error={exc}")
+            continue
+
+        if not records:
+            continue
+
+        # Hermes session enrichment can change the logical agent key as its
+        # database metadata becomes available. Reconcile only sessions that are
+        # represented by replay and never replace newer socket-delivered state.
+        if provider == "hermes":
+            replayed += monitor.ingest_replay_records(provider, records)
+            continue
+
+        for record in records:
+            monitor.ingest_record(record)
+            replayed += 1
+
+    return replayed
+
+
 def _replace_stale(status: AgentStatus, stale: bool) -> AgentStatus:
     if status.stale == stale:
         return status
@@ -1475,6 +1732,10 @@ def _replace_mode(status: AgentStatus, mode: AgentMode) -> AgentStatus:
 
 
 def title_from_event(record: HookEvent) -> str | None:
+    explicit_title = record.raw.get("session_title")
+    if isinstance(explicit_title, str) and explicit_title.strip():
+        return explicit_title.strip()
+
     if record.provider == "codex":
         title = codex_session_title(record.session_id)
         if title:

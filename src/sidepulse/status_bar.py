@@ -66,6 +66,7 @@ from .battery import (
     format_watts,
     program_for_battery,
     read_battery_snapshot,
+    should_arm_battery_power_preview,
 )
 from .audit import (
     append_status_history_record,
@@ -76,7 +77,12 @@ from .audit import (
     read_status_history_records,
     status_history_record,
 )
-from .collector import LiveAgentMonitor, SourceSpec, read_recent_lines
+from .collector import (
+    COMPLETED_VISIBLE_SECONDS,
+    LiveAgentMonitor,
+    SourceSpec,
+    replay_recent_debug_logs as replay_recent_debug_log_records,
+)
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -106,6 +112,7 @@ from .led_status import (
     normalize_brightness,
     normalized_device_name,
     program_for_display_state,
+    resolve_led_display_kind,
     write_mode_to_leds,
     display_state_for_mode,
 )
@@ -341,25 +348,16 @@ def format_percent_value(value: float | int) -> str:
 def replay_recent_debug_logs(
     monitor: LiveAgentMonitor,
     *,
-    providers: tuple[str, ...] = ("codex", "claude", "grok"),
+    providers: tuple[str, ...] = ("codex", "claude", "grok", "hermes"),
     max_lines: int = STATUS_BAR_STARTUP_REPLAY_LINES,
 ) -> int:
-    replayed = 0
-    for provider in providers:
-        try:
-            path = detect_log_path(provider)
-            lines = read_recent_lines(path, max_lines) if path.exists() else []
-        except Exception as exc:
-            log_status_bar(f"startup_replay {provider} error: {exc}")
-            continue
-
-        for line in lines:
-            record = parse_log_line(provider, line)
-            if record is None:
-                continue
-            monitor.ingest_record(record)
-            replayed += 1
-    return replayed
+    return replay_recent_debug_log_records(
+        monitor,
+        providers=providers,
+        max_lines=max_lines,
+        detect_log_path_fn=detect_log_path,
+        error_handler=log_status_bar,
+    )
 
 
 class StatusBarController(NSObject):
@@ -386,7 +384,9 @@ class StatusBarController(NSObject):
         self.last_battery_error = None
         self.last_power_connected = None
         self.battery_preview_until = 0.0
+        self.last_battery_preview_armed_at = None
         self.current_state = STATE_IDLE
+        self.completed_idle_timer = None
         self.led_controller = AgentLedController()
         self.battery_led_controller = BatteryLedController()
         self.agent_led_controllers_by_device = {}
@@ -500,7 +500,10 @@ class StatusBarController(NSObject):
         self.sync_leds(
             snapshot.aggregate.mode,
             battery_snapshot,
-            self.active_led_display_kind(battery_snapshot),
+            self.active_led_display_kind(
+                battery_snapshot,
+                snapshot.aggregate.mode,
+            ),
         )
         self.status_item.setMenu_(build_menu(snapshot, state, self))
 
@@ -790,6 +793,11 @@ class StatusBarController(NSObject):
     def set_status(self, state: StatusBarState) -> None:
         previous = self.current_state
         self.current_state = state
+        if previous != state:
+            if state == STATE_DONE:
+                self.schedule_completed_idle_refresh()
+            else:
+                self.cancel_completed_idle_refresh()
         if self.status_item is None:
             return
         button = self.status_item.button()
@@ -800,6 +808,33 @@ class StatusBarController(NSObject):
         button.setToolTip_(f"SidePulse Agent Monitor: {state.label}")
         if previous != state:
             log_status_bar(f"state={state.label}")
+
+    def cancel_completed_idle_refresh(self) -> None:
+        timer = getattr(self, "completed_idle_timer", None)
+        if timer is not None:
+            try:
+                timer.invalidate()
+            except Exception:
+                pass
+        self.completed_idle_timer = None
+
+    def schedule_completed_idle_refresh(self) -> None:
+        self.cancel_completed_idle_refresh()
+        self.completed_idle_timer = (
+            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                COMPLETED_VISIBLE_SECONDS + 0.05,
+                self,
+                "refreshAfterCompleted:",
+                None,
+                False,
+            )
+        )
+
+    @objc.IBAction
+    def refreshAfterCompleted_(self, _sender):
+        self.completed_idle_timer = None
+        if self.current_state == STATE_DONE:
+            self.refresh_(None)
 
     def build_monitor(self) -> LiveAgentMonitor:
         socket_path = default_event_socket_path()
@@ -1372,7 +1407,10 @@ class StatusBarController(NSObject):
             self.sync_leds(
                 self.last_snapshot.aggregate.mode,
                 self.last_battery_snapshot,
-                self.active_led_display_kind(self.last_battery_snapshot),
+                self.active_led_display_kind(
+                    self.last_battery_snapshot,
+                    self.last_snapshot.aggregate.mode,
+                ),
             )
 
     def set_virtual_status_device(self, enabled: bool) -> None:
@@ -1608,15 +1646,22 @@ class StatusBarController(NSObject):
 
     def update_battery_power_preview(self, snapshot: BatterySnapshot) -> None:
         plugged = snapshot.is_plugged
-        if self.last_power_connected is not None and self.last_power_connected != plugged:
-            if self.settings.battery_show_on_power_change:
-                self.battery_preview_until = (
-                    time.monotonic()
-                    + self.settings.battery_power_change_preview_seconds
-                )
-                log_status_bar(
-                    f"battery preview power={'plugged' if plugged else 'unplugged'}"
-                )
+        now = time.monotonic()
+        if (
+            self.settings.battery_show_on_power_change
+            and should_arm_battery_power_preview(
+                self.last_power_connected,
+                plugged,
+                now=now,
+                last_armed_at=self.last_battery_preview_armed_at,
+            )
+        ):
+            self.battery_preview_until = (
+                now + self.settings.battery_power_change_preview_seconds
+            )
+            self.last_battery_preview_armed_at = now
+            state = "plugged" if plugged else "unplugged"
+            log_status_bar(f"battery preview power={state}")
         self.last_power_connected = plugged
 
     def read_mac_sleep_snapshot(self) -> MacSleepSnapshot | None:
@@ -1665,14 +1710,18 @@ class StatusBarController(NSObject):
 
         self.last_status_history_error = None
 
-    def active_led_display_kind(self, snapshot: BatterySnapshot | None) -> str:
-        if self.settings.led_display == LED_DISPLAY_CUSTOM:
-            return LED_DISPLAY_CUSTOM
-        if self.settings.led_display == LED_DISPLAY_BATTERY:
-            return LED_DISPLAY_BATTERY
-        if snapshot is not None and time.monotonic() < self.battery_preview_until:
-            return LED_DISPLAY_BATTERY
-        return LED_DISPLAY_AGENT
+    def active_led_display_kind(
+        self,
+        snapshot: BatterySnapshot | None,
+        agent_mode: AgentMode = AgentMode.IDLE_READY,
+    ) -> str:
+        return resolve_led_display_kind(
+            self.settings.led_display,
+            battery_preview_active=(
+                snapshot is not None and time.monotonic() < self.battery_preview_until
+            ),
+            agent_mode=agent_mode,
+        )
 
     def reset_led_controllers_for_display_change(self) -> None:
         self.led_controller.reset()
@@ -1827,14 +1876,18 @@ class StatusBarController(NSObject):
         self,
         device: StatusBarDevice,
         battery_snapshot: BatterySnapshot | None,
+        agent_mode: AgentMode = AgentMode.IDLE_READY,
     ) -> str:
-        if device.display == LED_DISPLAY_CUSTOM:
-            return LED_DISPLAY_CUSTOM
-        if device.display == LED_DISPLAY_BATTERY:
-            return LED_DISPLAY_BATTERY
-        if battery_snapshot is not None and time.monotonic() < self.battery_preview_until:
-            return LED_DISPLAY_BATTERY
-        return LED_DISPLAY_AGENT
+        if device.display in {LED_DISPLAY_CUSTOM, LED_DISPLAY_BATTERY}:
+            return device.display
+        return resolve_led_display_kind(
+            LED_DISPLAY_AGENT,
+            battery_preview_active=(
+                battery_snapshot is not None
+                and time.monotonic() < self.battery_preview_until
+            ),
+            agent_mode=agent_mode,
+        )
 
     def sync_leds(
         self,
@@ -1879,7 +1932,11 @@ class StatusBarController(NSObject):
         )
         if device is None:
             return
-        display = self.active_led_display_kind_for_device(device, battery_snapshot)
+        display = self.active_led_display_kind_for_device(
+            device,
+            battery_snapshot,
+            mode,
+        )
         if display == LED_DISPLAY_CUSTOM:
             self.virtual_status_device.hide()
             return
@@ -1937,6 +1994,7 @@ class StatusBarController(NSObject):
             device_display_kind = self.active_led_display_kind_for_device(
                 device,
                 battery_snapshot,
+                mode,
             )
             if self.last_led_display_kind_by_device.get(device.device_id) != device_display_kind:
                 self.reset_led_controllers_for_device(device.device_id)
@@ -3807,7 +3865,10 @@ def restore_led_display(target, token_value) -> None:
         target.sync_leds(
             target.last_snapshot.aggregate.mode,
             target.last_battery_snapshot,
-            target.active_led_display_kind(target.last_battery_snapshot),
+            target.active_led_display_kind(
+                target.last_battery_snapshot,
+                target.last_snapshot.aggregate.mode,
+            ),
         )
     else:
         target.refresh_(None)

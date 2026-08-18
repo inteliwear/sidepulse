@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shlex
+import sqlite3
+import time
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -62,7 +66,16 @@ GROK_EVENTS = (
 )
 
 HOOK_PROVIDERS = ("codex", "claude", "grok")
-KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
+HERMES_EVENTS = ("SessionActivate", "SessionFinalize")
+KNOWN_EVENTS = tuple(
+    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + HERMES_EVENTS)
+)
+
+_HERMES_SESSION_CACHE_TTL_SECONDS = 2.0
+_HERMES_SESSION_CACHE: dict[
+    tuple[str, str], tuple[float, tuple[str, str | None] | None]
+] = {}
+_HERMES_PROFILE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -288,6 +301,8 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
         return None
 
     normalized_raw = normalize_event_payload(raw, event_name, logged_at)
+    if provider == "hermes":
+        enrich_hermes_session(normalized_raw)
 
     return HookEvent(
         provider=provider,
@@ -301,7 +316,244 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
         tool_name=_first_string(normalized_raw, "tool_name", "toolName"),
         message=_first_string(normalized_raw, "message", "last_assistant_message", "lastAssistantMessage"),
         origin=origin_label_from_payload(provider, normalized_raw),
+        hermes_profile=_first_string(normalized_raw, "hermes_profile"),
     )
+
+
+def enrich_hermes_session(raw: dict[str, Any]) -> None:
+    session_id = _first_string(raw, "session_id", "sessionId")
+    if not session_id:
+        return
+
+    profile_name = _first_string(raw, "hermes_profile")
+    if not profile_name and not os.environ.get("SIDEPULSE_HERMES_STATE_DB"):
+        # An unscoped event cannot be attributed safely when multiple Hermes
+        # profiles share the same durable session identifiers. An explicitly
+        # configured database is the caller's deliberate scope.
+        return
+    metadata = hermes_session_metadata(session_id, profile_name=profile_name)
+    if metadata is None:
+        return
+
+    root_session_id, title = metadata
+    if not profile_name:
+        raw["_hermes_session_metadata_scoped"] = True
+    current_agent_id = _first_string(raw, "agent_id", "agentId") or "hermes"
+    agent_prefix = current_agent_id.rsplit(":", 1)[0]
+    root_digest = hashlib.sha256(root_session_id.encode("utf-8")).hexdigest()[:12]
+    raw["agent_id"] = f"{agent_prefix}:{root_digest}"
+    if title:
+        raw["session_title"] = title
+
+
+def hermes_session_metadata(
+    session_id: str,
+    *,
+    profile_name: str | None = None,
+) -> tuple[str, str | None] | None:
+    now = time.monotonic()
+    matches: list[tuple[str, str | None]] = []
+    for state_db in hermes_state_db_paths(profile_name=profile_name):
+        cache_key = (str(state_db), session_id)
+        cached = _HERMES_SESSION_CACHE.get(cache_key)
+        if cached and now - cached[0] < _HERMES_SESSION_CACHE_TTL_SECONDS:
+            if cached[1] is not None:
+                matches.append(cached[1])
+            continue
+
+        metadata = hermes_session_metadata_from_db(state_db, session_id)
+        _HERMES_SESSION_CACHE[cache_key] = (now, metadata)
+        if metadata is not None:
+            matches.append(metadata)
+
+    # A profile selector narrows discovery to one database. Profile-less
+    # lookups are only reachable here for an explicitly configured database;
+    # automatic multi-profile discovery is rejected by enrich_hermes_session.
+    if profile_name:
+        return matches[0] if matches else None
+    return matches[0] if len(matches) == 1 else None
+
+
+def hermes_state_db_paths(*, profile_name: str | None = None) -> tuple[Path, ...]:
+    configured = os.environ.get("SIDEPULSE_HERMES_STATE_DB")
+    configured_db = Path(configured).expanduser() if configured else None
+
+    configured_home = os.environ.get("HERMES_HOME")
+    active_home = (
+        Path(configured_home).expanduser()
+        if configured_home
+        else Path.home() / ".hermes"
+    )
+    root_home = (
+        active_home.parent.parent
+        if active_home.parent.name == "profiles"
+        else active_home
+    )
+
+    if profile_name:
+        normalized_profile = profile_name.strip()
+        normalized_casefold = normalized_profile.casefold()
+        if normalized_casefold == "custom":
+            selected_db = active_home / "state.db"
+        elif normalized_casefold == "default":
+            selected_db = root_home / "state.db"
+        elif not _HERMES_PROFILE_TOKEN.fullmatch(normalized_profile):
+            return ()
+        elif (
+            active_home.parent.name == "profiles"
+            and active_home.name == normalized_profile
+        ):
+            selected_db = active_home / "state.db"
+        else:
+            selected_db = root_home / "profiles" / normalized_profile / "state.db"
+
+        if configured_db is not None:
+            if configured_db.resolve(strict=False) != selected_db.resolve(strict=False):
+                return ()
+            return (configured_db,)
+        return (selected_db,)
+
+    if configured_db is not None:
+        return (configured_db,)
+
+    candidates: list[Path] = [active_home / "state.db"]
+    candidates.append(root_home / "state.db")
+    candidates.extend(sorted((root_home / "profiles").glob("*/state.db")))
+    return _dedupe_paths(candidates)
+
+
+def _hermes_session_is_explicit_fork(session: dict[str, Any]) -> bool:
+    if session.get("source") == "tool":
+        return True
+    raw_config = session.get("model_config")
+    if not raw_config:
+        return False
+    try:
+        config = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    parent_id = session.get("parent_session_id")
+    return bool(
+        parent_id
+        and (
+            config.get("_branched_from") == parent_id
+            or config.get("_delegate_from") == parent_id
+            or config.get("_reset_from") == parent_id
+        )
+    )
+
+
+def hermes_session_metadata_from_db(
+    state_db: Path,
+    session_id: str,
+) -> tuple[str, str | None] | None:
+    if not state_db.is_file():
+        return None
+
+    try:
+        database_uri = f"file:{state_db.resolve()}?mode=ro"
+        with closing(sqlite3.connect(database_uri, uri=True, timeout=0.25)) as connection:
+            connection.row_factory = sqlite3.Row
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            required = {"id", "parent_session_id", "title", "started_at"}
+            if not required.issubset(columns):
+                return None
+
+            selected_columns = [
+                "id",
+                "parent_session_id",
+                "title",
+                "started_at",
+            ]
+            selected_columns.extend(
+                column
+                for column in ("end_reason", "source", "model_config")
+                if column in columns
+            )
+            projection = ", ".join(selected_columns)
+
+            def load_session(candidate_id: str) -> dict[str, Any] | None:
+                row = connection.execute(
+                    f"SELECT {projection} FROM sessions WHERE id = ?",
+                    (candidate_id,),
+                ).fetchone()
+                return dict(row) if row is not None else None
+
+            requested = load_session(session_id)
+            if requested is None:
+                return None
+
+            # Compression cannot be proven against legacy/incomplete schemas.
+            # Keep the requested session independent rather than merging it with
+            # branches, delegates, or tool children based on parent_id alone.
+            if "end_reason" not in columns:
+                title = str(requested.get("title") or "").strip() or None
+                return str(requested["id"]), title
+
+            root = requested
+            anchored_child_by_parent: dict[str, dict[str, Any]] = {}
+            seen = {str(root["id"])}
+            for _ in range(128):
+                parent_id = str(root.get("parent_session_id") or "")
+                if (
+                    not parent_id
+                    or parent_id in seen
+                    or _hermes_session_is_explicit_fork(root)
+                ):
+                    break
+                parent = load_session(parent_id)
+                if parent is None or parent.get("end_reason") != "compression":
+                    break
+                anchored_child_by_parent[parent_id] = root
+                root = parent
+                seen.add(parent_id)
+
+            lineage = [root]
+            current = root
+            seen = {str(root["id"])}
+            for _ in range(128):
+                if current.get("end_reason") != "compression":
+                    break
+                current_id = str(current["id"])
+                next_child = anchored_child_by_parent.get(current_id)
+                if next_child is None:
+                    rows = connection.execute(
+                        f"SELECT {projection} FROM sessions "
+                        "WHERE parent_session_id = ? "
+                        "ORDER BY started_at DESC, id DESC",
+                        (current_id,),
+                    ).fetchall()
+                    for row in rows:
+                        candidate = dict(row)
+                        if not _hermes_session_is_explicit_fork(candidate):
+                            next_child = candidate
+                            break
+                if next_child is None or str(next_child["id"]) in seen:
+                    break
+                lineage.append(next_child)
+                current = next_child
+                seen.add(str(current["id"]))
+
+            titled = [
+                row
+                for row in lineage
+                if isinstance(row.get("title"), str) and row["title"].strip()
+            ]
+            latest_title = max(
+                titled,
+                key=lambda row: (str(row.get("started_at") or ""), str(row["id"])),
+                default=None,
+            )
+    except (OSError, sqlite3.Error):
+        return None
+
+    title = str(latest_title["title"]).strip() if latest_title is not None else None
+    return str(root["id"]), title or None
 
 
 def infer_provider_from_payload(provider: str, raw: dict[str, Any]) -> str:

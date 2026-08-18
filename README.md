@@ -86,7 +86,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, and Grok through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, and Hermes through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -99,7 +99,7 @@ Agent status modes:
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
 | Long Task Progress | A longer job has measurable progress. | Cyan rolling animation. |
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
-| Completed | The agent finished successfully. | Solid green. |
+| Completed | The agent finished successfully. | Solid green for 12 seconds, then idle. |
 
 When multiple states are active, SidePulse should show the most actionable
 mode first: Blocked / Error, Waiting for Input, Tool Running, Long Task
@@ -122,6 +122,26 @@ Aggregation priority:
 | 5 | Working | Show while one or more agents are actively processing. |
 | 6 | Completed | Show briefly when the latest active agent completes successfully. |
 | 7 | Idle / Ready | Show only when all known agents are idle or no fresh agent status exists. |
+
+The device only has four LED patterns for those seven modes: dim idle pulse,
+cyan roll, amber pulse, and solid green. Working, Tool Running, and Long Task
+Progress share cyan. Waiting for Input and Blocked / Error share amber.
+
+Display rules:
+
+- Completed stays solid green for 12 seconds, then the aggregate returns to
+  Idle / Ready.
+- `Show Battery on Plug/Unplug` never overrides Working, Tool Running,
+  Waiting, Long Task, or Blocked. Battery preview is also debounced so a
+  flapping MagSafe connection cannot keep stealing the LEDs.
+- A `PermissionRequest` shorter than two seconds is shown as Working. Hermes
+  emits that event around auto-approved `terminal` / `execute_code` calls; the
+  amber Ask pulse is reserved for an approval that actually lingers.
+- Hermes `PostToolUseFailure` is shown as Working. A failed tool that the
+  agent continues past is not a blocked LED state. Approval denials and API
+  failures still use Blocked / Error.
+- Hermes `PostToolUse` stays Working while the model thinks. Codex still
+  expires a stale post-tool Working state after two minutes.
 
 Agent statuses should include a timestamp. SidePulse should ignore stale
 statuses after a short timeout so disconnected or finished agents do not hold
@@ -147,6 +167,10 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Hermes | [Hermes lifecycle plugin](integrations/hermes/) | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/hermes.jsonl` |
+
+Hermes uses a native, privacy-safe lifecycle plugin instead of shell hooks. Install
+and diagnose it using the instructions in [`integrations/hermes`](integrations/hermes/).
 
 #### Local reply classifier (Apple Silicon)
 
@@ -229,6 +253,10 @@ command instead of a `pip install` side effect. To set up only one provider, use
 `sidepulse setup codex`, `sidepulse setup claude`, or `sidepulse setup grok`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
+
+Hermes integration is installed separately through Hermes' plugin manager; see
+[`integrations/hermes`](integrations/hermes/). `sidepulse setup` intentionally does
+not modify Hermes configuration.
 
 SidePulse Pro Eject Prevention keeps the built-in SD reader attached after
 macOS hibernate or lock-screen mount refusals. By default setup installs it
@@ -432,7 +460,8 @@ reconnect.
 The dropdown and Settings window can switch the LEDs between agent status and
 battery status. When agent status is selected, `Show Battery on Plug/Unplug`
 can briefly show the battery animation for seven seconds after the power source
-changes.
+changes, but only while every agent is Idle or Completed. Active agent work
+keeps the cyan or amber status animation.
 
 The Devices section also offers **Add Screen Bar**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers

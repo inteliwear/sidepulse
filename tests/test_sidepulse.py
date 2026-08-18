@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,8 +32,11 @@ from sidepulse.battery import (
     BatterySnapshot,
     parse_ioreg_battery_plist,
     program_for_battery,
+    should_arm_battery_power_preview,
 )
 from sidepulse import collector as collector_module
+from integrations.hermes.bridge import PluginSettings as HermesPluginSettings
+from integrations.hermes.bridge import translate_hook as translate_hermes_hook
 from sidepulse import cli as cli_module
 from sidepulse.collector import (
     AgentMonitor,
@@ -66,6 +72,7 @@ from sidepulse.led_status import (
     display_state_for_mode,
     led_count_for_target,
     program_for_display_state,
+    resolve_led_display_kind,
     write_mode_to_leds,
 )
 from sidepulse.lid_sleep import (
@@ -87,6 +94,8 @@ from sidepulse.providers import (
     detect_grok_config,
     default_log_path,
     default_state_dir,
+    hermes_session_metadata_from_db,
+    hermes_state_db_paths,
     parse_log_line,
 )
 from sidepulse.sd_eject_guard_launch import (
@@ -122,6 +131,8 @@ from sidepulse.settings import (
     HISTORY_TIMEFRAME_48H_SECONDS,
     LID_ANIMATION_CLOSED,
     LID_ANIMATION_OPEN,
+    LED_DISPLAY_AGENT,
+    LED_DISPLAY_BATTERY,
     LED_DISPLAY_CUSTOM,
     SLEEP_PREVENTION_AGENTS,
     SLEEP_PREVENTION_ALWAYS,
@@ -168,6 +179,16 @@ class FakeProcess:
 
     def kill(self) -> None:
         self.killed = True
+
+
+@contextmanager
+def sqlite_connection(path: Path):
+    connection = sqlite3.connect(path)
+    try:
+        yield connection
+        connection.commit()
+    finally:
+        connection.close()
 
 
 class AgentMonitorTests(unittest.TestCase):
@@ -250,6 +271,727 @@ class AgentMonitorTests(unittest.TestCase):
                 datetime.fromisoformat(codex_obj["logged_at"].replace("Z", "+00:00")).tzinfo
                 is not None
             )
+
+    def test_hermes_session_activate_is_parsed_with_explicit_status(self) -> None:
+        record = parse_log_line(
+            "hermes",
+            json.dumps(
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "durable-session",
+                    "hermes_profile": "default",
+                    "integration": "hermes-plugin",
+                    "agent_id": "hermes:durable-session",
+                    "sidepulse_status": "working",
+                    "logged_at": "2026-08-14T12:00:00Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.mode, AgentMode.WORKING)
+        self.assertEqual(status.event_name, "SessionActivate")
+
+    def test_hermes_background_review_events_are_ignored(self) -> None:
+        settings = HermesPluginSettings(agent_id="Hermes", profile_name="developer")
+        payload = {
+            "session_id": "durable-session",
+            "platform": "desktop",
+            "background_review": True,
+        }
+
+        self.assertIsNone(
+            translate_hermes_hook(
+                "pre_llm_call",
+                payload,
+                settings,
+                now="2026-08-16T12:00:00Z",
+            )
+        )
+
+        foreground_event = translate_hermes_hook(
+            "pre_llm_call",
+            {**payload, "background_review": False},
+            settings,
+            now="2026-08-16T12:00:00Z",
+        )
+        self.assertIsNotNone(foreground_event)
+        assert foreground_event is not None
+        self.assertEqual(foreground_event["hook_event_name"], "UserPromptSubmit")
+
+    def test_hermes_session_finalize_is_parsed_as_completed(self) -> None:
+        record = parse_log_line(
+            "hermes",
+            json.dumps(
+                {
+                    "hook_event_name": "SessionFinalize",
+                    "session_id": "durable-session",
+                    "hermes_profile": "default",
+                    "integration": "hermes-plugin",
+                    "agent_id": "hermes:durable-session",
+                    "sidepulse_mode": "completed",
+                    "logged_at": "2026-08-16T12:01:00Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.mode, AgentMode.COMPLETED)
+        self.assertEqual(status.event_name, "SessionFinalize")
+
+    def test_hermes_completion_clears_prior_agent_identity_in_same_session(self) -> None:
+        def hermes_event(event_name: str, agent_id: str, logged_at: str):
+            return parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": event_name,
+                        "session_id": "same-session",
+                        "hermes_profile": "default",
+                        "integration": "hermes-plugin",
+                        "agent_id": agent_id,
+                        "sidepulse_mode": "working" if event_name == "UserPromptSubmit" else "completed",
+                        "logged_at": logged_at,
+                    }
+                ),
+            )
+
+        monitor = LiveAgentMonitor(
+            sources=(),
+            stale_after_seconds=999999999,
+            completed_visible_seconds=999999999,
+        )
+        active = hermes_event(
+            "UserPromptSubmit",
+            "EDI:old-agent",
+            "2026-08-16T12:00:00Z",
+        )
+        completed = hermes_event(
+            "Stop",
+            "EDI:new-agent",
+            "2026-08-16T12:00:01Z",
+        )
+
+        self.assertIsNotNone(active)
+        self.assertIsNotNone(completed)
+        assert active is not None
+        assert completed is not None
+        monitor.ingest_record(active)
+        monitor.ingest_record(completed)
+
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
+        self.assertEqual(len(snapshot.statuses), 1)
+        self.assertEqual(snapshot.statuses[0].event_name, "Stop")
+
+    def test_hermes_session_activation_clears_prior_agent_identity_in_same_session(self) -> None:
+        def hermes_event(event_name: str, agent_id: str, mode: str, logged_at: str):
+            return parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": event_name,
+                        "session_id": "same-session",
+                        "hermes_profile": "default",
+                        "integration": "hermes-plugin",
+                        "agent_id": agent_id,
+                        "sidepulse_mode": mode,
+                        "logged_at": logged_at,
+                    }
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            latest_state_path = Path(tmp) / "latest.json"
+            monitor = LiveAgentMonitor(
+                sources=(),
+                stale_after_seconds=999999999,
+                idle_visible_seconds=999999999,
+                latest_state_path=latest_state_path,
+            )
+            active = hermes_event(
+                "UserPromptSubmit",
+                "EDI:old-agent",
+                "working",
+                "2026-08-16T12:00:00Z",
+            )
+            reopened = hermes_event(
+                "SessionActivate",
+                "EDI:new-agent",
+                "idle_ready",
+                "2026-08-16T12:00:01Z",
+            )
+
+            self.assertIsNotNone(active)
+            self.assertIsNotNone(reopened)
+            assert active is not None
+            assert reopened is not None
+            monitor.ingest_record(active)
+
+            restarted = LiveAgentMonitor(
+                sources=(),
+                stale_after_seconds=999999999,
+                idle_visible_seconds=999999999,
+                latest_state_path=latest_state_path,
+            )
+            restarted.ingest_record(reopened)
+
+            snapshot = restarted.snapshot()
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.IDLE_READY)
+            self.assertEqual(len(snapshot.statuses), 1)
+            self.assertEqual(snapshot.statuses[0].event_name, "SessionActivate")
+
+    def test_sessionless_hermes_tool_event_does_not_create_active_status(self) -> None:
+        record = parse_log_line(
+            "hermes",
+            json.dumps(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "integration": "hermes-plugin",
+                    "agent_id": "EDI",
+                    "hermes_profile": "default",
+                    "sidepulse_mode": "tool_running",
+                    "tool_name": "terminal",
+                    "logged_at": "2026-08-15T14:32:10Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertIsNone(collector_module.status_from_event(record))
+
+    def test_hermes_compression_lineage_coalesces_and_uses_chat_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_db = Path(tmp) / "state.db"
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT,
+                        end_reason TEXT,
+                        source TEXT,
+                        model_config TEXT
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        (
+                            "root-session",
+                            None,
+                            None,
+                            "2026-08-14T12:00:00Z",
+                            "compression",
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "compressed-session",
+                            "root-session",
+                            "Verify SidePulse after Hermes updates",
+                            "2026-08-14T12:05:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                    ),
+                )
+
+            def hermes_event(session_id: str, agent_id: str):
+                return parse_log_line(
+                    "hermes",
+                    json.dumps(
+                        {
+                            "hook_event_name": "SessionActivate",
+                            "session_id": session_id,
+                            "integration": "hermes-plugin",
+                            "agent_id": agent_id,
+                            "sidepulse_status": "working",
+                            "logged_at": "2026-08-14T12:06:00Z",
+                        }
+                    ),
+                )
+
+            with patch.dict(
+                os.environ,
+                {"SIDEPULSE_HERMES_STATE_DB": str(state_db)},
+                clear=False,
+            ):
+                root_record = hermes_event("root-session", "EDI:root-fragment")
+                child_record = hermes_event("compressed-session", "EDI:child-fragment")
+
+            self.assertIsNotNone(root_record)
+            self.assertIsNotNone(child_record)
+            assert root_record is not None
+            assert child_record is not None
+            self.assertEqual(root_record.agent_id, child_record.agent_id)
+
+            child_status = collector_module.status_from_event(child_record)
+            self.assertIsNotNone(child_status)
+            assert child_status is not None
+            self.assertIn(
+                "Verify SidePulse after Hermes updates",
+                child_status.display_name,
+            )
+
+    def test_hermes_compression_walk_avoids_stale_sibling_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_db = Path(tmp) / "state.db"
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT,
+                        end_reason TEXT,
+                        source TEXT,
+                        model_config TEXT
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        (
+                            "root-session",
+                            None,
+                            "Original title",
+                            "2026-08-14T12:00:00Z",
+                            "compression",
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "stale-sibling",
+                            "root-session",
+                            "Stale sibling title",
+                            "2026-08-14T12:01:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "live-continuation",
+                            "root-session",
+                            "Live continuation title",
+                            "2026-08-14T12:02:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "newer-branch",
+                            "root-session",
+                            "Newer branch title",
+                            "2026-08-14T12:03:00Z",
+                            None,
+                            "desktop",
+                            json.dumps({"_branched_from": "root-session"}),
+                        ),
+                    ),
+                )
+
+            for requested_session in ("live-continuation", "root-session"):
+                with self.subTest(requested_session=requested_session):
+                    self.assertEqual(
+                        hermes_session_metadata_from_db(state_db, requested_session),
+                        ("root-session", "Live continuation title"),
+                    )
+
+    def test_hermes_lineage_excludes_branch_delegate_tool_and_reset_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_db = Path(tmp) / "state.db"
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT,
+                        end_reason TEXT,
+                        source TEXT,
+                        model_config TEXT
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        (
+                            "root-session",
+                            None,
+                            "Root chat",
+                            "2026-08-14T12:00:00Z",
+                            "compression",
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "compressed-session",
+                            "root-session",
+                            "Compressed chat",
+                            "2026-08-14T12:01:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "branch-session",
+                            "root-session",
+                            "Branch chat",
+                            "2026-08-14T12:02:00Z",
+                            None,
+                            "desktop",
+                            json.dumps({"_branched_from": "root-session"}),
+                        ),
+                        (
+                            "delegate-session",
+                            "root-session",
+                            "Delegate chat",
+                            "2026-08-14T12:03:00Z",
+                            None,
+                            "desktop",
+                            json.dumps({"_delegate_from": "root-session"}),
+                        ),
+                        (
+                            "tool-session",
+                            "root-session",
+                            "Tool chat",
+                            "2026-08-14T12:04:00Z",
+                            None,
+                            "tool",
+                            None,
+                        ),
+                        (
+                            "reset-session",
+                            "root-session",
+                            "Reset chat",
+                            "2026-08-14T12:05:00Z",
+                            None,
+                            "desktop",
+                            json.dumps({"_reset_from": "root-session"}),
+                        ),
+                    ),
+                )
+
+            self.assertEqual(
+                hermes_session_metadata_from_db(state_db, "compressed-session"),
+                ("root-session", "Compressed chat"),
+            )
+            for session_id, title in (
+                ("branch-session", "Branch chat"),
+                ("delegate-session", "Delegate chat"),
+                ("tool-session", "Tool chat"),
+                ("reset-session", "Reset chat"),
+            ):
+                with self.subTest(session_id=session_id):
+                    self.assertEqual(
+                        hermes_session_metadata_from_db(state_db, session_id),
+                        (session_id, title),
+                    )
+
+    def test_hermes_session_title_updates_after_rename(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+
+        def event(title: str, logged_at: str):
+            return parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionActivate",
+                        "session_id": "renamed-session",
+                        "hermes_profile": "default",
+                        "integration": "hermes-plugin",
+                        "agent_id": "EDI:rename-fragment",
+                        "session_title": title,
+                        "sidepulse_status": "working",
+                        "logged_at": logged_at,
+                    }
+                ),
+            )
+
+        now = datetime.now(timezone.utc)
+        old_record = event("Old title", now.isoformat())
+        new_record = event("New title", (now + timedelta(seconds=1)).isoformat())
+        self.assertIsNotNone(old_record)
+        self.assertIsNotNone(new_record)
+        assert old_record is not None
+        assert new_record is not None
+
+        monitor.ingest_record(old_record)
+        monitor.ingest_record(new_record)
+
+        statuses = monitor.snapshot(include_stale=True).statuses
+        self.assertEqual(len(statuses), 1)
+        self.assertIn("New title", statuses[0].display_name)
+        self.assertNotIn("Old title", statuses[0].display_name)
+
+    def test_hermes_custom_profile_uses_configured_home_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_home = Path(tmp) / "custom-hermes-home"
+            expected = custom_home / "state.db"
+
+            with patch.dict(
+                os.environ,
+                {"HERMES_HOME": str(custom_home)},
+                clear=True,
+            ):
+                paths = hermes_state_db_paths(profile_name="custom")
+
+            self.assertEqual(paths, (expected,))
+
+    def test_hermes_state_db_override_must_match_profile_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root_home = Path(tmp) / "hermes-root"
+            alpha_db = root_home / "profiles" / "alpha" / "state.db"
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HERMES_HOME": str(root_home),
+                    "SIDEPULSE_HERMES_STATE_DB": str(alpha_db),
+                },
+                clear=True,
+            ):
+                alpha_paths = hermes_state_db_paths(profile_name="alpha")
+                beta_paths = hermes_state_db_paths(profile_name="beta")
+
+            self.assertEqual(alpha_paths, (alpha_db,))
+            self.assertEqual(beta_paths, ())
+
+    def test_hermes_profile_selector_prevents_cross_profile_session_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            hermes_root = home / ".hermes"
+
+            for profile, root_id, title in (
+                ("alpha", "alpha-root", "Alpha chat"),
+                ("beta", "beta-root", "Beta chat"),
+            ):
+                state_db = hermes_root / "profiles" / profile / "state.db"
+                state_db.parent.mkdir(parents=True)
+                with sqlite_connection(state_db) as connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE sessions (
+                            id TEXT PRIMARY KEY,
+                            parent_session_id TEXT,
+                            title TEXT,
+                            started_at TEXT
+                        )
+                        """
+                    )
+                    connection.executemany(
+                        "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+                        (
+                            (root_id, None, None, "2026-08-14T12:00:00Z"),
+                            (
+                                "duplicate-session",
+                                root_id,
+                                title,
+                                "2026-08-14T12:05:00Z",
+                            ),
+                        ),
+                    )
+
+            line = json.dumps(
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "duplicate-session",
+                    "integration": "hermes-plugin",
+                    "agent_id": "Beta:fragment",
+                    "hermes_profile": "beta",
+                    "sidepulse_status": "working",
+                    "logged_at": "2026-08-14T12:06:00Z",
+                }
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HERMES_HOME": str(hermes_root)},
+                    clear=False,
+                ),
+                patch("sidepulse.providers.Path.home", return_value=home),
+            ):
+                record = parse_log_line("hermes", line)
+
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record.raw.get("session_title"), "Beta chat")
+            self.assertNotEqual(record.agent_id, "Beta:fragment")
+
+    def test_unscoped_hermes_event_fails_closed_on_cross_profile_id_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            hermes_root = home / ".hermes"
+
+            for profile, title in (("alpha", "Alpha chat"), ("beta", "Beta chat")):
+                state_db = hermes_root / "profiles" / profile / "state.db"
+                state_db.parent.mkdir(parents=True)
+                with sqlite_connection(state_db) as connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE sessions (
+                            id TEXT PRIMARY KEY,
+                            parent_session_id TEXT,
+                            title TEXT,
+                            started_at TEXT
+                        )
+                        """
+                    )
+                    connection.execute(
+                        "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+                        (
+                            "duplicate-session",
+                            None,
+                            title,
+                            "2026-08-14T12:05:00Z",
+                        ),
+                    )
+
+            line = json.dumps(
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "duplicate-session",
+                    "integration": "hermes-plugin",
+                    "agent_id": "Hermes:fragment",
+                    "sidepulse_status": "working",
+                    "logged_at": "2026-08-14T12:06:00Z",
+                }
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HERMES_HOME": str(hermes_root)},
+                    clear=False,
+                ),
+                patch("sidepulse.providers.Path.home", return_value=home),
+            ):
+                record = parse_log_line("hermes", line)
+
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertNotIn("session_title", record.raw)
+            self.assertEqual(record.agent_id, "Hermes:fragment")
+
+    def test_profileless_hermes_event_does_not_search_unique_visible_database(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            hermes_root = home / ".hermes"
+            state_db = hermes_root / "profiles" / "private" / "state.db"
+            state_db.parent.mkdir(parents=True)
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT
+                    )
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+                    (
+                        "unique-private-session",
+                        None,
+                        "Private profile conversation title",
+                        "2026-08-14T12:05:00Z",
+                    ),
+                )
+
+            line = json.dumps(
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "unique-private-session",
+                    "integration": "hermes-plugin",
+                    "agent_id": "Hermes:fragment",
+                    "sidepulse_status": "working",
+                    "logged_at": "2026-08-14T12:06:00Z",
+                }
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HERMES_HOME": str(hermes_root)},
+                    clear=False,
+                ),
+                patch("sidepulse.providers.Path.home", return_value=home),
+                patch(
+                    "sidepulse.providers.hermes_session_metadata_from_db",
+                    wraps=hermes_session_metadata_from_db,
+                ) as database_lookup,
+            ):
+                record = parse_log_line("hermes", line)
+
+            self.assertIsNotNone(record)
+            assert record is not None
+            database_lookup.assert_not_called()
+            self.assertNotIn("session_title", record.raw)
+            self.assertNotIn("Private profile conversation title", json.dumps(record.raw))
+            self.assertEqual(record.agent_id, "Hermes:fragment")
+            self.assertIsNone(collector_module.status_from_event(record))
+
+            monitor = LiveAgentMonitor(stale_after_seconds=3600)
+            monitor.ingest_record(record)
+            snapshot = monitor.snapshot(include_stale=True)
+            self.assertEqual(snapshot.statuses + snapshot.stale_statuses, ())
+
+    def test_hermes_status_identity_is_scoped_by_profile(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+        now = datetime.now(timezone.utc)
+        for profile, title, mode in (
+            ("alpha", "Alpha imported chat", "working"),
+            ("beta", "Beta imported chat", "waiting_for_input"),
+        ):
+            record = parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionActivate",
+                        "session_id": "imported-session",
+                        "agent_id": "EDI:shared-lineage-fragment",
+                        "hermes_profile": profile,
+                        "session_title": title,
+                        "sidepulse_mode": mode,
+                        "logged_at": now.isoformat(),
+                    }
+                ),
+            )
+            self.assertIsNotNone(record)
+            assert record is not None
+            monitor.ingest_record(record)
+
+        statuses = monitor.snapshot(include_stale=True).statuses
+        self.assertEqual(len(statuses), 2)
+        self.assertEqual(len({status.agent_id for status in statuses}), 2)
+        self.assertEqual(
+            {status.mode for status in statuses},
+            {AgentMode.WORKING, AgentMode.WAITING_FOR_INPUT},
+        )
+        self.assertTrue(
+            any("Alpha imported chat" in status.display_name for status in statuses)
+        )
+        self.assertTrue(
+            any("Beta imported chat" in status.display_name for status in statuses)
+        )
 
     def test_hook_payload_stamps_origin_from_vscode_environment(self) -> None:
         with patch.dict(os.environ, {"TERM_PROGRAM": "vscode"}, clear=True):
@@ -606,6 +1348,547 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
 
+    def test_latest_state_with_conversation_title_is_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "agent-monitor"
+            latest = state_dir / "latest.json"
+            monitor = LiveAgentMonitor(
+                latest_state_path=latest,
+                stale_after_seconds=3600,
+            )
+            record = parse_log_line(
+                "claude",
+                json.dumps(
+                    {
+                        "hook_event_name": "UserPromptSubmit",
+                        "session_id": "private-title-session",
+                        "prompt": "Private conversation-derived title",
+                        "logged_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ),
+            )
+            self.assertIsNotNone(record)
+            assert record is not None
+
+            previous_umask = os.umask(0)
+            try:
+                monitor.ingest_record(record)
+            finally:
+                os.umask(previous_umask)
+
+            payload = json.loads(latest.read_text(encoding="utf-8"))
+            self.assertIn(
+                "Private conversation-derived title",
+                payload["statuses"][0]["display_name"],
+            )
+            self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(latest.stat().st_mode & 0o777, 0o600)
+
+    def test_hermes_startup_replay_preserves_persisted_state_without_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            missing_log = base / "missing-hermes.jsonl"
+            now = datetime.now(timezone.utc)
+            persisted = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:agent:socket-only",
+                display_name="Socket-only Hermes session",
+                mode=AgentMode.WORKING,
+                updated_at=now,
+                event_name="SessionActivate",
+                session_id="socket-only-session",
+            )
+            latest.write_text(
+                json.dumps({"statuses": [persisted.to_dict(now)]}),
+                encoding="utf-8",
+            )
+            monitor = LiveAgentMonitor(
+                latest_state_path=latest,
+                stale_after_seconds=3600,
+            )
+
+            replayed = collector_module.replay_recent_debug_logs(
+                monitor,
+                providers=("hermes",),
+                max_lines=20,
+                detect_log_path_fn=lambda _provider: missing_log,
+            )
+
+            statuses = monitor.snapshot(include_stale=True).statuses
+            persisted_payload = json.loads(latest.read_text(encoding="utf-8"))
+            self.assertEqual(replayed, 0)
+            self.assertEqual([status.agent_id for status in statuses], [persisted.agent_id])
+            self.assertEqual(
+                [status["agent_id"] for status in persisted_payload["statuses"]],
+                [persisted.agent_id],
+            )
+
+    def test_hermes_startup_replay_preserves_unrelated_no_log_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            log = base / "hermes.jsonl"
+            now = datetime.now(timezone.utc)
+            stale_represented = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:agent:EDI:stale-fragment",
+                display_name="Stale represented identity",
+                mode=AgentMode.BLOCKED_ERROR,
+                updated_at=now - timedelta(seconds=30),
+                event_name="SessionActivate",
+                session_id="logged-session",
+            )
+            socket_only = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:agent:EDI:socket-only",
+                display_name="Socket-only no-log session",
+                mode=AgentMode.WORKING,
+                updated_at=now,
+                event_name="UserPromptSubmit",
+                session_id="socket-only-session",
+            )
+            latest.write_text(
+                json.dumps(
+                    {
+                        "statuses": [
+                            stale_represented.to_dict(now),
+                            socket_only.to_dict(now),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log.write_text(
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionActivate",
+                        "session_id": "logged-session",
+                        "hermes_profile": "default",
+                        "agent_id": "EDI:replayed-fragment",
+                        "sidepulse_mode": "working",
+                        "logged_at": (now - timedelta(seconds=10)).isoformat(),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            monitor = LiveAgentMonitor(
+                latest_state_path=latest,
+                stale_after_seconds=3600,
+            )
+
+            replayed = collector_module.replay_recent_debug_logs(
+                monitor,
+                providers=("hermes",),
+                max_lines=20,
+                detect_log_path_fn=lambda _provider: log,
+            )
+
+            statuses = monitor.snapshot(include_stale=True).statuses
+            by_session = {status.session_id: status for status in statuses}
+            self.assertEqual(replayed, 1)
+            self.assertEqual(set(by_session), {"logged-session", "socket-only-session"})
+            self.assertEqual(by_session["logged-session"].mode, AgentMode.WORKING)
+            self.assertNotEqual(
+                by_session["logged-session"].agent_id,
+                stale_represented.agent_id,
+            )
+            self.assertEqual(
+                by_session["socket-only-session"].agent_id,
+                socket_only.agent_id,
+            )
+
+    def test_hermes_startup_replay_does_not_replace_newer_socket_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            log = base / "hermes.jsonl"
+            now = datetime.now(timezone.utc)
+            socket_status = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:agent:EDI:socket-fragment",
+                display_name="Newer socket state",
+                mode=AgentMode.WAITING_FOR_INPUT,
+                updated_at=now - timedelta(seconds=3),
+                event_name="PermissionRequest",
+                session_id="shared-session",
+            )
+            latest.write_text(
+                json.dumps({"statuses": [socket_status.to_dict(now)]}),
+                encoding="utf-8",
+            )
+            log.write_text(
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionActivate",
+                        "session_id": "shared-session",
+                        "agent_id": "EDI:older-log-fragment",
+                        "sidepulse_mode": "working",
+                        "logged_at": (now - timedelta(seconds=30)).isoformat(),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            monitor = LiveAgentMonitor(
+                latest_state_path=latest,
+                stale_after_seconds=3600,
+            )
+
+            replayed = collector_module.replay_recent_debug_logs(
+                monitor,
+                providers=("hermes",),
+                max_lines=20,
+                detect_log_path_fn=lambda _provider: log,
+            )
+
+            statuses = monitor.snapshot(include_stale=True).statuses
+            self.assertEqual(replayed, 0)
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual(statuses[0].agent_id, socket_status.agent_id)
+            self.assertEqual(statuses[0].mode, AgentMode.WAITING_FOR_INPUT)
+
+    def test_hermes_startup_replay_is_atomic_with_newer_socket_ingestion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            log = base / "hermes.jsonl"
+            now = datetime.now(timezone.utc)
+            session_id = "atomic-replay-session"
+            log.write_text(
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionActivate",
+                        "session_id": session_id,
+                        "agent_id": "EDI:shared-fragment",
+                        "hermes_profile": "default",
+                        "sidepulse_mode": "working",
+                        "logged_at": (now - timedelta(seconds=30)).isoformat(),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            live_record = parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": "PermissionRequest",
+                        "session_id": session_id,
+                        "agent_id": "EDI:shared-fragment",
+                        "hermes_profile": "default",
+                        "sidepulse_mode": "waiting_for_input",
+                        "logged_at": now.isoformat(),
+                    }
+                ),
+            )
+            self.assertIsNotNone(live_record)
+            assert live_record is not None
+
+            after_prepare = threading.Barrier(2)
+            live_ingested = threading.Event()
+
+            class CoordinatedMonitor(LiveAgentMonitor):
+                def prepare_replay_records(self, provider, records):
+                    prepared = super().prepare_replay_records(provider, records)
+                    after_prepare.wait(timeout=2)
+                    live_ingested.wait(timeout=0.25)
+                    return prepared
+
+            monitor = CoordinatedMonitor(stale_after_seconds=3600)
+            replayed: list[int] = []
+            errors: list[BaseException] = []
+
+            def run_replay() -> None:
+                try:
+                    replayed.append(
+                        collector_module.replay_recent_debug_logs(
+                            monitor,
+                            providers=("hermes",),
+                            max_lines=20,
+                            detect_log_path_fn=lambda _provider: log,
+                        )
+                    )
+                except BaseException as exc:  # pragma: no cover - surfaced below
+                    errors.append(exc)
+
+            def ingest_live() -> None:
+                try:
+                    after_prepare.wait(timeout=2)
+                    monitor.ingest_record(live_record)
+                    live_ingested.set()
+                except BaseException as exc:  # pragma: no cover - surfaced below
+                    errors.append(exc)
+
+            replay_thread = threading.Thread(target=run_replay)
+            live_thread = threading.Thread(target=ingest_live)
+            replay_thread.start()
+            live_thread.start()
+            replay_thread.join(timeout=3)
+            live_thread.join(timeout=3)
+
+            self.assertFalse(replay_thread.is_alive())
+            self.assertFalse(live_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(replayed, [1])
+            statuses = monitor.snapshot(include_stale=True).statuses
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual(statuses[0].mode, AgentMode.WORKING)
+            self.assertEqual(monitor.statuses_by_key[live_record.status_key].mode, AgentMode.WAITING_FOR_INPUT)
+            self.assertEqual(statuses[0].updated_at, now)
+
+    def test_hermes_startup_replay_removes_coalesced_stale_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            hermes_home = base / ".hermes"
+            hermes_home.mkdir()
+            state_db = hermes_home / "state.db"
+            log = base / "hermes.jsonl"
+            latest = base / "latest.json"
+            now = datetime.now(timezone.utc)
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT,
+                        end_reason TEXT,
+                        source TEXT,
+                        model_config TEXT
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        (
+                            "lineage-root",
+                            None,
+                            "Stale root title",
+                            "2026-08-15T12:00:00Z",
+                            "compression",
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "lineage-continuation",
+                            "lineage-root",
+                            "Current continuation title",
+                            "2026-08-15T12:05:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                    ),
+                )
+            stale_ancestor = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:profile:legacy:agent:EDI:stale-root",
+                display_name="Stale represented ancestor",
+                mode=AgentMode.BLOCKED_ERROR,
+                updated_at=now - timedelta(seconds=60),
+                event_name="StopFailure",
+                session_id="lineage-root",
+            )
+            unrelated = AgentStatus(
+                provider="hermes",
+                agent_id="hermes:profile:legacy:agent:EDI:unrelated",
+                display_name="Unrelated no-log state",
+                mode=AgentMode.WORKING,
+                updated_at=now,
+                event_name="UserPromptSubmit",
+                session_id="unrelated-session",
+            )
+            latest.write_text(
+                json.dumps(
+                    {
+                        "statuses": [
+                            stale_ancestor.to_dict(now),
+                            unrelated.to_dict(now),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            replay_events = (
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "lineage-root",
+                    "agent_id": "EDI:root-fragment",
+                    "hermes_profile": "default",
+                    "sidepulse_mode": "working",
+                    "logged_at": (now - timedelta(seconds=30)).isoformat(),
+                },
+                {
+                    "hook_event_name": "SessionActivate",
+                    "session_id": "lineage-continuation",
+                    "agent_id": "EDI:continuation-fragment",
+                    "hermes_profile": "default",
+                    "sidepulse_mode": "working",
+                    "logged_at": (now - timedelta(seconds=20)).isoformat(),
+                },
+            )
+            log.write_text(
+                "".join(json.dumps(event) + "\n" for event in replay_events),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {"HERMES_HOME": str(hermes_home)},
+                clear=False,
+            ):
+                socket_record = parse_log_line(
+                    "hermes",
+                    json.dumps(
+                        {
+                            "hook_event_name": "PermissionRequest",
+                            "session_id": "lineage-continuation",
+                            "agent_id": "EDI:socket-fragment",
+                            "hermes_profile": "default",
+                            "sidepulse_mode": "waiting_for_input",
+                            "logged_at": now.isoformat(),
+                        }
+                    ),
+                )
+                self.assertIsNotNone(socket_record)
+                assert socket_record is not None
+                monitor = LiveAgentMonitor(
+                    latest_state_path=latest,
+                    stale_after_seconds=3600,
+                )
+                monitor.ingest_record(socket_record)
+                replayed = collector_module.replay_recent_debug_logs(
+                    monitor,
+                    providers=("hermes",),
+                    max_lines=20,
+                    detect_log_path_fn=lambda _provider: log,
+                )
+
+            snapshot = monitor.snapshot(include_stale=True)
+            statuses = snapshot.statuses + snapshot.stale_statuses
+            by_session = {status.session_id: status for status in statuses}
+            persisted = json.loads(latest.read_text(encoding="utf-8"))
+            self.assertEqual(replayed, 0)
+            self.assertEqual(
+                set(by_session),
+                {"lineage-continuation", "unrelated-session"},
+            )
+            self.assertEqual(
+                by_session["lineage-continuation"].agent_id,
+                socket_record.status_key,
+            )
+            self.assertEqual(
+                by_session["lineage-continuation"].mode,
+                AgentMode.WORKING,
+            )
+            self.assertEqual(
+                monitor.statuses_by_key[socket_record.status_key].mode,
+                AgentMode.WAITING_FOR_INPUT,
+            )
+            self.assertEqual(
+                by_session["unrelated-session"].agent_id,
+                unrelated.agent_id,
+            )
+            self.assertEqual(
+                {status["session_id"] for status in persisted["statuses"]},
+                {"lineage-continuation", "unrelated-session"},
+            )
+
+    def test_hermes_startup_replay_keeps_completion_over_boundary_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "hermes.jsonl"
+            session_id = "completed-hermes-session"
+            now = datetime.now(timezone.utc)
+            events = (
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": session_id,
+                    "hermes_profile": "default",
+                    "agent_id": "EDI:completed-fragment",
+                    "sidepulse_status": "completed",
+                    "logged_at": (now - timedelta(seconds=60)).isoformat(),
+                },
+                {
+                    "hook_event_name": "SessionStart",
+                    "session_id": session_id,
+                    "hermes_profile": "default",
+                    "agent_id": "EDI:completed-fragment",
+                    "sidepulse_status": "idle_ready",
+                    "logged_at": now.isoformat(),
+                },
+            )
+            log.write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            monitor = LiveAgentMonitor(stale_after_seconds=3600)
+
+            replayed = collector_module.replay_recent_debug_logs(
+                monitor,
+                providers=("hermes",),
+                max_lines=20,
+                detect_log_path_fn=lambda _provider: log,
+            )
+
+            snapshot = monitor.snapshot(include_stale=True)
+            statuses = snapshot.statuses + snapshot.stale_statuses
+            self.assertEqual(replayed, 2)
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual(statuses[0].mode, AgentMode.COMPLETED)
+            self.assertEqual(statuses[0].event_name, "Stop")
+
+            prompt = parse_log_line(
+                "hermes",
+                json.dumps(
+                    {
+                        "hook_event_name": "UserPromptSubmit",
+                        "session_id": session_id,
+                        "hermes_profile": "default",
+                        "agent_id": "EDI:completed-fragment",
+                        "sidepulse_status": "working",
+                        "logged_at": (now + timedelta(seconds=1)).isoformat(),
+                    }
+                ),
+            )
+            self.assertIsNotNone(prompt)
+            assert prompt is not None
+            monitor.ingest_record(prompt)
+            self.assertEqual(monitor.snapshot().statuses[0].mode, AgentMode.WORKING)
+
+    def test_hermes_completion_reopens_on_working_session_activation(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+        now = datetime.now(timezone.utc)
+        for event in (
+            {
+                "hook_event_name": "Stop",
+                "session_id": "reopened-session",
+                "hermes_profile": "default",
+                "agent_id": "EDI:reopened-fragment",
+                "sidepulse_mode": "completed",
+                "logged_at": now.isoformat(),
+            },
+            {
+                "hook_event_name": "SessionActivate",
+                "session_id": "reopened-session",
+                "hermes_profile": "default",
+                "agent_id": "EDI:reopened-fragment",
+                "sidepulse_mode": "working",
+                "logged_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        ):
+            record = parse_log_line("hermes", json.dumps(event))
+            self.assertIsNotNone(record)
+            assert record is not None
+            monitor.ingest_record(record)
+
+        statuses = monitor.snapshot(include_stale=True).statuses
+        self.assertEqual(len(statuses), 1)
+        self.assertEqual(statuses[0].mode, AgentMode.WORKING)
+        self.assertEqual(statuses[0].event_name, "SessionActivate")
+
     def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
         try:
             from sidepulse import status_bar
@@ -646,6 +1929,122 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(replayed, 1)
             self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
             self.assertIn("startup replay", snapshot.statuses[0].display_name)
+
+    def test_status_bar_startup_rebuilds_persisted_hermes_lineage(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            log = base / "hermes.jsonl"
+            state_db = base / "state.db"
+            now = datetime.now(timezone.utc)
+
+            with sqlite_connection(state_db) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY,
+                        parent_session_id TEXT,
+                        title TEXT,
+                        started_at TEXT,
+                        end_reason TEXT,
+                        source TEXT,
+                        model_config TEXT
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        (
+                            "root-session",
+                            None,
+                            None,
+                            "2026-08-14T12:00:00Z",
+                            "compression",
+                            "desktop",
+                            None,
+                        ),
+                        (
+                            "compressed-session",
+                            "root-session",
+                            "Verify SidePulse after Hermes updates",
+                            "2026-08-14T12:05:00Z",
+                            None,
+                            "desktop",
+                            None,
+                        ),
+                    ),
+                )
+
+            persisted = []
+            for session_id, fragment, mode in (
+                ("root-session", "root-fragment", AgentMode.BLOCKED_ERROR),
+                ("compressed-session", "child-fragment", AgentMode.WORKING),
+            ):
+                persisted.append(
+                    AgentStatus(
+                        provider="hermes",
+                        agent_id=f"hermes:agent:EDI:{fragment}",
+                        display_name=f"Hermes agent EDI:{fragment}",
+                        mode=mode,
+                        updated_at=now,
+                        event_name="SessionActivate",
+                        session_id=session_id,
+                    ).to_dict(now)
+                )
+            latest.write_text(json.dumps({"statuses": persisted}))
+
+            lines = []
+            for session_id, fragment, status in (
+                ("root-session", "root-fragment", "blocked_error"),
+                ("compressed-session", "child-fragment", "working"),
+            ):
+                lines.append(
+                    json.dumps(
+                        {
+                            "hook_event_name": "SessionActivate",
+                            "session_id": session_id,
+                            "agent_id": f"EDI:{fragment}",
+                            "sidepulse_status": status,
+                            "logged_at": now.isoformat(),
+                        }
+                    )
+                )
+            log.write_text("\n".join(lines) + "\n")
+
+            monitor = LiveAgentMonitor(
+                latest_state_path=latest,
+                stale_after_seconds=3600,
+            )
+
+            def provider_log(provider: str) -> Path:
+                return log if provider == "hermes" else base / f"{provider}.jsonl"
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SIDEPULSE_HERMES_STATE_DB": str(state_db)},
+                    clear=False,
+                ),
+                patch("sidepulse.status_bar.detect_log_path", side_effect=provider_log),
+            ):
+                replayed = status_bar.replay_recent_debug_logs(monitor, max_lines=20)
+
+            snapshot = monitor.snapshot()
+            hermes_statuses = [
+                status for status in snapshot.statuses if status.provider == "hermes"
+            ]
+            self.assertEqual(replayed, 2)
+            self.assertEqual(len(hermes_statuses), 1)
+            self.assertIn(
+                "Verify SidePulse after Hermes updates",
+                hermes_statuses[0].display_name,
+            )
 
     def test_status_bar_session_menu_title_is_task_and_project(self) -> None:
         try:
@@ -1536,6 +2935,69 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(calls, [None])
 
+    def test_status_bar_schedules_refresh_at_completion_expiry(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        scheduled: list[tuple[float, object, str, object, bool]] = []
+        timer = SimpleNamespace(invalidate=lambda: None)
+        timer_api = SimpleNamespace(
+            scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_=
+            lambda interval, target, selector, user_info, repeats: (
+                scheduled.append((interval, target, selector, user_info, repeats))
+                or timer
+            )
+        )
+        fake = SimpleNamespace(
+            current_state=status_bar.STATE_IDLE,
+            status_item=None,
+            completed_idle_timer=None,
+        )
+        fake.schedule_completed_idle_refresh = lambda: (
+            status_bar.StatusBarController.schedule_completed_idle_refresh(fake)
+        )
+        fake.cancel_completed_idle_refresh = lambda: (
+            status_bar.StatusBarController.cancel_completed_idle_refresh(fake)
+        )
+
+        with patch.object(status_bar, "NSTimer", timer_api):
+            status_bar.StatusBarController.set_status(fake, status_bar.STATE_DONE)
+
+        self.assertEqual(len(scheduled), 1)
+        self.assertAlmostEqual(
+            scheduled[0][0],
+            status_bar.COMPLETED_VISIBLE_SECONDS + 0.05,
+        )
+        self.assertEqual(scheduled[0][2], "refreshAfterCompleted:")
+        self.assertFalse(scheduled[0][4])
+
+    def test_status_bar_cancels_expiry_refresh_for_new_work(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        invalidated: list[bool] = []
+        timer = SimpleNamespace(invalidate=lambda: invalidated.append(True))
+        fake = SimpleNamespace(
+            current_state=status_bar.STATE_DONE,
+            status_item=None,
+            completed_idle_timer=timer,
+        )
+        fake.schedule_completed_idle_refresh = lambda: (
+            status_bar.StatusBarController.schedule_completed_idle_refresh(fake)
+        )
+        fake.cancel_completed_idle_refresh = lambda: (
+            status_bar.StatusBarController.cancel_completed_idle_refresh(fake)
+        )
+
+        status_bar.StatusBarController.set_status(fake, status_bar.STATE_WORKING)
+
+        self.assertEqual(invalidated, [True])
+        self.assertIsNone(fake.completed_idle_timer)
+
     def test_status_bar_sync_skips_custom_device_display(self) -> None:
         try:
             from sidepulse import status_bar
@@ -1558,7 +3020,7 @@ class AgentMonitorTests(unittest.TestCase):
             device_errors={device.device_id: "old"},
             last_led_display_kind_by_device={},
             reset_led_controllers_for_device=lambda device_id: None,
-            active_led_display_kind_for_device=lambda _device, _battery: LED_DISPLAY_CUSTOM,
+            active_led_display_kind_for_device=lambda _device, _battery, _mode: LED_DISPLAY_CUSTOM,
             agent_controller_for_device=lambda _device: self.fail("agent LEDs should not sync"),
             battery_controller_for_device=lambda _device: self.fail("battery LEDs should not sync"),
         )
@@ -1708,7 +3170,7 @@ class AgentMonitorTests(unittest.TestCase):
             ),
             last_battery_snapshot=object(),
             reset_led_controllers_for_display_change=lambda: calls.append(("reset", None)),
-            active_led_display_kind=lambda snapshot: "agent",
+            active_led_display_kind=lambda _snapshot, _mode: "agent",
             sync_leds=lambda mode, snapshot, display: calls.append(
                 ("sync", (mode, snapshot, display))
             ),
@@ -5172,10 +6634,10 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(len(snapshot.stale_statuses), 1)
             self.assertEqual(snapshot.stale_statuses[0].mode, AgentMode.COMPLETED)
 
-    def test_completed_status_stays_visible_for_twenty_minutes_by_default(self) -> None:
+    def test_completed_status_stays_visible_briefly_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "codex.jsonl"
-            recent_done = datetime.now(timezone.utc) - timedelta(minutes=19)
+            recent_done = datetime.now(timezone.utc) - timedelta(seconds=8)
             log.write_text(
                 json.dumps(
                     {
@@ -5198,6 +6660,33 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
             self.assertEqual(len(snapshot.statuses), 1)
+
+    def test_completed_status_returns_to_idle_after_brief_default_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "codex.jsonl"
+            recent_done = datetime.now(timezone.utc) - timedelta(seconds=20)
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": recent_done.isoformat(),
+                        "event": {
+                            "hook_event_name": "Stop",
+                            "session_id": "codex-session",
+                            "last_assistant_message": "Done.",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            monitor = AgentMonitor(
+                sources=(SourceSpec("codex", log),),
+                stale_after_seconds=3600,
+            )
+            snapshot = monitor.snapshot()
+
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.IDLE_READY)
+            self.assertEqual(snapshot.statuses, ())
 
     def test_completed_status_is_hidden_when_active_work_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5424,6 +6913,88 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
         self.assertEqual(snapshot.aggregate.active_count, 0)
         self.assertEqual(snapshot.statuses[0].event_name, "PostToolUse")
+
+    def test_hermes_post_tool_use_stays_working_while_model_thinks(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:abc123",
+            display_name="developer",
+            mode=AgentMode.WORKING,
+            updated_at=now
+            - timedelta(seconds=collector_module.POST_TOOL_WORKING_VISIBLE_SECONDS + 30),
+            event_name="PostToolUse",
+            session_id="hermes-session",
+            tool_name="read_file",
+        )
+
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+        self.assertEqual(snapshot.aggregate.active_count, 1)
+
+    def test_battery_preview_does_not_override_active_agent_modes(self) -> None:
+        for mode in (
+            AgentMode.WORKING,
+            AgentMode.TOOL_RUNNING,
+            AgentMode.WAITING_FOR_INPUT,
+            AgentMode.LONG_TASK_PROGRESS,
+            AgentMode.BLOCKED_ERROR,
+        ):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    resolve_led_display_kind(
+                        "agent",
+                        battery_preview_active=True,
+                        agent_mode=mode,
+                    ),
+                    LED_DISPLAY_AGENT,
+                )
+
+    def test_battery_preview_is_allowed_when_agent_is_idle_or_completed(self) -> None:
+        for mode in (AgentMode.IDLE_READY, AgentMode.COMPLETED):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    resolve_led_display_kind(
+                        "agent",
+                        battery_preview_active=True,
+                        agent_mode=mode,
+                    ),
+                    LED_DISPLAY_BATTERY,
+                )
+
+    def test_configured_battery_or_custom_display_still_wins(self) -> None:
+        self.assertEqual(
+            resolve_led_display_kind(
+                "battery",
+                battery_preview_active=False,
+                agent_mode=AgentMode.WORKING,
+            ),
+            LED_DISPLAY_BATTERY,
+        )
+        self.assertEqual(
+            resolve_led_display_kind(
+                "custom",
+                battery_preview_active=True,
+                agent_mode=AgentMode.WORKING,
+            ),
+            LED_DISPLAY_CUSTOM,
+        )
+
+    def test_power_flap_does_not_rearm_preview_immediately(self) -> None:
+        self.assertTrue(should_arm_battery_power_preview(False, True, now=10.0, last_armed_at=None))
+        self.assertFalse(should_arm_battery_power_preview(False, True, now=20.0, last_armed_at=10.0))
+        self.assertTrue(should_arm_battery_power_preview(False, True, now=45.0, last_armed_at=10.0))
+        self.assertFalse(should_arm_battery_power_preview(None, True, now=50.0, last_armed_at=None))
+        self.assertFalse(should_arm_battery_power_preview(True, True, now=50.0, last_armed_at=None))
 
     def test_internal_codex_helper_sessions_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
