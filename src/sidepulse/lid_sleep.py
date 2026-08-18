@@ -17,7 +17,7 @@ from .settings import (
 )
 
 
-CAFFEINATE_CLOSED_LID_COMMAND = ("/usr/bin/caffeinate", "-dimsu")
+CAFFEINATE_CLOSED_LID_COMMAND = ("/usr/bin/caffeinate", "-imsu")
 IOREG_CLAMSHELL_COMMAND = ("/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "4")
 IOREG_SLEEP_DISABLED_COMMAND = ("/usr/sbin/ioreg", "-r", "-k", "SleepDisabled", "-d", "4")
 SUDO_PMSET_DISABLE_SLEEP_COMMAND = (
