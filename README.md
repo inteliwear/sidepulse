@@ -134,9 +134,11 @@ Display rules:
 - `Show Battery on Plug/Unplug` never overrides Working, Tool Running,
   Waiting, Long Task, or Blocked. Battery preview is also debounced so a
   flapping MagSafe connection cannot keep stealing the LEDs.
-- A `PermissionRequest` shorter than two seconds is shown as Working. Hermes
-  emits that event around auto-approved `terminal` / `execute_code` calls; the
-  amber Ask pulse is reserved for an approval that actually lingers.
+- A Hermes `PermissionRequest` shorter than two seconds is shown as Working.
+  Hermes emits that event around auto-approved `terminal` / `execute_code`
+  calls; the amber Ask pulse is reserved for an approval that actually lingers.
+  Codex `PermissionRequest` stays Ask immediately and remains sticky until the
+  matching tool finishes.
 - Hermes `PostToolUseFailure` is shown as Working. A failed tool that the
   agent continues past is not a blocked LED state. Approval denials and API
   failures still use Blocked / Error.

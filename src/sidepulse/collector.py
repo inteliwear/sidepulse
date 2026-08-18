@@ -1288,7 +1288,8 @@ def status_for_snapshot(
     ):
         return _replace_mode(status, AgentMode.COMPLETED)
     if (
-        status.mode == AgentMode.WAITING_FOR_INPUT
+        status.provider == "hermes"
+        and status.mode == AgentMode.WAITING_FOR_INPUT
         and status.event_name == "PermissionRequest"
         and status.age_seconds(now) < PERMISSION_ASK_DEBOUNCE_SECONDS
     ):
