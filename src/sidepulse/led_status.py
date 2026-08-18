@@ -13,6 +13,14 @@ from .device_writer import (
 )
 from .models import AgentMode
 
+ACTIVE_AGENT_MODES = {
+    AgentMode.WORKING,
+    AgentMode.TOOL_RUNNING,
+    AgentMode.WAITING_FOR_INPUT,
+    AgentMode.LONG_TASK_PROGRESS,
+    AgentMode.BLOCKED_ERROR,
+}
+
 
 class LedDisplayState(str, Enum):
     IDLE = "idle"
@@ -64,6 +72,24 @@ def display_state_for_mode(mode: AgentMode) -> LedDisplayState:
     if mode == AgentMode.COMPLETED:
         return LedDisplayState.DONE
     return LedDisplayState.IDLE
+
+
+def resolve_led_display_kind(
+    configured_display: str,
+    *,
+    battery_preview_active: bool,
+    agent_mode: AgentMode,
+) -> str:
+    """Choose agent vs battery LEDs without letting previews hide live work."""
+
+    display = str(configured_display or "agent").strip().lower()
+    if display == "custom":
+        return "custom"
+    if display == "battery":
+        return "battery"
+    if battery_preview_active and agent_mode not in ACTIVE_AGENT_MODES:
+        return "battery"
+    return "agent"
 
 
 def program_for_display_state(

@@ -32,9 +32,10 @@ CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
-COMPLETED_VISIBLE_SECONDS = 20 * 60.0
+COMPLETED_VISIBLE_SECONDS = 12.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
+PERMISSION_ASK_DEBOUNCE_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -1281,10 +1282,24 @@ def status_for_snapshot(
     if (
         status.mode == AgentMode.WORKING
         and status.event_name == "PostToolUse"
+        and status.provider != "hermes"
         and post_tool_working_visible_seconds >= 0
         and status.age_seconds(now) > post_tool_working_visible_seconds
     ):
         return _replace_mode(status, AgentMode.COMPLETED)
+    if (
+        status.provider == "hermes"
+        and status.mode == AgentMode.WAITING_FOR_INPUT
+        and status.event_name == "PermissionRequest"
+        and status.age_seconds(now) < PERMISSION_ASK_DEBOUNCE_SECONDS
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
+    if (
+        status.provider == "hermes"
+        and status.mode == AgentMode.BLOCKED_ERROR
+        and status.event_name == "PostToolUseFailure"
+    ):
+        return _replace_mode(status, AgentMode.WORKING)
     return status
 
 

@@ -27,6 +27,24 @@ BATTERY_HIGH_GREEN = "#00FF66"
 BATTERY_CHARGING_MINT = "#80FFC8"
 BATTERY_OFF = "#000000"
 DEFAULT_POWER_CHANGE_PREVIEW_SECONDS = 7.0
+POWER_PREVIEW_RETRIGGER_SECONDS = 30.0
+
+
+def should_arm_battery_power_preview(
+    previous_plugged: bool | None,
+    current_plugged: bool,
+    *,
+    now: float,
+    last_armed_at: float | None,
+    retrigger_seconds: float = POWER_PREVIEW_RETRIGGER_SECONDS,
+) -> bool:
+    """Ignore the first reading and rapid plugged/unplugged flaps."""
+
+    if previous_plugged is None or previous_plugged == current_plugged:
+        return False
+    if last_armed_at is None:
+        return True
+    return now - last_armed_at >= retrigger_seconds
 
 
 @dataclass(frozen=True)
