@@ -33,14 +33,22 @@ LED_DISPLAY_AGENT = "agent"
 LED_DISPLAY_BATTERY = "battery"
 LED_DISPLAY_CUSTOM = "custom"
 LED_DISPLAY_CHOICES = (LED_DISPLAY_AGENT, LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM)
-CLOSED_LID_AWAKE_NEVER = "never"
-CLOSED_LID_AWAKE_AGENTS = "agents"
-CLOSED_LID_AWAKE_ALWAYS = "always"
-CLOSED_LID_AWAKE_CHOICES = (
-    CLOSED_LID_AWAKE_NEVER,
-    CLOSED_LID_AWAKE_AGENTS,
-    CLOSED_LID_AWAKE_ALWAYS,
+SLEEP_PREVENTION_NEVER = "never"
+SLEEP_PREVENTION_AGENTS = "agents"
+SLEEP_PREVENTION_ALWAYS = "always"
+SLEEP_PREVENTION_CHOICES = (
+    SLEEP_PREVENTION_NEVER,
+    SLEEP_PREVENTION_AGENTS,
+    SLEEP_PREVENTION_ALWAYS,
 )
+CLOSED_LID_AWAKE_NEVER = SLEEP_PREVENTION_NEVER
+CLOSED_LID_AWAKE_AGENTS = SLEEP_PREVENTION_AGENTS
+CLOSED_LID_AWAKE_ALWAYS = SLEEP_PREVENTION_ALWAYS
+CLOSED_LID_AWAKE_CHOICES = SLEEP_PREVENTION_CHOICES
+OPEN_LID_AWAKE_NEVER = SLEEP_PREVENTION_NEVER
+OPEN_LID_AWAKE_AGENTS = SLEEP_PREVENTION_AGENTS
+OPEN_LID_AWAKE_ALWAYS = SLEEP_PREVENTION_ALWAYS
+OPEN_LID_AWAKE_CHOICES = SLEEP_PREVENTION_CHOICES
 LID_ANIMATION_CLOSED = "closed"
 LID_ANIMATION_OPEN = "open"
 LID_ANIMATION_CHOICES = (LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN)
@@ -79,6 +87,20 @@ DEFAULT_RECENT_SESSION_RETENTION_SECONDS = 48 * 60 * 60
 DEFAULT_IDLE_TIMEOUT_SECONDS = 60 * 60
 DEFAULT_DND_START_TIME = "22:00"
 DEFAULT_DND_END_TIME = "07:00"
+DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT = 20.0
+HISTORY_TIMEFRAME_1H_SECONDS = 60 * 60
+HISTORY_TIMEFRAME_6H_SECONDS = 6 * 60 * 60
+HISTORY_TIMEFRAME_12H_SECONDS = 12 * 60 * 60
+HISTORY_TIMEFRAME_24H_SECONDS = 24 * 60 * 60
+HISTORY_TIMEFRAME_48H_SECONDS = 48 * 60 * 60
+DEFAULT_HISTORY_TIMEFRAME_SECONDS = HISTORY_TIMEFRAME_12H_SECONDS
+HISTORY_TIMEFRAME_CHOICES = (
+    HISTORY_TIMEFRAME_1H_SECONDS,
+    HISTORY_TIMEFRAME_6H_SECONDS,
+    HISTORY_TIMEFRAME_12H_SECONDS,
+    HISTORY_TIMEFRAME_24H_SECONDS,
+    HISTORY_TIMEFRAME_48H_SECONDS,
+)
 
 
 @dataclass(frozen=True)
@@ -117,8 +139,8 @@ class AgentMonitorSettings:
     claude_transcripts_enabled: bool = False
     led_display: str = LED_DISPLAY_AGENT
     devices: tuple[DeviceDisplaySetting, ...] = ()
+    sleep_prevention_policy: str = SLEEP_PREVENTION_AGENTS
     virtual_status_device_enabled: bool = False
-    closed_lid_awake_policy: str = CLOSED_LID_AWAKE_NEVER
     closed_lid_system_override_enabled: bool = False
     lid_closed_animation: LedAnimationSetting = field(
         default_factory=lambda: default_lid_animation(LID_ANIMATION_CLOSED)
@@ -140,6 +162,8 @@ class AgentMonitorSettings:
     dnd_start_time: str = DEFAULT_DND_START_TIME
     dnd_end_time: str = DEFAULT_DND_END_TIME
     dnd_last_schedule_transition: str = ""
+    sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
+    history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
 
     def transcript_enabled(self, provider: str) -> bool:
@@ -377,9 +401,15 @@ class AgentMonitorSettings:
         raise ValueError(f"Unknown lid animation: {kind}")
 
     def with_closed_lid_awake_policy(self, policy: str) -> "AgentMonitorSettings":
-        if policy not in CLOSED_LID_AWAKE_CHOICES:
-            raise ValueError(f"Unknown closed-lid awake policy: {policy}")
-        return replace(self, closed_lid_awake_policy=policy)
+        return self.with_sleep_prevention_policy(policy)
+
+    def with_open_lid_awake_policy(self, policy: str) -> "AgentMonitorSettings":
+        return self.with_sleep_prevention_policy(policy)
+
+    def with_sleep_prevention_policy(self, policy: str) -> "AgentMonitorSettings":
+        if policy not in SLEEP_PREVENTION_CHOICES:
+            raise ValueError(f"Unknown sleep prevention policy: {policy}")
+        return replace(self, sleep_prevention_policy=policy)
 
     def with_closed_lid_system_override(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, closed_lid_system_override_enabled=bool(enabled))
@@ -463,12 +493,21 @@ class AgentMonitorSettings:
             ),
         )
 
+    def with_sleep_prevention_battery_safeguard(self, percent: float) -> "AgentMonitorSettings":
+        return replace(
+            self,
+            sleep_prevention_min_battery_percent=normalize_percent_setting(percent),
+        )
+
+    def with_history_timeframe(self, seconds: float) -> "AgentMonitorSettings":
+        return replace(self, history_timeframe_seconds=normalize_history_timeframe(seconds))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "led_display": self.led_display,
             "devices": [device.to_dict() for device in self.devices],
+            "sleep_prevention_policy": self.sleep_prevention_policy,
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
-            "closed_lid_awake_policy": self.closed_lid_awake_policy,
             "closed_lid_system_override_enabled": self.closed_lid_system_override_enabled,
             "lid_closed_animation": self.lid_closed_animation.to_dict(),
             "lid_open_animation": self.lid_open_animation.to_dict(),
@@ -497,6 +536,12 @@ class AgentMonitorSettings:
                 "start_time": self.dnd_start_time,
                 "end_time": self.dnd_end_time,
                 "last_schedule_transition": self.dnd_last_schedule_transition,
+            },
+            "sleep_prevention": {
+                "min_battery_percent": self.sleep_prevention_min_battery_percent,
+            },
+            "history": {
+                "timeframe_seconds": self.history_timeframe_seconds,
             },
             "setup_screen_completed": self.setup_screen_completed,
         }
@@ -549,6 +594,14 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
     if not isinstance(dnd, dict):
         dnd = {}
 
+    sleep_prevention = data.get("sleep_prevention")
+    if not isinstance(sleep_prevention, dict):
+        sleep_prevention = {}
+
+    history = data.get("history")
+    if not isinstance(history, dict):
+        history = {}
+
     led_display = _led_display_setting(data.get("led_display"), LED_DISPLAY_AGENT)
     session_open_preferences = _session_open_preferences(
         data.get("session_open_preferences")
@@ -567,11 +620,9 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         claude_transcripts_enabled=_bool_setting(transcript.get("claude"), False),
         led_display=led_display,
         devices=_device_display_settings(data.get("devices"), led_display),
+        sleep_prevention_policy=_sleep_prevention_policy_from_settings(data),
         virtual_status_device_enabled=_bool_setting(
             data.get("virtual_status_device_enabled"), False
-        ),
-        closed_lid_awake_policy=_closed_lid_awake_policy(
-            data.get("closed_lid_awake_policy"),
         ),
         closed_lid_system_override_enabled=_bool_setting(
             data.get("closed_lid_system_override_enabled"),
@@ -627,6 +678,21 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         dnd_last_schedule_transition=_string_setting(
             dnd.get("last_schedule_transition")
         ),
+        sleep_prevention_min_battery_percent=normalize_percent_setting(
+            sleep_prevention.get(
+                "min_battery_percent",
+                data.get(
+                    "sleep_prevention_min_battery_percent",
+                    DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT,
+                ),
+            )
+        ),
+        history_timeframe_seconds=normalize_history_timeframe(
+            history.get(
+                "timeframe_seconds",
+                data.get("history_timeframe_seconds", DEFAULT_HISTORY_TIMEFRAME_SECONDS),
+            )
+        ),
         setup_screen_completed=_bool_setting(data.get("setup_screen_completed"), False),
     )
 
@@ -663,10 +729,32 @@ def _string_setting(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _closed_lid_awake_policy(value: object) -> str:
-    if isinstance(value, str) and value in CLOSED_LID_AWAKE_CHOICES:
+def _sleep_prevention_policy(value: object, default: str = SLEEP_PREVENTION_AGENTS) -> str:
+    if isinstance(value, str) and value in SLEEP_PREVENTION_CHOICES:
         return value
-    return CLOSED_LID_AWAKE_NEVER
+    return default
+
+
+def _sleep_prevention_policy_from_settings(data: dict[str, Any]) -> str:
+    direct = _sleep_prevention_policy(data.get("sleep_prevention_policy"), "")
+    if direct:
+        return direct
+
+    legacy_values = (
+        data.get("open_lid_awake_policy"),
+        data.get("closed_lid_awake_policy"),
+    )
+    legacy_policies = [
+        _sleep_prevention_policy(value, "")
+        for value in legacy_values
+    ]
+    if SLEEP_PREVENTION_ALWAYS in legacy_policies:
+        return SLEEP_PREVENTION_ALWAYS
+    if SLEEP_PREVENTION_AGENTS in legacy_policies:
+        return SLEEP_PREVENTION_AGENTS
+    if SLEEP_PREVENTION_NEVER in legacy_policies:
+        return SLEEP_PREVENTION_NEVER
+    return SLEEP_PREVENTION_AGENTS
 
 
 def _device_display_settings(value: object, default_display: str) -> tuple[DeviceDisplaySetting, ...]:
@@ -779,6 +867,21 @@ def normalize_seconds_setting(value: object) -> float:
     if isinstance(value, (int, float)):
         return max(0.0, float(value))
     return 0.0
+
+
+def normalize_percent_setting(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return max(0.0, min(100.0, float(value)))
+    return DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
+
+
+def normalize_history_timeframe(value: object) -> float:
+    if isinstance(value, (int, float)):
+        candidate = float(value)
+        for choice in HISTORY_TIMEFRAME_CHOICES:
+            if abs(candidate - float(choice)) < 0.5:
+                return float(choice)
+    return float(DEFAULT_HISTORY_TIMEFRAME_SECONDS)
 
 
 def normalize_brightness(value: object) -> int:

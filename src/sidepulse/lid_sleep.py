@@ -20,6 +20,7 @@ from .settings import (
 CAFFEINATE_CLOSED_LID_COMMAND = ("/usr/bin/caffeinate", "-imsu")
 IOREG_CLAMSHELL_COMMAND = ("/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "4")
 IOREG_SLEEP_DISABLED_COMMAND = ("/usr/sbin/ioreg", "-r", "-k", "SleepDisabled", "-d", "4")
+PMSET_ASSERTIONS_COMMAND = ("/usr/bin/pmset", "-g", "assertions")
 SUDO_PMSET_DISABLE_SLEEP_COMMAND = (
     "/usr/bin/sudo",
     "-n",
@@ -45,6 +46,30 @@ class SleepHelperInstallResult:
 
 class SleepHelperRequiredError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class MacSleepSnapshot:
+    sleep_disabled: bool | None = None
+    prevent_system_sleep: bool | None = None
+    prevent_user_idle_system_sleep: bool | None = None
+    prevent_user_idle_display_sleep: bool | None = None
+    user_is_active: bool | None = None
+    assertions: dict[str, bool] | None = None
+    error: str | None = None
+
+    @property
+    def sleep_prevented(self) -> bool | None:
+        known = [
+            self.sleep_disabled,
+            self.prevent_system_sleep,
+            self.prevent_user_idle_system_sleep,
+        ]
+        if any(value is True for value in known):
+            return True
+        if any(value is None for value in known):
+            return None
+        return False
 
 
 def closed_lid_awake_should_hold(policy: str, *, agents_active: bool) -> bool:
@@ -85,6 +110,50 @@ def read_sleep_disabled(
     return parse_bool_ioreg_property(result.stdout, "SleepDisabled")
 
 
+def read_pmset_assertions(
+    *,
+    runner: CommandRunner = subprocess.run,
+    command: Sequence[str] = PMSET_ASSERTIONS_COMMAND,
+) -> dict[str, bool]:
+    result = runner(
+        list(command),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    return parse_pmset_assertions(result.stdout)
+
+
+def read_mac_sleep_snapshot(
+    *,
+    runner: CommandRunner = subprocess.run,
+) -> MacSleepSnapshot:
+    errors: list[str] = []
+    sleep_disabled: bool | None = None
+    assertions: dict[str, bool] = {}
+
+    try:
+        sleep_disabled = read_sleep_disabled(runner=runner)
+    except Exception as exc:
+        errors.append(f"SleepDisabled: {exc}")
+
+    try:
+        assertions = read_pmset_assertions(runner=runner)
+    except Exception as exc:
+        errors.append(f"pmset assertions: {exc}")
+
+    return MacSleepSnapshot(
+        sleep_disabled=sleep_disabled,
+        prevent_system_sleep=assertions.get("PreventSystemSleep"),
+        prevent_user_idle_system_sleep=assertions.get("PreventUserIdleSystemSleep"),
+        prevent_user_idle_display_sleep=assertions.get("PreventUserIdleDisplaySleep"),
+        user_is_active=assertions.get("UserIsActive"),
+        assertions=assertions,
+        error="; ".join(errors) if errors else None,
+    )
+
+
 def parse_bool_ioreg_property(text: str | bytes, property_name: str) -> bool | None:
     if isinstance(text, bytes):
         text = text.decode("utf-8", errors="replace")
@@ -98,6 +167,18 @@ def parse_bool_ioreg_property(text: str | bytes, property_name: str) -> bool | N
     if value in {"no", "false", "0"}:
         return False
     return None
+
+
+def parse_pmset_assertions(text: str | bytes) -> dict[str, bool]:
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    assertions: dict[str, bool] = {}
+    for line in text.splitlines():
+        match = re.match(r"\s*([A-Za-z][A-Za-z0-9]+)\s+([01])\s*$", line)
+        if match is None:
+            continue
+        assertions[match.group(1)] = match.group(2) == "1"
+    return assertions
 
 
 def run_sudo_pmset_disablesleep(
@@ -278,6 +359,7 @@ class ClosedLidAwakeController:
         self.process = None
         self.changed_system_disable = False
         self.system_disable_attempted = False
+        self.last_system_disable_request: bool | None = None
         self.last_error: str | None = None
         self.last_policy = CLOSED_LID_AWAKE_NEVER
         self.last_requested = False
@@ -286,10 +368,11 @@ class ClosedLidAwakeController:
         enabled = bool(enabled)
         if self.use_system_disable == enabled:
             return
-        self.use_system_disable = enabled
-        self.system_disable_attempted = False
         if not enabled:
             self.release_system_disable()
+            self.last_system_disable_request = None
+        self.use_system_disable = enabled
+        self.system_disable_attempted = False
 
     def update(self, policy: str, *, agents_active: bool) -> bool:
         should_hold = closed_lid_awake_should_hold(policy, agents_active=agents_active)
@@ -307,18 +390,15 @@ class ClosedLidAwakeController:
         errors: list[str] = []
         if (
             self.use_system_disable
-            and not self.changed_system_disable
+            and self.last_system_disable_request is not True
             and not self.system_disable_attempted
         ):
             self.system_disable_attempted = True
             try:
-                already_disabled = self.sleep_disabled_reader()
-                if already_disabled is False:
-                    self.sleep_disabled_setter(True)
-                    self.changed_system_disable = True
-                elif already_disabled is None:
-                    self.sleep_disabled_setter(True)
-                    self.changed_system_disable = True
+                self.sleep_disabled_setter(True)
+                self.changed_system_disable = True
+                self.last_system_disable_request = True
+                self.system_disable_attempted = False
             except Exception as exc:
                 errors.append(f"disablesleep: {exc}")
 
@@ -356,10 +436,16 @@ class ClosedLidAwakeController:
 
     def release_system_disable(self, *, errors: list[str] | None = None) -> None:
         active_errors = errors if errors is not None else []
-        if self.changed_system_disable:
+        should_apply = (
+            self.use_system_disable
+            or self.changed_system_disable
+            or self.last_system_disable_request is True
+        )
+        if should_apply and self.last_system_disable_request is not False:
             try:
                 self.sleep_disabled_setter(False)
                 self.changed_system_disable = False
+                self.last_system_disable_request = False
                 self.system_disable_attempted = False
             except Exception as exc:
                 active_errors.append(f"disablesleep: {exc}")

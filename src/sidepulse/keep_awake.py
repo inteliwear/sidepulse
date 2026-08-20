@@ -63,8 +63,12 @@ class KeepAwakeController:
     def update(self, mode: AgentMode, *, now: float | None = None) -> bool:
         current = time.monotonic() if now is None else now
         should_hold = self.should_hold_for_mode(mode, current)
+        return self.update_requested(should_hold, mode=mode)
+
+    def update_requested(self, should_hold: bool, *, mode: AgentMode | None = None) -> bool:
         self.holding_requested = should_hold
-        self.last_mode = mode
+        if mode is not None:
+            self.last_mode = mode
 
         if not self.enabled or not should_hold:
             self.release()

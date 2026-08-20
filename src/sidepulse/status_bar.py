@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -68,9 +68,13 @@ from .battery import (
     read_battery_snapshot,
 )
 from .audit import (
+    append_status_history_record,
     default_status_audit_log_path,
+    default_status_history_log_path,
     export_status_audit_csv,
     export_status_audit_html,
+    read_status_history_records,
+    status_history_record,
 )
 from .collector import LiveAgentMonitor, SourceSpec, read_recent_lines
 from .device_writer import (
@@ -109,7 +113,9 @@ from .virtual_device import VIRTUAL_DEVICE_ID, VIRTUAL_DEVICE_NAME, VirtualStatu
 from .lid_sleep import (
     LID_POLL_SECONDS,
     ClosedLidAwakeController,
+    MacSleepSnapshot,
     read_lid_closed,
+    read_mac_sleep_snapshot,
     sleep_helper_install_command,
     sleep_helper_installed,
 )
@@ -151,17 +157,25 @@ from .session_actions import (
     session_open_target,
 )
 from .settings import (
-    CLOSED_LID_AWAKE_AGENTS,
-    CLOSED_LID_AWAKE_ALWAYS,
-    CLOSED_LID_AWAKE_CHOICES,
-    CLOSED_LID_AWAKE_NEVER,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_HISTORY_TIMEFRAME_SECONDS,
     DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
+    DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT,
+    HISTORY_TIMEFRAME_1H_SECONDS,
+    HISTORY_TIMEFRAME_6H_SECONDS,
+    HISTORY_TIMEFRAME_12H_SECONDS,
+    HISTORY_TIMEFRAME_24H_SECONDS,
+    HISTORY_TIMEFRAME_48H_SECONDS,
+    HISTORY_TIMEFRAME_CHOICES,
     LED_DISPLAY_AGENT,
     LED_DISPLAY_BATTERY,
     LED_DISPLAY_CUSTOM,
     LID_ANIMATION_CLOSED,
     LID_ANIMATION_OPEN,
+    SLEEP_PREVENTION_AGENTS,
+    SLEEP_PREVENTION_ALWAYS,
+    SLEEP_PREVENTION_CHOICES,
+    SLEEP_PREVENTION_NEVER,
     TERMINAL_APP_ALACRITTY,
     TERMINAL_APP_CUSTOM,
     TERMINAL_APP_GHOSTTY,
@@ -305,15 +319,25 @@ STATUS_BAR_SESSION_HISTORY_LIMIT = 10
 SCREEN_BAR_FEATURE_ENABLED = True
 STATUS_BAR_MAX_LINES_PER_SOURCE = 500
 STATUS_BAR_STARTUP_REPLAY_LINES = 200
+STATUS_BAR_HISTORY_CHART_RECORD_LIMIT = 2400
+STATUS_BAR_HISTORY_CHART_RECORD_LIMIT_PADDING = 300
+STATUS_BAR_HISTORY_CHART_RECORD_LIMIT_MULTIPLIER = 3.0
 LID_ANIMATION_RESTORE_FUDGE_SECONDS = 0.15
 LID_ANIMATION_LABELS = {
     LID_ANIMATION_CLOSED: "Lid Closed",
     LID_ANIMATION_OPEN: "Lid Open",
 }
-CLOSED_LID_AWAKE_LABELS = {
-    CLOSED_LID_AWAKE_NEVER: "Never",
-    CLOSED_LID_AWAKE_AGENTS: "When Agents Work",
-    CLOSED_LID_AWAKE_ALWAYS: "Always",
+SLEEP_PREVENTION_LABELS = {
+    SLEEP_PREVENTION_NEVER: "Never",
+    SLEEP_PREVENTION_AGENTS: "When Agents Work",
+    SLEEP_PREVENTION_ALWAYS: "Always",
+}
+HISTORY_TIMEFRAME_LABELS = {
+    HISTORY_TIMEFRAME_1H_SECONDS: "Last 1h",
+    HISTORY_TIMEFRAME_6H_SECONDS: "Last 6h",
+    HISTORY_TIMEFRAME_12H_SECONDS: "Last 12h",
+    HISTORY_TIMEFRAME_24H_SECONDS: "Last 24h",
+    HISTORY_TIMEFRAME_48H_SECONDS: "Last 48h",
 }
 TERMINAL_APP_LABELS = {
     TERMINAL_APP_TERMINAL: "Terminal",
@@ -361,6 +385,41 @@ def state_for_mode(mode: AgentMode) -> StatusBarState:
     if mode == AgentMode.COMPLETED:
         return STATE_DONE
     return STATE_IDLE
+
+
+def awake_policy_should_hold(policy: str, *, agents_active: bool) -> bool:
+    if policy == SLEEP_PREVENTION_ALWAYS:
+        return True
+    if policy == SLEEP_PREVENTION_AGENTS:
+        return agents_active
+    return False
+
+
+def sleep_prevention_battery_safeguard(
+    snapshot: BatterySnapshot | None,
+    threshold_percent: float,
+) -> tuple[bool, str]:
+    threshold = max(0.0, min(100.0, float(threshold_percent)))
+    threshold_text = format_percent_value(threshold)
+    if threshold <= 0:
+        return False, "disabled"
+    if snapshot is None:
+        return False, f"battery unknown, threshold {threshold_text}"
+    if not snapshot.battery_present:
+        return False, f"no battery, threshold {threshold_text}"
+    battery_text = format_percent_value(snapshot.percent)
+    if snapshot.is_plugged:
+        return False, f"battery {battery_text}, plugged in, threshold {threshold_text}"
+    if snapshot.percent < threshold:
+        return True, f"battery {battery_text}, threshold {threshold_text}"
+    return False, f"battery {battery_text}, threshold {threshold_text}"
+
+
+def format_percent_value(value: float | int) -> str:
+    number = float(value)
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
 
 
 def replay_recent_debug_logs(
@@ -431,8 +490,16 @@ class StatusBarController(NSObject):
         )
         self.last_keep_awake_error = None
         self.last_closed_lid_awake_error = None
+        self.last_mac_sleep_error = None
+        self.last_mac_sleep_snapshot = None
+        self.last_status_history_error = None
         self.last_status_read_error = None
         self.event_refresh_pending = False
+        self.agent_awake_last_mode = None
+        self.agent_awake_grace_until_monotonic = None
+        self.agent_awake_requested = False
+        self.battery_sleep_safeguard_active = False
+        self.battery_sleep_safeguard_reason = ""
         self.last_lid_closed = None
         self.last_lid_error = None
         self.led_animation_until_monotonic = 0.0
@@ -495,8 +562,16 @@ class StatusBarController(NSObject):
         except Exception as exc:
             log_status_bar(f"refresh error: {exc}")
             self.set_status(STATE_ASK)
-            self.sync_keep_awake(AgentMode.BLOCKED_ERROR)
-            self.sync_leds(AgentMode.BLOCKED_ERROR, None, LED_DISPLAY_AGENT)
+            battery_snapshot = self.read_battery_snapshot()
+            self.sync_keep_awake(AgentMode.BLOCKED_ERROR, battery_snapshot)
+            mac_sleep_snapshot = self.read_mac_sleep_snapshot()
+            self.record_status_history(
+                AgentMode.BLOCKED_ERROR,
+                STATE_ASK,
+                battery_snapshot,
+                mac_sleep_snapshot,
+            )
+            self.sync_leds(AgentMode.BLOCKED_ERROR, battery_snapshot, LED_DISPLAY_AGENT)
             self.status_item.setMenu_(build_error_menu(exc))
             return
 
@@ -505,7 +580,14 @@ class StatusBarController(NSObject):
         state = state_for_mode(snapshot.aggregate.mode)
         self.observe_connected_devices()
         self.set_status(state)
-        self.sync_keep_awake(snapshot.aggregate.mode)
+        self.sync_keep_awake(snapshot.aggregate.mode, battery_snapshot)
+        mac_sleep_snapshot = self.read_mac_sleep_snapshot()
+        self.record_status_history(
+            snapshot.aggregate.mode,
+            state,
+            battery_snapshot,
+            mac_sleep_snapshot,
+        )
         self.sync_leds(
             snapshot.aggregate.mode,
             battery_snapshot,
@@ -610,6 +692,26 @@ class StatusBarController(NSObject):
         self.set_session_terminal(terminal)
 
     @objc.IBAction
+    def setHistoryTimeframe_(self, sender):
+        selected = sender.selectedItem()
+        value = selected.representedObject() if selected is not None else None
+        if not isinstance(value, (int, float)):
+            return
+        try:
+            self.settings = self.settings.with_history_timeframe(float(value))
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save history timeframe: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        self.refresh_history_chart()
+        self.set_settings_message(
+            f"History timeframe: {history_timeframe_label(self.settings.history_timeframe_seconds)}."
+        )
+
+    @objc.IBAction
     def chooseSessionTerminal_(self, _sender):
         self.choose_session_terminal_app()
 
@@ -629,7 +731,15 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def setClosedLidAwakePolicy_(self, sender):
-        self.set_closed_lid_awake_policy(sender.representedObject())
+        self.set_sleep_prevention_policy(sender.representedObject())
+
+    @objc.IBAction
+    def setOpenLidAwakePolicy_(self, sender):
+        self.set_sleep_prevention_policy(sender.representedObject())
+
+    @objc.IBAction
+    def setSleepPreventionPolicy_(self, sender):
+        self.set_sleep_prevention_policy(sender.representedObject())
 
     @objc.IBAction
     def openSettings_(self, _sender):
@@ -1115,6 +1225,39 @@ class StatusBarController(NSObject):
             f"{self.settings.idle_timeout_seconds / 60:g}",
         )
         self.refresh_remote_host_controls()
+        set_text_control_value(
+            self.settings_fields.get("sleep_prevention_min_battery_percent"),
+            f"{self.settings.sleep_prevention_min_battery_percent:g}",
+        )
+        timeframe_popup = self.settings_fields.get("status_history_timeframe")
+        if timeframe_popup is not None:
+            refresh_history_timeframe_popup(
+                timeframe_popup,
+                self.settings.history_timeframe_seconds,
+            )
+        self.refresh_history_chart()
+
+    def refresh_history_chart(self) -> None:
+        chart = self.settings_fields.get("status_history_chart")
+        status_label = self.settings_fields.get("status_history_status")
+        timeframe_seconds = self.settings.history_timeframe_seconds
+        try:
+            records = read_status_history_records(
+                limit=history_record_limit_for_timeframe(timeframe_seconds)
+            )
+            records = filter_status_history_records(records, timeframe_seconds)
+        except Exception as exc:
+            records = []
+            set_field_value(status_label, f"History: {exc}")
+        else:
+            set_field_value(
+                status_label,
+                status_history_status_text(records, timeframe_seconds),
+            )
+        if chart is not None and hasattr(chart, "setRecords_"):
+            if hasattr(chart, "setTimeframeSeconds_"):
+                chart.setTimeframeSeconds_(timeframe_seconds)
+            chart.setRecords_(records)
 
     def set_settings_message(self, message: str) -> None:
         set_field_value(self.settings_fields.get("message"), message)
@@ -1264,6 +1407,10 @@ class StatusBarController(NSObject):
     def exportDebugHtml_(self, _sender):
         self.export_debug_log("html")
 
+    @objc.IBAction
+    def refreshHistoryChart_(self, _sender):
+        self.refresh_history_chart()
+
     def export_debug_log(self, format_name: str) -> None:
         path = choose_debug_export_path(format_name)
         if path is None:
@@ -1327,6 +1474,9 @@ class StatusBarController(NSObject):
             self.settings_fields.get("recent_session_retention_hours")
         )
         idle_text = text_control_value(self.settings_fields.get("idle_timeout_minutes"))
+        battery_text = text_control_value(
+            self.settings_fields.get("sleep_prevention_min_battery_percent")
+        )
         try:
             retention_hours = float(retention_text) if retention_text else (
                 DEFAULT_RECENT_SESSION_RETENTION_SECONDS / 3600
@@ -1334,8 +1484,11 @@ class StatusBarController(NSObject):
             idle_minutes = float(idle_text) if idle_text else (
                 DEFAULT_IDLE_TIMEOUT_SECONDS / 60
             )
+            min_battery_percent = float(battery_text) if battery_text else (
+                DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
+            )
         except ValueError:
-            self.set_settings_message("Agent list timing must be numeric.")
+            self.set_settings_message("Behavior settings must be numeric.")
             return
 
         try:
@@ -1343,15 +1496,18 @@ class StatusBarController(NSObject):
                 recent_session_retention_seconds=retention_hours * 3600,
                 idle_timeout_seconds=idle_minutes * 60,
             )
+            self.settings = self.settings.with_sleep_prevention_battery_safeguard(
+                min_battery_percent
+            )
             save_settings(self.settings)
         except Exception as exc:
-            self.set_settings_message(f"Could not save agent list timing: {exc}")
+            self.set_settings_message(f"Could not save behavior settings: {exc}")
             self.settings = load_settings()
             self.refresh_settings_window()
             return
 
         self.reload_monitor()
-        self.set_settings_message("Agent list timing saved.")
+        self.set_settings_message("Behavior settings saved.")
         self.refresh_settings_window()
         self.refresh_(None)
 
@@ -1498,23 +1654,28 @@ class StatusBarController(NSObject):
             self.virtual_status_device.hide()
         self.refresh_(None)
 
-    def set_closed_lid_awake_policy(self, policy: str | None) -> None:
-        if policy not in CLOSED_LID_AWAKE_CHOICES:
+    def set_sleep_prevention_policy(self, policy: str | None) -> None:
+        if policy not in SLEEP_PREVENTION_CHOICES:
             return
         try:
-            self.settings = self.settings.with_closed_lid_awake_policy(str(policy))
+            self.settings = self.settings.with_sleep_prevention_policy(str(policy))
             save_settings(self.settings)
         except Exception as exc:
-            self.set_settings_message(f"Could not save lid sleep setting: {exc}")
+            self.set_settings_message(f"Could not save sleep prevention setting: {exc}")
             self.settings = load_settings()
             return
 
         self.set_settings_message(
-            f"Closed-lid awake: {CLOSED_LID_AWAKE_LABELS[self.settings.closed_lid_awake_policy]}."
+            f"Sleep prevention: {SLEEP_PREVENTION_LABELS[self.settings.sleep_prevention_policy]}."
         )
-        self.sync_closed_lid_awake()
         self.refresh_settings_window()
         self.refresh_(None)
+
+    def set_closed_lid_awake_policy(self, policy: str | None) -> None:
+        self.set_sleep_prevention_policy(policy)
+
+    def set_open_lid_awake_policy(self, policy: str | None) -> None:
+        self.set_sleep_prevention_policy(policy)
 
     def lid_animation_from_fields(self, kind: str) -> LedAnimationSetting | None:
         program_field = self.settings_fields.get(f"{kind}_animation_program")
@@ -1783,6 +1944,52 @@ class StatusBarController(NSObject):
                     f"battery preview power={'plugged' if plugged else 'unplugged'}"
                 )
         self.last_power_connected = plugged
+
+    def read_mac_sleep_snapshot(self) -> MacSleepSnapshot | None:
+        snapshot = read_mac_sleep_snapshot()
+        error = snapshot.error or None
+        if error != self.last_mac_sleep_error:
+            self.last_mac_sleep_error = error
+            if error:
+                log_status_bar(f"mac_sleep error: {error}")
+        self.last_mac_sleep_snapshot = snapshot
+        return snapshot
+
+    def record_status_history(
+        self,
+        mode: AgentMode,
+        state: StatusBarState,
+        battery_snapshot: BatterySnapshot | None,
+        mac_sleep_snapshot: MacSleepSnapshot | None,
+    ) -> None:
+        try:
+            record = status_history_record(
+                agent_mode=mode.value,
+                display_status=state.label,
+                battery=battery_snapshot,
+                mac_sleep=mac_sleep_snapshot,
+                lid_closed=self.last_lid_closed,
+                keep_awake_requested=bool(self.keep_awake.holding_requested),
+                keep_awake_active=bool(self.keep_awake.process_running()),
+                sleep_prevention_policy=self.settings.sleep_prevention_policy,
+                sleep_prevention_battery_safeguard_active=bool(
+                    self.battery_sleep_safeguard_active
+                ),
+                sleep_prevention_min_battery_percent=(
+                    self.settings.sleep_prevention_min_battery_percent
+                ),
+                closed_lid_awake_requested=bool(self.closed_lid_awake.last_requested),
+                closed_lid_awake_active=bool(self.closed_lid_awake.active()),
+            )
+            append_status_history_record(record)
+        except Exception as exc:
+            error = str(exc)
+            if error != self.last_status_history_error:
+                self.last_status_history_error = error
+                log_status_bar(f"status_history error: {error}")
+            return
+
+        self.last_status_history_error = None
 
     def active_led_display_kind(self, snapshot: BatterySnapshot | None) -> str:
         if self.settings.led_display == LED_DISPLAY_CUSTOM:
@@ -2338,9 +2545,31 @@ class StatusBarController(NSObject):
         if self.last_snapshot is not None:
             self.refresh_(None)
 
-    def sync_keep_awake(self, mode: AgentMode) -> None:
+    def sync_keep_awake(
+        self,
+        mode: AgentMode,
+        battery_snapshot: BatterySnapshot | None = None,
+    ) -> None:
+        agents_active = self.update_agent_awake_request(mode)
+        safeguard_active, safeguard_reason = sleep_prevention_battery_safeguard(
+            battery_snapshot,
+            self.settings.sleep_prevention_min_battery_percent,
+        )
+        if safeguard_active != self.battery_sleep_safeguard_active:
+            log_status_bar(
+                "sleep_battery_safeguard="
+                f"{'active' if safeguard_active else 'released'} "
+                f"{safeguard_reason}"
+            )
+        self.battery_sleep_safeguard_active = safeguard_active
+        self.battery_sleep_safeguard_reason = safeguard_reason
+        policy = self.settings.sleep_prevention_policy
+        should_hold = awake_policy_should_hold(
+            policy,
+            agents_active=agents_active,
+        ) and not safeguard_active
         was_running = self.keep_awake.process_running()
-        self.keep_awake.update(mode)
+        self.keep_awake.update_requested(should_hold, mode=mode)
         is_running = self.keep_awake.process_running()
         if was_running != is_running:
             log_status_bar(f"keep_awake={'active' if is_running else 'released'}")
@@ -2349,7 +2578,7 @@ class StatusBarController(NSObject):
             if self.last_keep_awake_error:
                 log_status_bar(f"keep_awake error: {self.last_keep_awake_error}")
 
-        self.sync_closed_lid_awake()
+        self.sync_closed_lid_awake(agents_active=agents_active)
 
         if not self.leds_enabled:
             return
@@ -2364,18 +2593,53 @@ class StatusBarController(NSObject):
             if self.last_status_read_error:
                 log_status_bar(f"sd_keepalive error: {self.last_status_read_error}")
 
-    def sync_closed_lid_awake(self) -> None:
+    def update_agent_awake_request(self, mode: AgentMode) -> bool:
+        current = time.monotonic()
+        if mode in {
+            AgentMode.WORKING,
+            AgentMode.TOOL_RUNNING,
+            AgentMode.LONG_TASK_PROGRESS,
+        }:
+            self.agent_awake_grace_until_monotonic = None
+            requested = True
+        elif mode in {
+            AgentMode.COMPLETED,
+            AgentMode.WAITING_FOR_INPUT,
+            AgentMode.BLOCKED_ERROR,
+        }:
+            if (
+                self.agent_awake_last_mode != mode
+                or self.agent_awake_grace_until_monotonic is None
+            ):
+                self.agent_awake_grace_until_monotonic = (
+                    current + self.keep_awake.grace_seconds
+                )
+            requested = current < self.agent_awake_grace_until_monotonic
+        else:
+            requested = (
+                self.agent_awake_grace_until_monotonic is not None
+                and current < self.agent_awake_grace_until_monotonic
+            )
+
+        self.agent_awake_last_mode = mode
+        self.agent_awake_requested = requested
+        return requested
+
+    def sync_closed_lid_awake(self, *, agents_active: bool | None = None) -> None:
         was_active = self.closed_lid_awake.active()
         self.closed_lid_awake.set_use_system_disable(sleep_helper_installed())
+        policy = self.settings.sleep_prevention_policy
+        if self.battery_sleep_safeguard_active:
+            policy = SLEEP_PREVENTION_NEVER
         self.closed_lid_awake.update(
-            self.settings.closed_lid_awake_policy,
-            agents_active=self.keep_awake.holding_requested,
+            policy,
+            agents_active=self.agent_awake_requested if agents_active is None else agents_active,
         )
         is_active = self.closed_lid_awake.active()
         if was_active != is_active:
             log_status_bar(
                 f"closed_lid_awake={'active' if is_active else 'released'} "
-                f"policy={self.settings.closed_lid_awake_policy}"
+                f"policy={self.settings.sleep_prevention_policy}"
             )
         if self.closed_lid_awake.last_error != self.last_closed_lid_awake_error:
             self.last_closed_lid_awake_error = self.closed_lid_awake.last_error
@@ -2456,11 +2720,9 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         )
 
     menu.addItem_(NSMenuItem.separatorItem())
-    menu.addItem_(disabled_menu_item("Keep Awake With Lid Closed"))
-    for policy in CLOSED_LID_AWAKE_CHOICES:
-        menu.addItem_(build_closed_lid_awake_policy_item(policy, target))
-    if target.closed_lid_awake.last_error:
-        menu.addItem_(disabled_menu_item(f"Sleep warning: {target.closed_lid_awake.last_error}"))
+    menu.addItem_(disabled_menu_item("Closed-Lid Sleep Prevention"))
+    for policy in SLEEP_PREVENTION_CHOICES:
+        menu.addItem_(build_sleep_prevention_policy_item(policy, target))
 
     menu.addItem_(NSMenuItem.separatorItem())
     setup = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -2490,15 +2752,15 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
     return menu
 
 
-def build_closed_lid_awake_policy_item(policy: str, target: StatusBarController) -> NSMenuItem:
+def build_sleep_prevention_policy_item(policy: str, target: StatusBarController) -> NSMenuItem:
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        CLOSED_LID_AWAKE_LABELS[policy],
-        "setClosedLidAwakePolicy:",
+        SLEEP_PREVENTION_LABELS[policy],
+        "setSleepPreventionPolicy:",
         "",
     )
     item.setTarget_(target)
     item.setRepresentedObject_(policy)
-    item.setState_(1 if target.settings.closed_lid_awake_policy == policy else 0)
+    item.setState_(1 if target.settings.sleep_prevention_policy == policy else 0)
     return item
 
 
@@ -2720,6 +2982,607 @@ def format_byte_count(size: int) -> str:
         value /= 1024
 
 
+class StatusHistoryChartView(NSView):
+    def initWithFrame_(self, frame):
+        self = objc.super(StatusHistoryChartView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self.records = ()
+        self.timeframe_seconds = DEFAULT_HISTORY_TIMEFRAME_SECONDS
+        return self
+
+    def setRecords_(self, records):
+        self.records = tuple(records or ())
+        self.setNeedsDisplay_(True)
+
+    def setTimeframeSeconds_(self, seconds):
+        if isinstance(seconds, (int, float)):
+            self.timeframe_seconds = float(seconds)
+        self.setNeedsDisplay_(True)
+
+    def drawRect_(self, _dirty_rect):
+        draw_status_history_chart(
+            self.bounds(),
+            getattr(self, "records", ()),
+            getattr(self, "timeframe_seconds", DEFAULT_HISTORY_TIMEFRAME_SECONDS),
+        )
+
+
+def status_history_status_text(
+    records: list[dict[str, object]],
+    timeframe_seconds: float | None = None,
+) -> str:
+    timeframe = history_timeframe_label(timeframe_seconds)
+    if not records:
+        return f"History: {timeframe} - no samples"
+
+    latest = records[-1]
+    pieces = [
+        timeframe,
+        f"{len(records)} samples",
+        f"latest {compact_history_time(latest.get('recorded_at'))}",
+    ]
+    battery = numeric_history_value(latest.get("battery_level"))
+    if battery is not None:
+        pieces.append(f"battery {battery:.0f}%")
+    charger = numeric_history_value(latest.get("charger_power_watts"))
+    if charger is not None:
+        pieces.append(f"charger {charger:.0f}W")
+    return "History: " + " - ".join(pieces)
+
+
+def compact_history_time(value: object) -> str:
+    parsed = parse_history_timestamp(value)
+    if parsed is None:
+        return "unknown"
+    return datetime.fromtimestamp(parsed, timezone.utc).astimezone().strftime("%H:%M:%S")
+
+
+def history_timeframe_label(seconds: float | None) -> str:
+    if seconds is None:
+        seconds = DEFAULT_HISTORY_TIMEFRAME_SECONDS
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        value = float(DEFAULT_HISTORY_TIMEFRAME_SECONDS)
+    for choice, label in HISTORY_TIMEFRAME_LABELS.items():
+        if abs(value - float(choice)) < 0.5:
+            return label
+    hours = max(1.0, value / 3600.0)
+    return f"Last {hours:g}h"
+
+
+def history_record_limit_for_timeframe(seconds: float | None) -> int:
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        value = float(DEFAULT_HISTORY_TIMEFRAME_SECONDS)
+    estimate = value / max(1.0, STATUS_BAR_REFRESH_SECONDS)
+    return max(
+        STATUS_BAR_HISTORY_CHART_RECORD_LIMIT,
+        int(estimate * STATUS_BAR_HISTORY_CHART_RECORD_LIMIT_MULTIPLIER)
+        + STATUS_BAR_HISTORY_CHART_RECORD_LIMIT_PADDING,
+    )
+
+
+def filter_status_history_records(
+    records: list[dict[str, object]],
+    timeframe_seconds: float | None,
+) -> list[dict[str, object]]:
+    if not records:
+        return []
+    try:
+        window = float(timeframe_seconds)
+    except (TypeError, ValueError):
+        window = float(DEFAULT_HISTORY_TIMEFRAME_SECONDS)
+    if window <= 0:
+        return list(records)
+
+    dated: list[tuple[float, dict[str, object]]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        timestamp = parse_history_timestamp(record.get("recorded_at"))
+        if timestamp is None:
+            continue
+        dated.append((timestamp, record))
+    if not dated:
+        return []
+
+    end = max(timestamp for timestamp, _record in dated)
+    start = end - window
+    return [record for timestamp, record in dated if timestamp >= start]
+
+
+def draw_status_history_chart(bounds, records, timeframe_seconds: float | None = None) -> None:
+    x, y, width, height = rect_parts(bounds)
+    fill_rounded_rect(x, y, width, height, 8, chart_color("#FBFBFD"))
+
+    points = history_points(records)
+    if not points:
+        draw_chart_text("No history yet", x + 18, y + height / 2 - 8, width - 36, 16)
+        return
+
+    end = max(points[-1][0], points[0][0] + 1.0)
+    try:
+        window = float(timeframe_seconds)
+    except (TypeError, ValueError):
+        window = float(DEFAULT_HISTORY_TIMEFRAME_SECONDS)
+    if window > 0:
+        start = end - max(60.0, window)
+    else:
+        start = points[0][0]
+        if end - start < 60.0:
+            end = start + 60.0
+
+    label_width = 96.0
+    value_width = 58.0
+    chart_x = x + label_width
+    chart_width = max(20.0, width - label_width - value_width - 18.0)
+    top_padding = 16.0
+    legend_height = 54.0
+    bottom_padding = legend_height + 14.0
+    rows = (
+        ("Agent", "agent"),
+        ("Battery", "battery"),
+        ("Charger", "charger"),
+        ("SidePulse", "sidepulse"),
+        ("macOS Sleep", "mac_sleep"),
+        ("Lid", "lid"),
+    )
+    row_height = (height - top_padding - bottom_padding) / len(rows)
+    for index, (label, kind) in enumerate(rows):
+        row_y = y + height - top_padding - (index + 1) * row_height
+        if index % 2 == 1:
+            fill_rect(
+                chart_x,
+                row_y + 2.0,
+                chart_width,
+                max(1.0, row_height - 4.0),
+                chart_color("#FFFFFF", 0.42),
+            )
+        fill_rect(
+            chart_x,
+            row_y + row_height / 2 - 0.5,
+            chart_width,
+            1.0,
+            chart_color("#E6E6E8"),
+        )
+        draw_chart_text(label, x + 12, row_y + row_height / 2 - 7, label_width - 18, 14)
+        if kind == "agent":
+            draw_history_segments(
+                points,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.33,
+                row_height * 0.34,
+                history_status_color,
+            )
+        elif kind == "battery":
+            draw_history_line(
+                points,
+                "battery_level",
+                100.0,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.16,
+                row_height * 0.68,
+                chart_color("#1F7AFF", 0.95),
+                chart_color("#1F7AFF", 0.09),
+            )
+            draw_current_history_value(
+                points,
+                "battery_level",
+                "%",
+                chart_x + chart_width + 8.0,
+                row_y + row_height / 2 - 7,
+                value_width - 8.0,
+            )
+        elif kind == "charger":
+            charger_max = nice_history_max(
+                numeric_history_value(record.get("charger_power_watts")) or 0.0
+                for _timestamp, record in points
+            )
+            draw_history_line(
+                points,
+                "charger_power_watts",
+                charger_max,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.16,
+                row_height * 0.68,
+                chart_color("#1FA463", 0.95),
+                chart_color("#1FA463", 0.08),
+            )
+            draw_current_history_value(
+                points,
+                "charger_power_watts",
+                "W",
+                chart_x + chart_width + 8.0,
+                row_y + row_height / 2 - 7,
+                value_width - 8.0,
+            )
+        elif kind == "sidepulse":
+            draw_history_segments(
+                points,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.33,
+                row_height * 0.34,
+                sidepulse_awake_color,
+            )
+        elif kind == "mac_sleep":
+            draw_history_segments(
+                points,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.33,
+                row_height * 0.34,
+                mac_sleep_color,
+            )
+        else:
+            draw_history_segments(
+                points,
+                start,
+                end,
+                chart_x,
+                chart_width,
+                row_y + row_height * 0.33,
+                row_height * 0.34,
+                lid_color,
+            )
+
+    draw_history_legend(chart_x, y + 8.0, chart_width + value_width, legend_height)
+
+
+def draw_history_line(
+    points,
+    key: str,
+    max_value: float,
+    start: float,
+    end: float,
+    x: float,
+    width: float,
+    y: float,
+    height: float,
+    line_color,
+    fill_color,
+) -> None:
+    if max_value <= 0:
+        return
+    draw_metric_grid(x, width, y, height)
+    baseline = y + 1.0
+    segments = history_line_segments(points, key, max_value, start, end, x, width, y, height)
+    for segment in segments:
+        if len(segment) == 1:
+            point_x, point_y = segment[0]
+            fill_rect(point_x - 0.5, point_y - 0.5, 1.0, 1.0, line_color)
+            continue
+        area_path = NSBezierPath.bezierPath()
+        area_path.moveToPoint_((segment[0][0], baseline))
+        for point_x, point_y in segment:
+            area_path.lineToPoint_((point_x, point_y))
+        area_path.lineToPoint_((segment[-1][0], baseline))
+        area_path.closePath()
+        fill_color.set()
+        area_path.fill()
+
+        line_path = NSBezierPath.bezierPath()
+        line_path.moveToPoint_(segment[0])
+        for point in segment[1:]:
+            line_path.lineToPoint_(point)
+        line_path.setLineWidth_(1.8)
+        line_color.set()
+        line_path.stroke()
+
+
+def draw_metric_grid(x: float, width: float, y: float, height: float) -> None:
+    for ratio, alpha in ((0.0, 0.65), (0.5, 0.42), (1.0, 0.65)):
+        fill_rect(
+            x,
+            y + height * ratio,
+            width,
+            1.0,
+            chart_color("#D9DADD", alpha),
+        )
+
+
+def history_line_segments(
+    points,
+    key: str,
+    max_value: float,
+    start: float,
+    end: float,
+    x: float,
+    width: float,
+    y: float,
+    height: float,
+) -> list[list[tuple[float, float]]]:
+    segments: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    if max_value <= 0:
+        return segments
+    for timestamp, record in points:
+        value = numeric_history_value(record.get(key))
+        if value is None:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        clamped = max(0.0, min(max_value, value))
+        point_x = x_for_history_time(timestamp, start, end, x, width)
+        point_y = y + height * (clamped / max_value)
+        current.append((point_x, point_y))
+    if current:
+        segments.append(current)
+    return segments
+
+
+def draw_current_history_value(
+    points,
+    key: str,
+    suffix: str,
+    x: float,
+    y: float,
+    width: float,
+) -> None:
+    value = latest_numeric_history_value(points, key)
+    if value is None:
+        text = "-"
+    elif suffix == "%":
+        text = f"{value:.0f}%"
+    elif suffix == "W":
+        text = f"{value:.0f}W"
+    else:
+        text = f"{value:g}{suffix}"
+    draw_chart_text(text, x, y, width, 14)
+
+
+def latest_numeric_history_value(points, key: str) -> float | None:
+    for _timestamp, record in reversed(points):
+        value = numeric_history_value(record.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def nice_history_max(values) -> float:
+    peak = max((float(value) for value in values), default=0.0)
+    if peak <= 30.0:
+        return 30.0
+    for ceiling in (45.0, 60.0, 75.0, 90.0, 100.0, 140.0, 180.0, 240.0):
+        if peak <= ceiling:
+            return ceiling
+    return ((int(peak) // 50) + 1) * 50.0
+
+
+def draw_history_segments(
+    points,
+    start: float,
+    end: float,
+    x: float,
+    width: float,
+    y: float,
+    height: float,
+    color_fn,
+) -> None:
+    for index, (timestamp, record) in enumerate(points):
+        next_timestamp = points[index + 1][0] if index + 1 < len(points) else end
+        left = x_for_history_time(timestamp, start, end, x, width)
+        right = x_for_history_time(next_timestamp, start, end, x, width)
+        fill_rect(left, y, max(1.0, right - left), height, color_fn(record))
+
+
+def history_points(records) -> list[tuple[float, dict[str, object]]]:
+    points: list[tuple[float, dict[str, object]]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        timestamp = parse_history_timestamp(record.get("recorded_at"))
+        if timestamp is None:
+            continue
+        points.append((timestamp, record))
+    points.sort(key=lambda item: item[0])
+    return points
+
+
+def parse_history_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def numeric_history_value(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def x_for_history_time(
+    timestamp: float,
+    start: float,
+    end: float,
+    x: float,
+    width: float,
+) -> float:
+    return x + width * ((timestamp - start) / max(1.0, end - start))
+
+
+def history_status_color(record: dict[str, object]):
+    status = " ".join(
+        str(record.get(key, "")).lower()
+        for key in ("display_status", "agent_status")
+    )
+    if "ask" in status or "waiting" in status or "blocked" in status:
+        return chart_color("#FF8A00", 0.9)
+    if "work" in status or "tool" in status or "progress" in status:
+        return chart_color("#00AEEF", 0.9)
+    if "done" in status or "complete" in status:
+        return chart_color("#22B14C", 0.9)
+    return chart_color("#A8A8A8", 0.72)
+
+
+def sidepulse_awake_color(record: dict[str, object]):
+    if record.get("sleep_prevention_battery_safeguard_active") is True:
+        return chart_color("#FF4A00", 0.9)
+    if (
+        record.get("sidepulse_keep_awake_active") is True
+        or record.get("sidepulse_closed_lid_awake_active") is True
+    ):
+        return chart_color("#7B61FF", 0.86)
+    if (
+        record.get("sidepulse_keep_awake_requested") is True
+        or record.get("sidepulse_closed_lid_awake_requested") is True
+    ):
+        return chart_color("#B7A7FF", 0.86)
+    return chart_color("#C9CDD3", 0.72)
+
+
+def mac_sleep_color(record: dict[str, object]):
+    status = str(record.get("mac_sleep_status", "")).lower()
+    if record.get("mac_sleep_prevented") is True or status == "prevented":
+        return chart_color("#FFB000", 0.88)
+    if record.get("mac_sleep_prevented") is False or status == "allowed":
+        return chart_color("#36B37E", 0.78)
+    return chart_color("#C9CDD3", 0.72)
+
+
+def lid_color(record: dict[str, object]):
+    if record.get("lid_closed") is True or record.get("lid_status") == "closed":
+        return chart_color("#FF6B00", 0.88)
+    if record.get("lid_closed") is False or record.get("lid_status") == "open":
+        return chart_color("#4AA3FF", 0.72)
+    return chart_color("#C9CDD3", 0.72)
+
+
+def history_legend_rows() -> tuple[tuple[object, ...], ...]:
+    return (
+        (
+            "Agent",
+            ("#FF8A00", "Ask"),
+            ("#00AEEF", "Working"),
+            ("#22B14C", "Done"),
+            ("#A8A8A8", "Idle"),
+            ("#1F7AFF", "Battery"),
+            ("#1FA463", "Charger"),
+        ),
+        (
+            "SidePulse",
+            ("#7B61FF", "Awake"),
+            ("#B7A7FF", "Requested"),
+            ("#FF4A00", "Safeguard"),
+            ("#C9CDD3", "Off"),
+        ),
+        (
+            "macOS",
+            ("#FFB000", "Prevented"),
+            ("#36B37E", "Allowed"),
+            ("#FF6B00", "Lid closed"),
+            ("#4AA3FF", "Lid open"),
+        ),
+    )
+
+
+def draw_history_legend(x: float, y: float, width: float, height: float) -> None:
+    rows = history_legend_rows()
+    row_height = height / max(1, len(rows))
+    for row_index, row in enumerate(rows):
+        cursor = x
+        row_y = y + height - (row_index + 1) * row_height + 2.0
+        heading = str(row[0])
+        draw_chart_text(heading, cursor, row_y, 58.0, 14.0)
+        cursor += 62.0
+        for item in row[1:]:
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            color, label = item
+            label_text = str(label)
+            fill_rounded_rect(
+                cursor,
+                row_y + 3.0,
+                10.0,
+                8.0,
+                2.0,
+                chart_color(str(color), 0.92),
+            )
+            draw_chart_text(label_text, cursor + 14.0, row_y, 92.0, 14.0)
+            cursor += min(108.0, max(44.0, 18.0 + len(label_text) * 6.5))
+            if cursor > x + width - 48.0:
+                break
+
+
+def fill_rounded_rect(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    radius: float,
+    color,
+) -> None:
+    color.set()
+    path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        ((x, y), (width, height)),
+        radius,
+        radius,
+    )
+    path.fill()
+
+
+def fill_rect(x: float, y: float, width: float, height: float, color) -> None:
+    color.set()
+    path = NSBezierPath.bezierPathWithRect_(((x, y), (width, height)))
+    path.fill()
+
+
+def draw_chart_text(text: str, x: float, y: float, width: float, height: float) -> None:
+    attrs = {
+        NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
+        NSForegroundColorAttributeName: chart_color("#676767"),
+    }
+    NSString.stringWithString_(str(text)).drawInRect_withAttributes_(
+        ((x, y), (width, height)),
+        attrs,
+    )
+
+
+def chart_color(hex_color: str, alpha: float = 1.0):
+    text = hex_color.strip().lstrip("#")
+    if len(text) != 6:
+        return NSColor.colorWithCalibratedWhite_alpha_(0.5, alpha)
+    red = int(text[0:2], 16) / 255.0
+    green = int(text[2:4], 16) / 255.0
+    blue = int(text[4:6], 16) / 255.0
+    return NSColor.colorWithCalibratedRed_green_blue_alpha_(red, green, blue, alpha)
+
+
+def rect_parts(rect) -> tuple[float, float, float, float]:
+    return (
+        float(rect.origin.x),
+        float(rect.origin.y),
+        float(rect.size.width),
+        float(rect.size.height),
+    )
+
+
 def build_settings_window(target: StatusBarController) -> NSWindow:
     width = 680
     height = 560
@@ -2768,6 +3631,13 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         tab_view,
         "remote",
         "Remote",
+        tab_width,
+        tab_height,
+    )
+    history_tab = add_settings_tab(
+        tab_view,
+        "history",
+        "History",
         tab_width,
         tab_height,
     )
@@ -2924,7 +3794,28 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "Idle timeout", 32, 316, 120, 22)
     idle_minutes = add_editable_field(behavior_tab, "", 224, 314, 58, 24)
     add_label(behavior_tab, "minutes", 292, 316, 80, 22)
-    add_button(behavior_tab, "Save", 32, 266, 90, 28, target, "saveAgentListTiming:")
+    add_separator(behavior_tab, 24, 272, tab_width - 48)
+    add_label(behavior_tab, "Sleep Prevention", 24, 238, 240, 24)
+    add_label(behavior_tab, "Let Mac sleep on battery below", 32, 196, 210, 22)
+    min_battery_percent = add_editable_field(behavior_tab, "", 260, 194, 58, 24)
+    add_label(behavior_tab, "%", 328, 196, 24, 22)
+    add_button(behavior_tab, "Save", 32, 112, 90, 28, target, "saveAgentListTiming:")
+
+    add_label(history_tab, "Status History", 24, 398, 240, 24)
+    add_label(history_tab, "Timeframe", 430, 398, 76, 22)
+    history_timeframe = add_history_timeframe_popup(history_tab, 508, 394, target)
+    history_status = add_label(history_tab, "", 32, 360, 588, 22)
+    history_chart = StatusHistoryChartView.alloc().initWithFrame_(((24, 86), (612, 250)))
+    history_tab.addSubview_(history_chart)
+    add_button(history_tab, "Refresh", 32, 42, 90, 28, target, "refreshHistoryChart:")
+    add_label(
+        history_tab,
+        "Rows: agent display, battery %, charger W, SidePulse awake, macOS sleep, lid.",
+        134,
+        46,
+        480,
+        22,
+    )
 
     add_label(remote_tab, "Remote Claude & Codex", 24, 398, 260, 24)
     add_label(
@@ -3015,6 +3906,10 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "remote_ssh_target": remote_ssh_target,
         "remote_host_status": remote_host_status,
         "remote_config_path": remote_config_path,
+        "sleep_prevention_min_battery_percent": min_battery_percent,
+        "status_history_timeframe": history_timeframe,
+        "status_history_status": history_status,
+        "status_history_chart": history_chart,
         "message": message,
         "settings_path": settings_path,
     }
@@ -3129,6 +4024,19 @@ def add_terminal_popup(parent, x: int, y: int, target):
     return popup
 
 
+def add_history_timeframe_popup(parent, x: int, y: int, target):
+    popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+        ((x, y), (112, 26)), False
+    )
+    popup.setTarget_(target)
+    popup.setAction_("setHistoryTimeframe:")
+    for seconds in HISTORY_TIMEFRAME_CHOICES:
+        popup.addItemWithTitle_(history_timeframe_label(seconds))
+        popup.lastItem().setRepresentedObject_(float(seconds))
+    parent.addSubview_(popup)
+    return popup
+
+
 def provider_open_actions(provider: str) -> tuple[str, ...]:
     if provider == "claude":
         return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
@@ -3183,6 +4091,15 @@ def refresh_terminal_popup(popup, terminal_app: str) -> None:
         item.setEnabled_(terminal_app_selectable(item_terminal) or item_terminal == selected)
         if item_terminal == selected:
             popup.selectItemAtIndex_(index)
+
+
+def refresh_history_timeframe_popup(popup, selected_seconds: float) -> None:
+    for index in range(popup.numberOfItems()):
+        item = popup.itemAtIndex_(index)
+        value = item.representedObject()
+        if isinstance(value, (int, float)) and abs(float(value) - selected_seconds) < 0.5:
+            popup.selectItemAtIndex_(index)
+            return
 
 
 def terminal_app_label(terminal_app: str) -> str:

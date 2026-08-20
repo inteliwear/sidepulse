@@ -7,11 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .battery import BatterySnapshot
+from .lid_sleep import MacSleepSnapshot
 from .models import AgentStatus, HookEvent
 from .providers import default_state_dir
 
 
 STATUS_AUDIT_LOG_NAME = "event-status.jsonl"
+STATUS_HISTORY_LOG_NAME = "status-history.jsonl"
 RAW_PREVIEW_LIMIT = 2000
 MESSAGE_PREVIEW_LIMIT = 240
 AUDIT_COLUMNS = (
@@ -36,6 +39,10 @@ def default_status_audit_log_path(home: Path | None = None) -> Path:
     return default_state_dir(home) / STATUS_AUDIT_LOG_NAME
 
 
+def default_status_history_log_path(home: Path | None = None) -> Path:
+    return default_state_dir(home) / STATUS_HISTORY_LOG_NAME
+
+
 def append_status_audit_record(
     event: HookEvent,
     status: AgentStatus | None,
@@ -56,6 +63,88 @@ def append_status_audit_record(
             )
     except OSError:
         pass
+
+
+def append_status_history_record(
+    record: dict[str, object],
+    *,
+    path: Path | None = None,
+) -> None:
+    target = path or default_status_history_log_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                record,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            + "\n"
+        )
+
+
+def status_history_record(
+    *,
+    agent_mode: str,
+    display_status: str,
+    battery: BatterySnapshot | None,
+    mac_sleep: MacSleepSnapshot | None,
+    lid_closed: bool | None,
+    keep_awake_requested: bool,
+    keep_awake_active: bool,
+    sleep_prevention_policy: str,
+    sleep_prevention_battery_safeguard_active: bool,
+    sleep_prevention_min_battery_percent: float | None,
+    closed_lid_awake_requested: bool,
+    closed_lid_awake_active: bool,
+    recorded_at: datetime | None = None,
+) -> dict[str, object]:
+    at = recorded_at or datetime.now(timezone.utc)
+    battery_percent = battery.percent if battery is not None else None
+    adapter_power = battery.adapter_power if battery is not None else None
+    return {
+        "recorded_at": at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "agent_status": agent_mode,
+        "display_status": display_status,
+        "battery_level": battery_percent,
+        "battery_charging": battery.is_charging if battery is not None else None,
+        "battery_charged": battery.is_charged if battery is not None else None,
+        "battery_present": battery.battery_present if battery is not None else None,
+        "battery_power_watts": round(battery.battery_watts, 2) if battery is not None else None,
+        "charger_connected": battery.is_plugged if battery is not None else None,
+        "adapter_connected": battery.adapter_connected if battery is not None else None,
+        "charger_power_watts": round(adapter_power, 2) if adapter_power is not None else None,
+        "adapter_watts": battery.adapter_watts if battery is not None else None,
+        "adapter_voltage": round(battery.adapter_voltage, 2) if battery is not None else None,
+        "adapter_current": round(battery.adapter_current, 2) if battery is not None else None,
+        "adapter_name": battery.adapter_name if battery is not None else "",
+        "adapter_manufacturer": battery.adapter_manufacturer if battery is not None else "",
+        "adapter_model": battery.adapter_model if battery is not None else "",
+        "lid_closed": lid_closed,
+        "lid_status": bool_label(lid_closed, true_label="closed", false_label="open"),
+        "sidepulse_keep_awake_requested": keep_awake_requested,
+        "sidepulse_keep_awake_active": keep_awake_active,
+        "sleep_prevention_policy": sleep_prevention_policy,
+        "sleep_prevention_battery_safeguard_active": sleep_prevention_battery_safeguard_active,
+        "sleep_prevention_min_battery_percent": sleep_prevention_min_battery_percent,
+        "sidepulse_closed_lid_awake_requested": closed_lid_awake_requested,
+        "sidepulse_closed_lid_awake_active": closed_lid_awake_active,
+        "mac_sleep_prevented": mac_sleep.sleep_prevented if mac_sleep is not None else None,
+        "mac_sleep_disabled": mac_sleep.sleep_disabled if mac_sleep is not None else None,
+        "mac_prevent_system_sleep": (
+            mac_sleep.prevent_system_sleep if mac_sleep is not None else None
+        ),
+        "mac_prevent_user_idle_system_sleep": (
+            mac_sleep.prevent_user_idle_system_sleep if mac_sleep is not None else None
+        ),
+        "mac_prevent_user_idle_display_sleep": (
+            mac_sleep.prevent_user_idle_display_sleep if mac_sleep is not None else None
+        ),
+        "mac_user_is_active": mac_sleep.user_is_active if mac_sleep is not None else None,
+        "mac_sleep_status": sleep_status_label(mac_sleep),
+        "mac_sleep_error": mac_sleep.error if mac_sleep is not None and mac_sleep.error else "",
+    }
 
 
 def status_audit_record(event: HookEvent, status: AgentStatus | None) -> dict[str, str]:
@@ -83,6 +172,30 @@ def raw_message(raw: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def bool_label(
+    value: bool | None,
+    *,
+    true_label: str = "true",
+    false_label: str = "false",
+) -> str:
+    if value is True:
+        return true_label
+    if value is False:
+        return false_label
+    return "unknown"
+
+
+def sleep_status_label(mac_sleep: MacSleepSnapshot | None) -> str:
+    if mac_sleep is None:
+        return "unknown"
+    prevented = mac_sleep.sleep_prevented
+    if prevented is True:
+        return "prevented"
+    if prevented is False:
+        return "allowed"
+    return "unknown"
 
 
 def json_preview(value: object) -> str:
@@ -114,6 +227,31 @@ def read_status_audit_records(path: Path | None = None) -> list[dict[str, str]]:
             continue
         if isinstance(obj, dict):
             records.append({column: str(obj.get(column, "")) for column in AUDIT_COLUMNS})
+    return records
+
+
+def read_status_history_records(
+    path: Path | None = None,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, object]]:
+    source = path or default_status_history_log_path()
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    if limit is not None and limit > 0:
+        lines = lines[-limit:]
+
+    records: list[dict[str, object]] = []
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            records.append(obj)
     return records
 
 

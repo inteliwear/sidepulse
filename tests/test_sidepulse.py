@@ -15,9 +15,13 @@ from unittest.mock import patch
 
 from sidepulse.audit import (
     append_status_audit_record,
+    append_status_history_record,
+    default_status_history_log_path,
     export_status_audit_csv,
     export_status_audit_html,
+    read_status_history_records,
     read_status_audit_records,
+    status_history_record,
 )
 from sidepulse.battery import (
     BATTERY_CHARGING_MINT,
@@ -66,9 +70,14 @@ from sidepulse.led_status import (
 )
 from sidepulse.lid_sleep import (
     ClosedLidAwakeController,
+    IOREG_SLEEP_DISABLED_COMMAND,
+    MacSleepSnapshot,
+    PMSET_ASSERTIONS_COMMAND,
     SleepHelperRequiredError,
     closed_lid_awake_should_hold,
     parse_bool_ioreg_property,
+    parse_pmset_assertions,
+    read_mac_sleep_snapshot,
     run_sudo_pmset_disablesleep,
     sleep_helper_sudoers_rule,
 )
@@ -109,10 +118,16 @@ from sidepulse.settings import (
     DEFAULT_DND_END_TIME,
     DEFAULT_DND_START_TIME,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_HISTORY_TIMEFRAME_SECONDS,
     DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
+    HISTORY_TIMEFRAME_24H_SECONDS,
+    HISTORY_TIMEFRAME_48H_SECONDS,
     LID_ANIMATION_CLOSED,
     LID_ANIMATION_OPEN,
     LED_DISPLAY_CUSTOM,
+    SLEEP_PREVENTION_AGENTS,
+    SLEEP_PREVENTION_ALWAYS,
+    SLEEP_PREVENTION_NEVER,
     TERMINAL_APP_ALACRITTY,
     TERMINAL_APP_CUSTOM,
     TERMINAL_APP_GHOSTTY,
@@ -430,6 +445,92 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(export_status_audit_html(html_path, source=log), 1)
             self.assertIn("hook_event,status", csv_path.read_text())
             self.assertIn("SidePulse Agent Debug Log", html_path.read_text())
+
+    def test_status_history_record_includes_charger_power_and_sleep_state(self) -> None:
+        record = status_history_record(
+            agent_mode=AgentMode.WORKING.value,
+            display_status="Working",
+            battery=BatterySnapshot(
+                percent=57,
+                is_charging=True,
+                is_plugged=True,
+                battery_watts=42.53,
+                adapter_connected=True,
+                adapter_watts=86,
+                adapter_voltage=20.2,
+                adapter_current=4.25,
+                adapter_name="USB-C Power Adapter",
+                adapter_manufacturer="Apple",
+                adapter_model="A2166",
+            ),
+            mac_sleep=MacSleepSnapshot(
+                sleep_disabled=False,
+                prevent_system_sleep=True,
+                prevent_user_idle_system_sleep=False,
+                prevent_user_idle_display_sleep=True,
+                user_is_active=True,
+            ),
+            lid_closed=False,
+            keep_awake_requested=True,
+            keep_awake_active=True,
+            sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+            sleep_prevention_battery_safeguard_active=False,
+            sleep_prevention_min_battery_percent=20,
+            closed_lid_awake_requested=False,
+            closed_lid_awake_active=False,
+            recorded_at=datetime(2026, 7, 20, 12, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(record["recorded_at"], "2026-07-20T12:30:00Z")
+        self.assertEqual(record["agent_status"], AgentMode.WORKING.value)
+        self.assertEqual(record["display_status"], "Working")
+        self.assertEqual(record["battery_level"], 57)
+        self.assertEqual(record["battery_power_watts"], 42.53)
+        self.assertTrue(record["charger_connected"])
+        self.assertTrue(record["adapter_connected"])
+        self.assertEqual(record["charger_power_watts"], 86.0)
+        self.assertEqual(record["adapter_watts"], 86)
+        self.assertEqual(record["adapter_voltage"], 20.2)
+        self.assertEqual(record["adapter_current"], 4.25)
+        self.assertEqual(record["adapter_name"], "USB-C Power Adapter")
+        self.assertEqual(record["sleep_prevention_policy"], SLEEP_PREVENTION_AGENTS)
+        self.assertFalse(record["sleep_prevention_battery_safeguard_active"])
+        self.assertEqual(record["sleep_prevention_min_battery_percent"], 20)
+        self.assertEqual(record["mac_sleep_status"], "prevented")
+        self.assertTrue(record["mac_sleep_prevented"])
+        self.assertEqual(record["lid_status"], "open")
+
+    def test_status_history_log_round_trips_and_uses_xdg_state_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "status-history.jsonl"
+            first = {"recorded_at": "2026-07-20T12:00:00Z", "display_status": "Idle"}
+            second = {"recorded_at": "2026-07-20T12:01:00Z", "display_status": "Done"}
+
+            append_status_history_record(first, path=log)
+            append_status_history_record(second, path=log)
+
+            self.assertEqual(read_status_history_records(log), [first, second])
+            self.assertEqual(read_status_history_records(log, limit=1), [second])
+            self.assertEqual(
+                default_status_history_log_path(Path("/Users/example")),
+                Path("/Users/example")
+                / ".local"
+                / "state"
+                / "sidepulse"
+                / "agent-monitor"
+                / "status-history.jsonl",
+            )
+
+    def test_status_history_log_write_errors_are_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocking_file = Path(tmp) / "not-a-directory"
+            blocking_file.write_text("", encoding="utf-8")
+
+            with self.assertRaises(OSError):
+                append_status_history_record(
+                    {"recorded_at": "2026-07-20T12:00:00Z"},
+                    path=blocking_file / "status-history.jsonl",
+                )
 
     def test_hook_event_server_receives_socket_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1526,7 +1627,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(fake.settings.display_for_device(device.device_id), LED_DISPLAY_CUSTOM)
         self.assertEqual(messages[-1], "SidePulse Dot: Manual, LEDs cleared.")
 
-    def test_status_bar_menu_has_closed_lid_awake_policy_choices(self) -> None:
+    def test_status_bar_menu_has_sleep_prevention_title_and_policy_choices(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
@@ -1538,25 +1639,50 @@ class AgentMonitorTests(unittest.TestCase):
         )
         target = SimpleNamespace(
             settings=AgentMonitorSettings(
-                closed_lid_awake_policy=CLOSED_LID_AWAKE_AGENTS,
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
             ),
-            closed_lid_awake=SimpleNamespace(last_error=None),
+            keep_awake=SimpleNamespace(process_running=lambda: True),
+            closed_lid_awake=SimpleNamespace(
+                last_error=None,
+                process_running=lambda: False,
+            ),
+            last_mac_sleep_snapshot=MacSleepSnapshot(
+                sleep_disabled=False,
+                prevent_user_idle_system_sleep=True,
+            ),
+            last_lid_closed=False,
+            agent_awake_requested=True,
+            battery_sleep_safeguard_active=False,
+            battery_sleep_safeguard_reason="battery 87%, threshold 20%",
             status_bar_devices=lambda: [],
         )
 
         menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
         items = [menu.itemAtIndex_(index) for index in range(menu.numberOfItems())]
-        by_title = {item.title(): item for item in items if item.title()}
-        titles = [item.title() for item in items if item.title()]
+        titled_items = [item for item in items if item.title()]
+        titles = [item.title() for item in titled_items]
 
         self.assertLess(titles.index("Agents"), titles.index("Devices"))
-        self.assertIn("Keep Awake With Lid Closed", by_title)
-        self.assertEqual(by_title["Never"].state(), 0)
-        self.assertEqual(by_title["When Agents Work"].state(), 1)
-        self.assertEqual(by_title["Always"].state(), 0)
-        self.assertNotIn("Strong Sleep Override...", by_title)
-        self.assertNotIn("Sleep Helper Missing", by_title)
-        self.assertIn("Setup...", by_title)
+        self.assertIn("Closed-Lid Sleep Prevention", titles)
+        self.assertNotIn(
+            "Status: caffeinate active, closed-lid support off, disablesleep off, macOS prevented",
+            titles,
+        )
+        self.assertNotIn("Lid: open; agent keep-awake window active", titles)
+        self.assertNotIn("Battery safeguard: standby; battery 87%, threshold 20%", titles)
+        policy_index = titles.index("Closed-Lid Sleep Prevention")
+        policy_items = titled_items[policy_index + 1 : policy_index + 4]
+
+        self.assertEqual(
+            [item.title() for item in policy_items],
+            ["Never", "When Agents Work", "Always"],
+        )
+        self.assertEqual([item.state() for item in policy_items], [0, 1, 0])
+        self.assertNotIn("Keep Awake With Lid Open", titles)
+        self.assertNotIn("Keep Awake With Lid Closed", titles)
+        self.assertNotIn("Strong Sleep Override...", titles)
+        self.assertNotIn("Sleep Helper Missing", titles)
+        self.assertIn("Setup...", titles)
 
     def test_dnd_schedule_switches_the_toggle_at_overnight_boundaries(self) -> None:
         try:
@@ -1736,8 +1862,10 @@ class AgentMonitorTests(unittest.TestCase):
             if hasattr(view, "numberOfTabViewItems")
         ]
         self.assertEqual(len(tab_views), 1)
-        self.assertEqual(tab_views[0].numberOfTabViewItems(), 6)
+        self.assertEqual(tab_views[0].numberOfTabViewItems(), 7)
         self.assertIn("debug_log_status", target.settings_fields)
+        self.assertIn("status_history_status", target.settings_fields)
+        self.assertIn("status_history_chart", target.settings_fields)
         self.assertIn("session_terminal", target.settings_fields)
         self.assertIn("custom_terminal_path", target.settings_fields)
         self.assertIn("recent_session_retention_hours", target.settings_fields)
@@ -1751,11 +1879,140 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("dnd_status", target.settings_fields)
         self.assertIn("dnd_enabled", target.settings_buttons)
         self.assertIn("dnd_schedule", target.settings_buttons)
+        self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
+        self.assertIn("status_history_timeframe", target.settings_fields)
         self.assertIn("closed_animation_program", target.settings_fields)
         self.assertIn("closed_animation_duration", target.settings_fields)
         self.assertIn("open_animation_program", target.settings_fields)
         self.assertIn("open_animation_duration", target.settings_fields)
         self.assertNotIn("closed_lid_system_override", target.settings_buttons)
+
+    def test_status_history_status_text_is_compact(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        text = status_bar.status_history_status_text(
+            [
+                {
+                    "recorded_at": "2026-07-20T12:30:00Z",
+                    "battery_level": 76,
+                    "charger_power_watts": 86,
+                }
+            ]
+        )
+
+        self.assertIn("History: Last 12h", text)
+        self.assertIn("1 samples", text)
+        self.assertIn("battery 76%", text)
+        self.assertIn("charger 86W", text)
+        self.assertNotIn("/Users/", text)
+
+    def test_status_history_filters_to_selected_timeframe(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        records = [
+            {"recorded_at": "2026-07-20T00:00:00Z", "display_status": "Idle"},
+            {"recorded_at": "2026-07-20T11:30:00Z", "display_status": "Working"},
+            {"recorded_at": "2026-07-20T12:00:00Z", "display_status": "Done"},
+        ]
+
+        filtered = status_bar.filter_status_history_records(records, 60 * 60)
+
+        self.assertEqual(filtered, records[1:])
+        self.assertEqual(status_bar.history_timeframe_label(60 * 60), "Last 1h")
+        self.assertEqual(
+            status_bar.history_timeframe_label(DEFAULT_HISTORY_TIMEFRAME_SECONDS),
+            "Last 12h",
+        )
+        self.assertGreaterEqual(
+            status_bar.history_record_limit_for_timeframe(HISTORY_TIMEFRAME_48H_SECONDS),
+            2400,
+        )
+
+    def test_status_history_line_segments_scale_metric_values(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        points = [
+            (0.0, {"battery_level": 0}),
+            (30.0, {"battery_level": 50}),
+            (60.0, {"battery_level": 100}),
+        ]
+
+        segments = status_bar.history_line_segments(
+            points,
+            "battery_level",
+            100.0,
+            0.0,
+            60.0,
+            10.0,
+            90.0,
+            20.0,
+            40.0,
+        )
+
+        self.assertEqual(
+            segments,
+            [[(10.0, 20.0), (55.0, 40.0), (100.0, 60.0)]],
+        )
+
+    def test_status_history_legend_names_major_colors(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        text = " ".join(
+            str(item)
+            for row in status_bar.history_legend_rows()
+            for item in row
+        )
+
+        self.assertIn("Ask", text)
+        self.assertIn("Working", text)
+        self.assertIn("Battery", text)
+        self.assertIn("Charger", text)
+        self.assertIn("Lid closed", text)
+
+    def test_status_history_line_segments_split_missing_values(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        points = [
+            (0.0, {"charger_power_watts": 0}),
+            (30.0, {"charger_power_watts": None}),
+            (60.0, {"charger_power_watts": 30}),
+        ]
+
+        segments = status_bar.history_line_segments(
+            points,
+            "charger_power_watts",
+            30.0,
+            0.0,
+            60.0,
+            10.0,
+            90.0,
+            20.0,
+            40.0,
+        )
+
+        self.assertEqual(segments, [[(10.0, 20.0)], [(100.0, 60.0)]])
+        self.assertEqual(
+            status_bar.latest_numeric_history_value(points, "charger_power_watts"),
+            30,
+        )
+        self.assertEqual(status_bar.nice_history_max([0, 12, 30]), 30.0)
+        self.assertEqual(status_bar.nice_history_max([31]), 45.0)
+        self.assertEqual(status_bar.nice_history_max([96]), 100.0)
 
     def test_status_bar_monitor_uses_idle_timeout_setting(self) -> None:
         try:
@@ -3725,6 +3982,211 @@ class AgentMonitorTests(unittest.TestCase):
             closed_lid_awake_should_hold(CLOSED_LID_AWAKE_ALWAYS, agents_active=False)
         )
 
+    def test_status_bar_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(
+                sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
+            ),
+            keep_awake=KeepAwakeController(process_factory=lambda *_args, **_kwargs: FakeProcess()),
+            closed_lid_awake=ClosedLidAwakeController(
+                process_factory=lambda *_args, **_kwargs: FakeProcess()
+            ),
+            last_keep_awake_error=None,
+            last_closed_lid_awake_error=None,
+            last_status_read_error=None,
+            leds_enabled=False,
+            agent_awake_last_mode=None,
+            agent_awake_grace_until_monotonic=None,
+            agent_awake_requested=False,
+            battery_sleep_safeguard_active=False,
+            battery_sleep_safeguard_reason="",
+        )
+        fake.update_agent_awake_request = (
+            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+        )
+        fake.sync_closed_lid_awake = (
+            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+                fake,
+                agents_active=agents_active,
+            )
+        )
+
+        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
+            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.WORKING)
+
+        self.assertFalse(fake.keep_awake.process_running())
+        self.assertFalse(fake.closed_lid_awake.process_running())
+        self.assertTrue(fake.agent_awake_requested)
+
+    def test_status_bar_sleep_prevention_always_holds_caffeinate_while_agents_idle(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(
+                sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
+            ),
+            keep_awake=KeepAwakeController(process_factory=lambda *_args, **_kwargs: FakeProcess()),
+            closed_lid_awake=ClosedLidAwakeController(
+                process_factory=lambda *_args, **_kwargs: FakeProcess()
+            ),
+            last_keep_awake_error=None,
+            last_closed_lid_awake_error=None,
+            last_status_read_error=None,
+            leds_enabled=False,
+            agent_awake_last_mode=None,
+            agent_awake_grace_until_monotonic=None,
+            agent_awake_requested=False,
+            battery_sleep_safeguard_active=False,
+            battery_sleep_safeguard_reason="",
+        )
+        fake.update_agent_awake_request = (
+            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+        )
+        fake.sync_closed_lid_awake = (
+            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+                fake,
+                agents_active=agents_active,
+            )
+        )
+
+        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
+            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.IDLE_READY)
+
+        self.assertTrue(fake.keep_awake.process_running())
+        self.assertTrue(fake.closed_lid_awake.process_running())
+        self.assertFalse(fake.agent_awake_requested)
+
+    def test_status_bar_sleep_prevention_agents_drives_both_paths(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+            ),
+            keep_awake=KeepAwakeController(process_factory=lambda *_args, **_kwargs: FakeProcess()),
+            closed_lid_awake=ClosedLidAwakeController(
+                process_factory=lambda *_args, **_kwargs: FakeProcess()
+            ),
+            last_keep_awake_error=None,
+            last_closed_lid_awake_error=None,
+            last_status_read_error=None,
+            leds_enabled=False,
+            agent_awake_last_mode=None,
+            agent_awake_grace_until_monotonic=None,
+            agent_awake_requested=False,
+            battery_sleep_safeguard_active=False,
+            battery_sleep_safeguard_reason="",
+        )
+        fake.update_agent_awake_request = (
+            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+        )
+        fake.sync_closed_lid_awake = (
+            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+                fake,
+                agents_active=agents_active,
+            )
+        )
+
+        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
+            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.WORKING)
+
+        self.assertTrue(fake.keep_awake.process_running())
+        self.assertTrue(fake.closed_lid_awake.process_running())
+
+        fake.agent_awake_grace_until_monotonic = None
+        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
+            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.IDLE_READY)
+
+        self.assertFalse(fake.keep_awake.process_running())
+        self.assertFalse(fake.closed_lid_awake.process_running())
+
+    def test_sleep_prevention_battery_safeguard_activates_only_on_battery(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        active, reason = status_bar.sleep_prevention_battery_safeguard(
+            BatterySnapshot(percent=19, is_plugged=False),
+            20,
+        )
+        plugged_active, plugged_reason = status_bar.sleep_prevention_battery_safeguard(
+            BatterySnapshot(percent=19, is_plugged=True),
+            20,
+        )
+        disabled_active, disabled_reason = status_bar.sleep_prevention_battery_safeguard(
+            BatterySnapshot(percent=5, is_plugged=False),
+            0,
+        )
+
+        self.assertTrue(active)
+        self.assertEqual(reason, "battery 19%, threshold 20%")
+        self.assertFalse(plugged_active)
+        self.assertEqual(plugged_reason, "battery 19%, plugged in, threshold 20%")
+        self.assertFalse(disabled_active)
+        self.assertEqual(disabled_reason, "disabled")
+
+    def test_status_bar_battery_safeguard_releases_all_sleep_prevention(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(
+                sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
+                sleep_prevention_min_battery_percent=20,
+            ),
+            keep_awake=KeepAwakeController(process_factory=lambda *_args, **_kwargs: FakeProcess()),
+            closed_lid_awake=ClosedLidAwakeController(
+                process_factory=lambda *_args, **_kwargs: FakeProcess()
+            ),
+            last_keep_awake_error=None,
+            last_closed_lid_awake_error=None,
+            last_status_read_error=None,
+            leds_enabled=False,
+            agent_awake_last_mode=None,
+            agent_awake_grace_until_monotonic=None,
+            agent_awake_requested=False,
+            battery_sleep_safeguard_active=False,
+            battery_sleep_safeguard_reason="",
+        )
+        fake.update_agent_awake_request = (
+            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+        )
+        fake.sync_closed_lid_awake = (
+            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+                fake,
+                agents_active=agents_active,
+            )
+        )
+
+        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
+            status_bar.StatusBarController.sync_keep_awake(
+                fake,
+                AgentMode.WORKING,
+                BatterySnapshot(percent=19, is_plugged=False),
+            )
+
+        self.assertFalse(fake.keep_awake.process_running())
+        self.assertFalse(fake.closed_lid_awake.process_running())
+        self.assertTrue(fake.battery_sleep_safeguard_active)
+        self.assertEqual(
+            fake.battery_sleep_safeguard_reason,
+            "battery 19%, threshold 20%",
+        )
+
     def test_closed_lid_awake_controller_sets_and_restores_system_disable(self) -> None:
         processes: list[FakeProcess] = []
         disabled_calls: list[bool] = []
@@ -3773,7 +4235,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertTrue(controller.process_running())
         self.assertFalse(controller.changed_system_disable)
 
-    def test_closed_lid_awake_controller_preserves_existing_system_disable(self) -> None:
+    def test_closed_lid_awake_controller_drives_existing_system_disable(self) -> None:
         disabled_calls: list[bool] = []
         controller = ClosedLidAwakeController(
             process_factory=lambda *_args, **_kwargs: FakeProcess(),
@@ -3785,7 +4247,25 @@ class AgentMonitorTests(unittest.TestCase):
         controller.update(CLOSED_LID_AWAKE_ALWAYS, agents_active=False)
         controller.update(CLOSED_LID_AWAKE_NEVER, agents_active=False)
 
-        self.assertEqual(disabled_calls, [])
+        self.assertEqual(disabled_calls, [True, False])
+
+    def test_closed_lid_awake_controller_clears_system_disable_once_when_idle(self) -> None:
+        disabled_calls: list[bool] = []
+        controller = ClosedLidAwakeController(
+            process_factory=lambda *_args, **_kwargs: FakeProcess(),
+            sleep_disabled_reader=lambda: True,
+            sleep_disabled_setter=disabled_calls.append,
+            use_system_disable=True,
+        )
+
+        self.assertFalse(
+            controller.update(CLOSED_LID_AWAKE_NEVER, agents_active=False)
+        )
+        self.assertFalse(
+            controller.update(CLOSED_LID_AWAKE_NEVER, agents_active=False)
+        )
+
+        self.assertEqual(disabled_calls, [False])
 
     def test_sleep_override_uses_noninteractive_sudo(self) -> None:
         calls = []
@@ -3839,6 +4319,60 @@ class AgentMonitorTests(unittest.TestCase):
         )
         self.assertTrue(parse_bool_ioreg_property('"SleepDisabled" = true', "SleepDisabled"))
         self.assertIsNone(parse_bool_ioreg_property('"Other" = Yes', "SleepDisabled"))
+
+    def test_pmset_assertion_parser_reads_sleep_prevention(self) -> None:
+        assertions = parse_pmset_assertions(
+            """
+            Assertion status system-wide:
+               PreventUserIdleDisplaySleep    1
+               PreventSystemSleep             0
+               PreventUserIdleSystemSleep     1
+               UserIsActive                   1
+            """
+        )
+
+        self.assertTrue(assertions["PreventUserIdleDisplaySleep"])
+        self.assertFalse(assertions["PreventSystemSleep"])
+        self.assertTrue(assertions["PreventUserIdleSystemSleep"])
+        self.assertTrue(assertions["UserIsActive"])
+
+    def test_read_mac_sleep_snapshot_reads_sleep_disabled_from_ioreg(self) -> None:
+        commands: list[tuple[str, ...]] = []
+
+        def runner(command, **_kwargs):
+            commands.append(tuple(command))
+            if "ioreg" in command[0]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    '"SleepDisabled" = No\n',
+                    "",
+                )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                """
+                   PreventSystemSleep             0
+                   PreventUserIdleSystemSleep     1
+                   PreventUserIdleDisplaySleep    0
+                   UserIsActive                   1
+                """,
+                "",
+            )
+
+        snapshot = read_mac_sleep_snapshot(runner=runner)
+
+        self.assertFalse(snapshot.sleep_disabled)
+        self.assertFalse(snapshot.prevent_system_sleep)
+        self.assertTrue(snapshot.prevent_user_idle_system_sleep)
+        self.assertFalse(snapshot.prevent_user_idle_display_sleep)
+        self.assertTrue(snapshot.user_is_active)
+        self.assertTrue(snapshot.sleep_prevented)
+        self.assertIsNone(snapshot.error)
+        self.assertEqual(commands[0], IOREG_SLEEP_DISABLED_COMMAND)
+        self.assertEqual(commands[1], PMSET_ASSERTIONS_COMMAND)
+        self.assertNotIn(("/usr/bin/pmset", "-g"), commands)
+        self.assertNotIn(("/usr/bin/pmset", "-g", "custom"), commands)
 
     def test_default_logs_use_sidepulse_xdg_state_dir(self) -> None:
         home = Path("/Users/example")
@@ -4116,12 +4650,14 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(loaded.session_terminal_app, TERMINAL_APP_ITERM)
             self.assertNotIn("grok", loaded.session_open_preferences)
 
-    def test_settings_round_trip_closed_lid_policy_and_animations(self) -> None:
+    def test_settings_round_trip_sleep_prevention_policy_and_animations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
-            settings = AgentMonitorSettings().with_closed_lid_awake_policy(
-                CLOSED_LID_AWAKE_AGENTS
+            settings = AgentMonitorSettings().with_sleep_prevention_policy(
+                SLEEP_PREVENTION_ALWAYS
             )
+            settings = settings.with_sleep_prevention_battery_safeguard(25)
+            settings = settings.with_history_timeframe(HISTORY_TIMEFRAME_24H_SECONDS)
             settings = settings.with_lid_animation(
                 LID_ANIMATION_CLOSED,
                 program="off\n#FF3A00 200ms ease",
@@ -4136,7 +4672,9 @@ class AgentMonitorTests(unittest.TestCase):
             save_settings(settings, settings_path)
             loaded = load_settings(settings_path)
 
-            self.assertEqual(loaded.closed_lid_awake_policy, CLOSED_LID_AWAKE_AGENTS)
+            self.assertEqual(loaded.sleep_prevention_policy, SLEEP_PREVENTION_ALWAYS)
+            self.assertEqual(loaded.sleep_prevention_min_battery_percent, 25)
+            self.assertEqual(loaded.history_timeframe_seconds, HISTORY_TIMEFRAME_24H_SECONDS)
             self.assertEqual(
                 loaded.lid_animation(LID_ANIMATION_CLOSED).program,
                 "off\n#FF3A00 200ms ease",
@@ -4163,7 +4701,9 @@ class AgentMonitorTests(unittest.TestCase):
 
             loaded = load_settings(settings_path)
 
-            self.assertEqual(loaded.closed_lid_awake_policy, CLOSED_LID_AWAKE_NEVER)
+            self.assertEqual(loaded.sleep_prevention_policy, SLEEP_PREVENTION_AGENTS)
+            self.assertEqual(loaded.sleep_prevention_min_battery_percent, 20)
+            self.assertEqual(loaded.history_timeframe_seconds, DEFAULT_HISTORY_TIMEFRAME_SECONDS)
             self.assertFalse(loaded.closed_lid_system_override_enabled)
             self.assertFalse(loaded.setup_screen_completed)
             self.assertEqual(
