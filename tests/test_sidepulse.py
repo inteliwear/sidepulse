@@ -50,6 +50,7 @@ from sidepulse.device_writer import (
 from sidepulse.hook import format_hook_payload, routed_hook_payload, write_hook_payload
 from sidepulse.ipc import HookEventServer, send_hook_event
 from sidepulse.install import (
+    claude_hook_settings,
     hook_command,
     install_claude_hooks,
     install_codex_hooks,
@@ -3018,6 +3019,19 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(commands, ["echo keep >> /tmp/other.log"])
             self.assertEqual(data["permissions"]["allow"], ["Bash(date)"])
 
+    def test_claude_hook_settings_builds_scoped_config_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "claude.jsonl"
+
+            settings = claude_hook_settings(log, python_executable="python3")
+
+            self.assertFalse(log.exists())
+            self.assertEqual(set(settings), {"hooks"})
+            self.assertTrue(settings["hooks"])
+            for entries in settings["hooks"].values():
+                self.assertEqual(entries[0]["matcher"], "*")
+                self.assertIn("python3", entries[0]["hooks"][0]["command"])
+
     def test_grok_uninstaller_removes_monitor_hooks_and_preserves_other_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -3316,6 +3330,51 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(codex_only.sd_eject_guard_scope, "user")
         self.assertTrue(codex_only.no_status_bar)
         self.assertTrue(codex_only.dry_run)
+
+    def test_sidepulse_top_level_uninstall_command_shape(self) -> None:
+        parser = cli_module.build_sidepulse_parser()
+
+        default = parser.parse_args(["uninstall"])
+        claude = parser.parse_args(["uninstall", "claude", "--dry-run"])
+
+        self.assertEqual(default.provider, "all")
+        self.assertIs(default.func, cli_module.cmd_uninstall)
+        self.assertEqual(claude.provider, "claude")
+        self.assertTrue(claude.dry_run)
+
+    def test_sidepulse_claude_execs_with_scoped_hook_settings(self) -> None:
+        parser = cli_module.build_sidepulse_parser()
+        args = parser.parse_args(["claude", "--", "--model", "sonnet", "hello"])
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(cli_module, "detect_log_path", return_value=Path(tmp) / "claude.jsonl"),
+            patch.object(cli_module.shutil, "which", return_value="/opt/bin/claude"),
+            patch.object(cli_module.os, "execv") as execv,
+        ):
+            result = cli_module.cmd_sidepulse_claude(args)
+
+        self.assertEqual(result, 0)
+        command = execv.call_args.args[1]
+        self.assertEqual(command[:2], ["/opt/bin/claude", "--settings"])
+        self.assertEqual(command[3:], ["--model", "sonnet", "hello"])
+        self.assertIn("hooks", json.loads(command[2]))
+
+    def test_sidepulse_claude_reports_missing_executable(self) -> None:
+        parser = cli_module.build_sidepulse_parser()
+        args = parser.parse_args(["claude"])
+
+        with patch.object(cli_module.shutil, "which", return_value=None):
+            result = cli_module.cmd_sidepulse_claude(args)
+
+        self.assertEqual(result, 127)
+
+    def test_sidepulse_claude_entrypoint_forwards_unknown_options(self) -> None:
+        with patch.object(cli_module, "cmd_sidepulse_claude", return_value=23) as run_claude:
+            result = cli_module.sidepulse_main(["claude", "--model", "sonnet", "--help"])
+
+        self.assertEqual(result, 23)
+        self.assertEqual(run_claude.call_args.args[0].claude_args, ["--model", "sonnet", "--help"])
 
     def test_sidepulse_setup_installs_hooks_guard_and_status_bar(self) -> None:
         parser = cli_module.build_sidepulse_parser()
