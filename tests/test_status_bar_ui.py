@@ -389,6 +389,7 @@ class WindowBuildTests(StatusBarTestCase):
             self.assertIn(key, self.controller.settings_fields)
         self.assertIn("dnd_enabled", self.controller.settings_buttons)
         self.assertIn("dnd_schedule", self.controller.settings_buttons)
+        self.assertIn("kitt_mode", self.controller.settings_buttons)
         self.assertTrue(self.controller.settings_buttons["dnd_enabled"].isEnabled())
 
     def test_remote_tab_loads_configured_host(self):

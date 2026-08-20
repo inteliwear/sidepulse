@@ -158,6 +158,16 @@ def qualify_remote_line(provider: str, line: dict[str, Any], host_name: str) -> 
         payload = qualified
 
     prefix = f"remote:{host_name}:"
+    existing_remote_origin = payload.get("sidepulse_remote_origin")
+    original_origin = payload.get("agent_origin")
+    if (
+        not isinstance(existing_remote_origin, str)
+        and isinstance(original_origin, str)
+        and original_origin
+        and original_origin != f"{provider_label(provider)} on {host_name}"
+    ):
+        payload["sidepulse_remote_origin"] = original_origin
+
     for snake, camel in (
         ("session_id", "sessionId"),
         ("turn_id", "turnId"),
@@ -166,6 +176,8 @@ def qualify_remote_line(provider: str, line: dict[str, Any], host_name: str) -> 
         for key in (snake, camel):
             value = payload.get(key)
             if isinstance(value, str) and value and not value.startswith(prefix):
+                if snake == "session_id" and "sidepulse_remote_session_id" not in payload:
+                    payload["sidepulse_remote_session_id"] = value
                 payload[key] = f"{prefix}{value}"
 
     payload["agent_origin"] = f"{provider_label(provider)} on {host_name}"

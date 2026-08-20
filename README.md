@@ -94,10 +94,10 @@ Agent status modes:
 | Mode | Meaning | LED pattern |
 | --- | --- | --- |
 | Idle / Ready | The agent is available and not currently running a task. | Off. |
-| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation. |
-| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation. |
+| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
+| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
-| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation. |
+| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
 | Completed | The agent finished successfully. | Solid green. |
 
@@ -502,10 +502,22 @@ the start time and off at the end time. You can override the toggle at any time;
 choice remains in effect until the next scheduled boundary, including across app
 restarts. Overnight schedules that cross midnight are supported.
 
+### KITT scanner
+
+Enable **KITT scanner while working** from the menu-bar dropdown or from
+**Settings... → Devices & LEDs**. Working, Tool Running, and Long Task Progress
+then sweep back and forth like KITT while keeping the normal working-state color
+and each device's configured brightness. Ask, Done, Idle, battery, custom, and DND
+displays are unchanged. The animation adapts to both the eight-LED SidePulse Pro
+and two-LED SidePulse Dot.
+
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
-provider app, Terminal resume, or Claude Code in VS Code.
+provider app, Terminal resume, or Claude Code in VS Code. Remote Claude sessions
+open the matching session in Claude Desktop by default; SidePulse keeps its
+host-qualified internal ID separate from the original Claude session UUID used
+by the Desktop deep link.
 
 The dropdown also includes a checked `Connect to Device` item. A checkmark means
 the status-bar app is actively connected to a mounted SidePulse Pro/SidePulse Dot target.

@@ -810,6 +810,14 @@ class StatusBarController(NSObject):
         self.set_battery_power_preview(sender.state() == NSOnState)
 
     @objc.IBAction
+    def toggleKittMode_(self, _sender):
+        self.set_kitt_mode(not self.settings.kitt_mode_enabled)
+
+    @objc.IBAction
+    def setKittModeFromCheckbox_(self, sender):
+        self.set_kitt_mode(sender.state() == NSOnState)
+
+    @objc.IBAction
     def toggleDnd_(self, _sender):
         self.set_dnd_enabled(not self.settings.dnd_enabled)
 
@@ -1157,6 +1165,10 @@ class StatusBarController(NSObject):
         set_checkbox_state(
             self.settings_buttons.get("battery_power_preview"),
             self.settings.battery_show_on_power_change,
+        )
+        set_checkbox_state(
+            self.settings_buttons.get("kitt_mode"),
+            self.settings.kitt_mode_enabled,
         )
         set_checkbox_state(
             self.settings_buttons.get("dnd_enabled"),
@@ -1852,6 +1864,23 @@ class StatusBarController(NSObject):
         self.refresh_settings_window()
         self.refresh_(None)
 
+    def set_kitt_mode(self, enabled: bool) -> None:
+        try:
+            self.settings = self.settings.with_kitt_mode(enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save KITT mode: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        self.reset_led_controllers_for_display_change()
+        self.set_settings_message(
+            f"KITT scanner {'enabled' if enabled else 'disabled'} for active agents."
+        )
+        self.refresh_settings_window()
+        self.refresh_(None)
+
     def save_dnd_schedule_from_fields(self) -> None:
         start_time = text_control_value(
             self.settings_fields.get("dnd_start_time")
@@ -2275,6 +2304,7 @@ class StatusBarController(NSObject):
                     display_state_for_mode(mode),
                     led_count=8,
                     brightness=device.brightness,
+                    kitt_mode=self.settings.kitt_mode_enabled,
                 )
             )
 
@@ -2334,7 +2364,10 @@ class StatusBarController(NSObject):
                     f"{format_watts(battery_snapshot.adapter_power)}"
                 )
             else:
-                result = self.agent_controller_for_device(device).sync_mode(mode)
+                result = self.agent_controller_for_device(device).sync_mode(
+                    mode,
+                    kitt_mode=self.settings.kitt_mode_enabled,
+                )
                 label = f"{device.name} {result.label}"
 
             if result.error:
@@ -2701,6 +2734,15 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         )
         virtual_toggle.setTarget_(target)
         menu.addItem_(virtual_toggle)
+
+    kitt_mode = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "KITT Scanner While Working",
+        "toggleKittMode:",
+        "",
+    )
+    kitt_mode.setTarget_(target)
+    kitt_mode.setState_(1 if target.settings.kitt_mode_enabled else 0)
+    menu.addItem_(kitt_mode)
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Do Not Disturb"))
@@ -3724,6 +3766,16 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         target,
         "setBatteryPowerPreviewFromCheckbox:",
     )
+    kitt_mode = add_checkbox(
+        devices_tab,
+        "KITT scanner while working",
+        344,
+        356,
+        280,
+        24,
+        target,
+        "setKittModeFromCheckbox:",
+    )
     add_separator(devices_tab, 24, 282, tab_width - 48)
     add_label(devices_tab, "Do Not Disturb", 24, 248, 240, 24)
     dnd_enabled = add_checkbox(
@@ -3918,6 +3970,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_transcripts": claude_transcripts,
         "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
+        "kitt_mode": kitt_mode,
         "dnd_enabled": dnd_enabled,
         "dnd_schedule": dnd_schedule,
     }

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -3682,6 +3683,21 @@ class AgentMonitorTests(unittest.TestCase):
             len(program_for_display_state(LedDisplayState.WORKING, led_count=8).splitlines()),
             3,
         )
+        kitt_program = program_for_display_state(
+            LedDisplayState.WORKING,
+            led_count=8,
+            brightness=128,
+            kitt_mode=True,
+        )
+        validate_led_text(kitt_program)
+        self.assertLessEqual(len(kitt_program.encode("utf-8")), 512)
+        kitt_lines = kitt_program.splitlines()
+        self.assertIn("7:#00E5FF 320ms pulse 595ms", kitt_lines[2])
+        self.assertIn("6:#00E5FF 320ms pulse 0ms", kitt_lines[3])
+        self.assertIn("0:#00E5FF 320ms pulse 510ms", kitt_lines[3])
+        self.assertEqual(kitt_lines[2].count("7:#00E5FF"), 1)
+        self.assertEqual(kitt_lines[3].count("7:#00E5FF"), 0)
+        self.assertTrue(kitt_program.endswith("repeat"))
         self.assertEqual(
             program_for_display_state(LedDisplayState.DONE, brightness=128),
             "brightness 128\n#00FF66",
@@ -3747,6 +3763,24 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
             self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
+
+    def test_agent_led_controller_rewrites_working_state_when_kitt_mode_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+
+            standard = controller.sync_mode(AgentMode.WORKING)
+            kitt = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+            unchanged = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+
+            self.assertTrue(standard.changed)
+            self.assertTrue(kitt.changed)
+            self.assertFalse(unchanged.changed)
+            program = (device / "LEDS.LED").read_text()
+            self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
+            self.assertIn("6:#00E5FF 320ms pulse 0ms", program)
+            self.assertIn("0:#00E5FF 320ms pulse 510ms", program)
 
     def test_battery_parser_uses_adapter_watts_and_raw_capacity(self) -> None:
         payload = plistlib.dumps(
@@ -4466,6 +4500,17 @@ class AgentMonitorTests(unittest.TestCase):
                 loaded.dnd_last_schedule_transition,
                 "2026-08-17:start:21:30",
             )
+
+    def test_settings_round_trip_kitt_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings().with_kitt_mode(True)
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.kitt_mode_enabled)
+            self.assertFalse(AgentMonitorSettings().kitt_mode_enabled)
 
     def test_settings_dnd_defaults_and_validation(self) -> None:
         settings = AgentMonitorSettings()
@@ -6675,6 +6720,13 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             SESSION_OPEN_APP,
         )
 
+        remote_claude = status_for("claude", "Claude on macmini")
+        remote_claude = replace(
+            remote_claude,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+        )
+        self.assertEqual(default_session_open_action(remote_claude), SESSION_OPEN_APP)
+
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
             provider="claude",
@@ -6687,7 +6739,10 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             cwd="/Users/pero/pgit/sdstatus_bitbang",
         )
 
-        self.assertEqual(session_deep_link(status), "claude://")
+        self.assertEqual(
+            session_deep_link(status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
         self.assertEqual(
             session_resume_command(status),
             "cd /Users/pero/pgit/sdstatus_bitbang && claude --resume 1ca4348e-2aec-4147-9e81-d7d56364d257",
@@ -6703,6 +6758,20 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "url",
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
+        )
+
+        remote_status = replace(
+            status,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+            origin="Claude on macmini",
+        )
+        self.assertEqual(
+            session_deep_link(remote_status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
+        self.assertEqual(
+            session_vscode_link(remote_status),
+            "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
         )
 
 
