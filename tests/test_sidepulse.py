@@ -84,6 +84,7 @@ from sidepulse.lid_sleep import (
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus
 from sidepulse.origin import ProcessInfo, origin_from_processes
 from sidepulse.providers import (
+    detect_claude_config,
     detect_grok_config,
     default_log_path,
     default_state_dir,
@@ -2733,9 +2734,9 @@ class AgentMonitorTests(unittest.TestCase):
             key = f"{config}:pre_tool_use:0:0"
             config.write_text("[features]\nhooks = true\n")
 
-            with patch("sidepulse.install.should_refresh_codex_hook_trust", return_value=True):
+            with patch("sidepulse.install.codex.should_refresh_codex_hook_trust", return_value=True):
                 with patch(
-                    "sidepulse.install.resolve_codex_hook_hashes",
+                    "sidepulse.install.codex.resolve_codex_hook_hashes",
                     return_value={key: "sha256:new-current-hash"},
                 ):
                     result = install_codex_hooks(
@@ -3090,6 +3091,55 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(result.changed)
             self.assertFalse(stale.exists())
 
+    def test_detect_claude_config_ignores_third_party_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".claude" / "settings.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            event: [{"hooks": [{"type": "command", "command": "/opt/cc-status"}]}]
+                            for event in ("SessionStart", "PreToolUse", "Stop")
+                        }
+                    }
+                )
+            )
+
+            detected = detect_claude_config(home)
+
+            self.assertTrue(detected.exists)
+            self.assertFalse(detected.hooks_enabled)
+            self.assertEqual(detected.hook_events, ())
+
+    def test_detect_claude_config_finds_managed_hooks_beside_third_party(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".claude" / "settings.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "Notification": [
+                                {"hooks": [{"type": "command", "command": "/opt/cc-status"}]}
+                            ]
+                        }
+                    }
+                )
+            )
+            log = home / "state" / "claude.jsonl"
+            install_claude_hooks(log_path=log, config_path=config, python_executable="python3")
+
+            detected = detect_claude_config(home)
+
+            self.assertTrue(detected.hooks_enabled)
+            self.assertIn("PreToolUse", detected.hook_events)
+            # Notification carries both hooks now; only our log path is reported.
+            self.assertIn("Notification", detected.hook_events)
+            self.assertEqual(detected.log_paths, (log,))
+
     def test_detect_grok_config_reads_managed_hook_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -3341,6 +3391,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        hermes_result = SimpleNamespace(
+            provider="hermes",
+            config_path=Path("/tmp/hermes-config.yaml"),
+            log_path=Path("/tmp/hermes.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3361,6 +3418,7 @@ class AgentMonitorTests(unittest.TestCase):
             patch.object(cli_module, "install_codex_hooks", return_value=codex_result) as codex,
             patch.object(cli_module, "install_claude_hooks", return_value=claude_result) as claude,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
+            patch.object(cli_module, "install_hermes_hooks", return_value=hermes_result) as hermes,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3376,6 +3434,7 @@ class AgentMonitorTests(unittest.TestCase):
         codex.assert_called_once()
         claude.assert_called_once()
         grok.assert_called_once()
+        hermes.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
 
@@ -4642,7 +4701,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("status-bar start --foreground", script)
 
     def test_frozen_hook_command_uses_internal_cli(self) -> None:
-        with patch("sidepulse.install.sys.frozen", True, create=True):
+        with patch("sidepulse.install._common.sys.frozen", True, create=True):
             command = hook_command("codex", Path("/tmp/codex events.jsonl"))
 
         self.assertEqual(

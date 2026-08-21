@@ -1,0 +1,113 @@
+"""Hook install/uninstall, one module per provider.
+
+Everything is re-exported here so ``from sidepulse.install import X`` keeps
+working regardless of which provider module X lives in.
+"""
+
+from __future__ import annotations
+
+from ._common import (
+    MANAGED_END,
+    MANAGED_START,
+    InstallResult,
+    backup_file,
+    fail_open_command,
+    hook_command,
+    hook_pythonpath_assignment,
+    read_json_config,
+    remove_json_command_hooks_for_log,
+)
+from .claude import (
+    install_claude_hooks,
+    remove_claude_hooks_for_log,
+    uninstall_claude_hooks,
+)
+from .codex import (
+    codex_cli_path,
+    codex_hook_block,
+    ensure_codex_hooks_feature,
+    install_codex_hooks,
+    remove_codex_hook_blocks_for_log,
+    resolve_codex_hook_hashes,
+    should_refresh_codex_hook_trust,
+    strip_managed_block,
+    toml_basic_string_escape,
+    uninstall_codex_hooks,
+    update_codex_trusted_hashes,
+)
+from .grok import (
+    clean_grok_legacy_hook_files,
+    clean_grok_live_backup_hook_files,
+    clean_json_hook_data,
+    grok_hook_backup_dir,
+    grok_hook_entry,
+    grok_legacy_hook_config_paths,
+    grok_legacy_hook_file_would_change,
+    grok_live_backup_hook_files_would_change,
+    grok_live_backup_hook_paths,
+    install_grok_hooks,
+    uninstall_grok_hooks,
+)
+from .hermes import (
+    HERMES_HOOK_TIMEOUT,
+    HermesHookConflict,
+    drop_empty_hermes_hooks_key,
+    find_hermes_hooks_key,
+    hermes_conflicting_events,
+    hermes_hook_block,
+    hermes_hooks_region,
+    insert_hermes_hook_block,
+    install_hermes_hooks,
+    remove_hermes_managed_block,
+    uninstall_hermes_hooks,
+    yaml_double_quote,
+)
+
+__all__ = [
+    "MANAGED_END",
+    "MANAGED_START",
+    "InstallResult",
+    "backup_file",
+    "fail_open_command",
+    "hook_command",
+    "hook_pythonpath_assignment",
+    "read_json_config",
+    "remove_json_command_hooks_for_log",
+    "install_claude_hooks",
+    "remove_claude_hooks_for_log",
+    "uninstall_claude_hooks",
+    "codex_cli_path",
+    "codex_hook_block",
+    "ensure_codex_hooks_feature",
+    "install_codex_hooks",
+    "remove_codex_hook_blocks_for_log",
+    "resolve_codex_hook_hashes",
+    "should_refresh_codex_hook_trust",
+    "strip_managed_block",
+    "toml_basic_string_escape",
+    "uninstall_codex_hooks",
+    "update_codex_trusted_hashes",
+    "clean_grok_legacy_hook_files",
+    "clean_grok_live_backup_hook_files",
+    "clean_json_hook_data",
+    "grok_hook_backup_dir",
+    "grok_hook_entry",
+    "grok_legacy_hook_config_paths",
+    "grok_legacy_hook_file_would_change",
+    "grok_live_backup_hook_files_would_change",
+    "grok_live_backup_hook_paths",
+    "install_grok_hooks",
+    "uninstall_grok_hooks",
+    "HERMES_HOOK_TIMEOUT",
+    "HermesHookConflict",
+    "drop_empty_hermes_hooks_key",
+    "find_hermes_hooks_key",
+    "hermes_conflicting_events",
+    "hermes_hook_block",
+    "hermes_hooks_region",
+    "insert_hermes_hook_block",
+    "install_hermes_hooks",
+    "remove_hermes_managed_block",
+    "uninstall_hermes_hooks",
+    "yaml_double_quote",
+]
