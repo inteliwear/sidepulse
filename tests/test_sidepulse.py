@@ -609,6 +609,44 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
 
+    def test_live_sidepulse_session_end_completes_lingering_subagents(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+        session_id = "03a6ef62-1ae1-49cc-b1fd-f9ebe272a677"
+        now = datetime.now(timezone.utc)
+
+        def ingest(event: dict[str, object]) -> None:
+            line = {
+                "logged_at": now.isoformat(),
+                "session_id": session_id,
+                "cwd": "/tmp/project",
+                **event,
+            }
+            record = parse_log_line("claude", json.dumps(line))
+            self.assertIsNotNone(record)
+            monitor.ingest_record(record)
+
+        ingest({"hook_event_name": "Stop", "last_assistant_message": "Done."})
+        ingest(
+            {
+                "hook_event_name": "SubagentStop",
+                "agent_id": "af896bde23bba0adc",
+                "last_assistant_message": "what about next week?",
+            }
+        )
+
+        modes = {s.agent_id: s.mode for s in monitor.snapshot().statuses}
+        self.assertEqual(
+            modes["claude:agent:af896bde23bba0adc"], AgentMode.WAITING_FOR_INPUT
+        )
+
+        ingest({"hook_event_name": "SessionEnd", "reason": "other"})
+
+        snapshot = monitor.snapshot(include_stale=True)
+        modes = {s.agent_id: s.mode for s in snapshot.statuses + snapshot.stale_statuses}
+        self.assertEqual(modes[f"claude:session:{session_id}"], AgentMode.COMPLETED)
+        self.assertEqual(modes["claude:agent:af896bde23bba0adc"], AgentMode.COMPLETED)
+        self.assertNotEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
+
     def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
         try:
             from sidepulse import status_bar
