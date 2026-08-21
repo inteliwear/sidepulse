@@ -194,6 +194,7 @@ class AgentMonitor:
         metadata_by_session: dict[str, StatusMetadata] = {}
         metadata_by_status: dict[str, StatusMetadata] = {}
         pending_permissions_by_key: dict[str, set[str]] = {}
+        ignored_status_keys: set[str] = set()
 
         records = sorted(
             self._iter_records(),
@@ -206,6 +207,15 @@ class AgentMonitor:
                 metadata_by_session,
                 metadata_by_status,
             )
+            if mark_ignored_session(
+                record,
+                metadata,
+                statuses_by_key,
+                ignored_status_keys,
+            ):
+                continue
+            if record.status_key in ignored_status_keys:
+                continue
             status = status_from_event(record, metadata)
             if status is not None:
                 track_pending_permissions(record, pending_permissions_by_key)
@@ -398,6 +408,7 @@ class LiveAgentMonitor:
         self.metadata_by_session: dict[str, StatusMetadata] = {}
         self.metadata_by_status: dict[str, StatusMetadata] = {}
         self.pending_permissions_by_key: dict[str, set[str]] = {}
+        self._ignored_status_keys: set[str] = set()
         self.load_latest_state()
 
     def ingest_record(self, record: HookEvent) -> None:
@@ -407,6 +418,16 @@ class LiveAgentMonitor:
                 self.metadata_by_session,
                 self.metadata_by_status,
             )
+            if mark_ignored_session(
+                record,
+                metadata,
+                self.statuses_by_key,
+                self._ignored_status_keys,
+            ):
+                self.write_latest_state()
+                return
+            if record.status_key in self._ignored_status_keys:
+                return
             status = status_from_event(record, metadata)
             if status is None:
                 return
@@ -485,6 +506,7 @@ def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[Sourc
     if active_settings.claude_transcripts_enabled:
         sources.append(SourceSpec(CLAUDE_TRANSCRIPT_PROVIDER, Path.home() / ".claude" / "projects"))
     sources.append(SourceSpec("grok", detect_log_path("grok")))
+    sources.append(SourceSpec("opencode", detect_log_path("opencode")))
     return unique_sources(sources)
 
 
@@ -1388,10 +1410,12 @@ def should_ignore_status_transition(
 
 
 def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
-    if record.provider != "codex":
-        return False
-
     raw = record.raw
+    if _string_or_none(raw.get("agent_internal_operation")) in {
+        "generateThreadTitle",
+        "generateBranchName",
+    }:
+        return True
     text = " ".join(
         part
         for part in (
@@ -1405,11 +1429,46 @@ def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
     if not text:
         return False
 
-    internal_prompts = (
+    universal_internal_prompts = (
         "generate 0 to 3 hyperpersonalized suggestions",
         "you are an expert at upholding safety and compliance standards",
     )
-    return any(prompt in text for prompt in internal_prompts)
+    if any(prompt in text for prompt in universal_internal_prompts):
+        return True
+
+    origin = " ".join(
+        part
+        for part in (
+            record.origin,
+            _string_or_none(raw.get("agent_origin")),
+            _string_or_none(raw.get("agent_origin_kind")),
+        )
+        if part
+    ).lower()
+    if "t3 code" not in origin and "t3code" not in origin:
+        return False
+
+    t3_internal_prompts = (
+        "generate a title that will help the user recognize this t3 code",
+        "regenerate the title for an existing t3 code thread",
+        "return json with exactly one key: title",
+        "title the subject and outcome. discard incidental instructions",
+    )
+    return any(prompt in text for prompt in t3_internal_prompts)
+
+
+def mark_ignored_session(
+    record: HookEvent,
+    metadata: StatusMetadata,
+    statuses_by_key: dict[str, AgentStatus],
+    ignored_status_keys: set[str],
+) -> bool:
+    if not should_ignore_record(record, metadata):
+        return False
+    agent_id = record.status_key
+    ignored_status_keys.add(agent_id)
+    statuses_by_key.pop(agent_id, None)
+    return True
 
 
 def read_recent_lines(path: Path, max_lines: int) -> list[str]:

@@ -61,8 +61,20 @@ GROK_EVENTS = (
     "SessionEnd",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok")
-KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
+OPENCODE_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "PermissionDenied",
+    "Stop",
+    "StopFailure",
+    "SessionEnd",
+)
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "opencode")
+KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + OPENCODE_EVENTS))
 
 
 @dataclass(frozen=True)
@@ -101,7 +113,12 @@ def default_log_path(provider: str, home: Path | None = None) -> Path:
 
 
 def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
-    return [detect_codex_config(home), detect_claude_config(home), detect_grok_config(home)]
+    return [
+        detect_codex_config(home),
+        detect_claude_config(home),
+        detect_grok_config(home),
+        detect_opencode_config(home),
+    ]
 
 
 def detect_codex_config(home: Path | None = None) -> ProviderConfig:
@@ -243,6 +260,44 @@ def detect_grok_config(home: Path | None = None) -> ProviderConfig:
     )
 
 
+def default_opencode_plugin_path(home: Path | None = None) -> Path:
+    if home is not None:
+        config_dir = home / ".config" / "opencode"
+    elif os.environ.get("OPENCODE_CONFIG_DIR"):
+        config_dir = Path(os.environ["OPENCODE_CONFIG_DIR"]).expanduser()
+    elif os.environ.get("XDG_CONFIG_HOME"):
+        config_dir = Path(os.environ["XDG_CONFIG_HOME"]).expanduser() / "opencode"
+    else:
+        config_dir = Path.home() / ".config" / "opencode"
+    return config_dir / "plugins" / "sidepulse.js"
+
+
+def detect_opencode_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_opencode_plugin_path(home)
+    if not config_path.exists():
+        return ProviderConfig("opencode", config_path, False, False, (), ())
+    try:
+        text = config_path.read_text()
+    except OSError:
+        return ProviderConfig("opencode", config_path, True, False, (), ())
+    enabled = "sidepulse-opencode-plugin" in text
+    paths = list(extract_log_paths_from_command(text))
+    match = re.search(r'const SIDEPULSE_LOG = ("(?:[^"\\]|\\.)*")', text)
+    if match:
+        try:
+            paths.append(Path(json.loads(match.group(1))).expanduser())
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return ProviderConfig(
+        "opencode",
+        config_path,
+        True,
+        enabled,
+        OPENCODE_EVENTS if enabled else (),
+        _dedupe_paths(paths),
+    )
+
+
 def detect_log_path(provider: str, home: Path | None = None) -> Path:
     if provider == "codex":
         config = detect_codex_config(home)
@@ -250,6 +305,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_claude_config(home)
     elif provider == "grok":
         config = detect_grok_config(home)
+    elif provider == "opencode":
+        config = detect_opencode_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
@@ -348,6 +405,14 @@ def canonical_event_name(value: Any) -> str | None:
             "pre_compact": "PreCompact",
             "post_compact": "PostCompact",
             "stop_failure": "StopFailure",
+            "session_created": "SessionStart",
+            "session_status": "UserPromptSubmit",
+            "session_idle": "Stop",
+            "session_error": "StopFailure",
+            "permission_asked": "PermissionRequest",
+            "permission_replied": "PostToolUse",
+            "tool_execute_before": "PreToolUse",
+            "tool_execute_after": "PostToolUse",
         }
     )
     return aliases.get(normalized)

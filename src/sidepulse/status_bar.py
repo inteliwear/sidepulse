@@ -95,9 +95,11 @@ from .install import (
     install_claude_hooks,
     install_codex_hooks,
     install_grok_hooks,
+    install_opencode_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_grok_hooks,
+    uninstall_opencode_hooks,
 )
 from .led_status import (
     AgentLedController,
@@ -125,6 +127,7 @@ from .providers import (
     detect_claude_config,
     detect_codex_config,
     detect_grok_config,
+    detect_opencode_config,
     detect_log_path,
     default_state_dir,
     parse_log_line,
@@ -341,7 +344,7 @@ def format_percent_value(value: float | int) -> str:
 def replay_recent_debug_logs(
     monitor: LiveAgentMonitor,
     *,
-    providers: tuple[str, ...] = ("codex", "claude", "grok"),
+    providers: tuple[str, ...] = ("codex", "claude", "grok", "opencode"),
     max_lines: int = STATUS_BAR_STARTUP_REPLAY_LINES,
 ) -> int:
     replayed = 0
@@ -695,6 +698,14 @@ class StatusBarController(NSObject):
         self.update_hooks("grok", install=False)
 
     @objc.IBAction
+    def installOpenCodeHooks_(self, _sender):
+        self.update_hooks("opencode", install=True)
+
+    @objc.IBAction
+    def uninstallOpenCodeHooks_(self, _sender):
+        self.update_hooks("opencode", install=False)
+
+    @objc.IBAction
     def toggleCodexTranscripts_(self, sender):
         self.set_transcript_monitoring("codex", sender.state() == NSOnState)
 
@@ -884,6 +895,13 @@ class StatusBarController(NSObject):
         launch_installed = launch_agent_installed()
         eject_installed = sd_eject_guard_installed()
         sleep_installed = sleep_helper_installed()
+        codex = detect_codex_config()
+        claude = detect_claude_config()
+        grok = detect_grok_config()
+        opencode = detect_opencode_config()
+        integrations_installed = all(
+            config.hooks_enabled for config in (codex, claude, grok, opencode)
+        )
 
         set_field_value(
             self.setup_fields.get("launch_status"),
@@ -897,9 +915,14 @@ class StatusBarController(NSObject):
             self.setup_fields.get("sleep_status"),
             "Installed" if sleep_installed else "Needs administrator setup",
         )
+        set_field_value(
+            self.setup_fields.get("opencode_status"),
+            "Installed" if integrations_installed else "Not installed",
+        )
         self.set_setup_checkbox("launch", True, enabled=not launch_installed)
         self.set_setup_checkbox("eject_guard", True, enabled=not eject_installed)
         self.set_setup_checkbox("sleep_helper", True, enabled=not sleep_installed)
+        self.set_setup_checkbox("opencode", True, enabled=not integrations_installed)
         eject_uninstall = self.setup_buttons.get("eject_guard_uninstall")
         if eject_uninstall is not None:
             eject_uninstall.setEnabled_(eject_installed)
@@ -915,6 +938,22 @@ class StatusBarController(NSObject):
         messages: list[str] = []
         errors: list[str] = []
         opened_sleep_installer = False
+
+        if checkbox_is_on(self.setup_buttons.get("opencode")):
+            try:
+                results = (
+                    install_codex_hooks(),
+                    install_claude_hooks(),
+                    install_grok_hooks(),
+                    install_opencode_hooks(),
+                )
+                messages.append(
+                    "Agent integrations for OpenCode / T3 Code installed."
+                    if any(result.changed for result in results)
+                    else "Agent integrations for OpenCode / T3 Code already installed."
+                )
+            except Exception as exc:
+                errors.append(f"OpenCode / T3 Code monitoring failed: {exc}")
 
         if checkbox_is_on(self.setup_buttons.get("launch")) and not launch_agent_installed():
             try:
@@ -1000,6 +1039,7 @@ class StatusBarController(NSObject):
         codex = detect_codex_config()
         claude = detect_claude_config()
         grok = detect_grok_config()
+        opencode = detect_opencode_config()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1011,6 +1051,14 @@ class StatusBarController(NSObject):
         set_field_value(
             self.settings_fields.get("grok_hook_status"),
             hook_status_text(grok),
+        )
+        set_field_value(
+            self.settings_fields.get("opencode_hook_status"),
+            hook_status_text(opencode),
+        )
+        set_field_value(
+            self.settings_fields.get("t3code_hook_status"),
+            "Automatic · uses the selected agent's hooks",
         )
         set_field_value(
             self.settings_fields.get("settings_path"),
@@ -1036,7 +1084,7 @@ class StatusBarController(NSObject):
             self.settings_buttons.get("battery_power_preview"),
             self.settings.battery_show_on_power_change,
         )
-        for provider in ("codex", "claude", "grok"):
+        for provider in ("codex", "claude", "grok", "opencode"):
             popup = self.settings_fields.get(f"{provider}_session_opener")
             if popup is not None:
                 refresh_provider_opener_popup(
@@ -1187,19 +1235,23 @@ class StatusBarController(NSObject):
                 result = install_claude_hooks()
             elif provider == "claude":
                 result = uninstall_claude_hooks()
-            elif install:
+            elif provider == "grok" and install:
                 result = install_grok_hooks()
-            else:
+            elif provider == "grok":
                 result = uninstall_grok_hooks()
+            elif install:
+                result = install_opencode_hooks()
+            else:
+                result = uninstall_opencode_hooks()
         except Exception as exc:
-            self.set_settings_message(f"{provider.title()} hooks failed: {exc}")
+            self.set_settings_message(f"{provider_label(provider)} hooks failed: {exc}")
             self.refresh_settings_window()
             return
 
         action = "installed" if install else "removed"
         if not result.changed:
             action = "already installed" if install else "already removed"
-        self.set_settings_message(f"{provider.title()} hooks {action}.")
+        self.set_settings_message(f"{provider_label(provider)} hooks {action}.")
         self.reload_monitor()
         self.refresh_settings_window()
         self.refresh_(None)
@@ -1542,6 +1594,8 @@ class StatusBarController(NSObject):
         kind, value = target
         if kind == "url":
             open_url(value)
+        elif kind == "application":
+            open_host_application(value)
         elif kind == "terminal":
             open_terminal_command(
                 value,
@@ -2451,7 +2505,7 @@ def build_brightness_slider_item(
 
 def build_setup_window(target: StatusBarController) -> NSWindow:
     width = 620
-    height = 330
+    height = 410
     style = (
         NSWindowStyleMaskTitled
         | NSWindowStyleMaskClosable
@@ -2468,8 +2522,21 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
     window.center()
     content = window.contentView()
 
-    add_label(content, "SidePulse", 24, 282, 180, 28)
-    add_label(content, "Finish setup for this Mac.", 24, 254, 340, 22)
+    add_label(content, "SidePulse", 24, 362, 180, 28)
+    add_label(content, "Finish setup for this Mac.", 24, 334, 340, 22)
+
+    opencode = add_checkbox(
+        content,
+        "Agent Integrations (OpenCode / T3 Code)",
+        32,
+        276,
+        300,
+        24,
+        target,
+        "",
+    )
+    add_label(content, "Install provider hooks and identify agents hosted by T3 Code once.", 56, 254, 430, 20)
+    opencode_status = add_label(content, "", 440, 276, 150, 22)
 
     launch = add_checkbox(
         content,
@@ -2520,6 +2587,7 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "launch_status": launch_status,
         "eject_status": eject_status,
         "sleep_status": sleep_status,
+        "opencode_status": opencode_status,
         "message": message,
     }
     target.setup_buttons = {
@@ -2527,6 +2595,7 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "eject_guard": eject_guard,
         "eject_guard_uninstall": eject_uninstall,
         "sleep_helper": sleep_helper,
+        "opencode": opencode,
     }
     return window
 
@@ -3185,7 +3254,7 @@ def rect_parts(rect) -> tuple[float, float, float, float]:
 
 def build_settings_window(target: StatusBarController) -> NSWindow:
     width = 680
-    height = 560
+    height = 600
     style = (
         NSWindowStyleMaskTitled
         | NSWindowStyleMaskClosable
@@ -3243,23 +3312,36 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     )
     content.addSubview_(tab_view)
 
-    add_label(agents_tab, "Agent Hooks", 24, 398, 200, 24)
-    add_label(agents_tab, "Codex", 32, 360, 80, 22)
-    codex_status = add_label(agents_tab, "", 130, 360, 240, 22)
-    add_button(agents_tab, "Install", 400, 356, 90, 28, target, "installCodexHooks:")
-    add_button(agents_tab, "Uninstall", 500, 356, 100, 28, target, "uninstallCodexHooks:")
+    add_label(agents_tab, "Agent Hooks", 24, 438, 200, 24)
+    t3code_status = add_label(
+        agents_tab,
+        "T3 Code: automatic · uses the selected agent's hooks",
+        220,
+        440,
+        390,
+        20,
+    )
+    add_label(agents_tab, "Codex", 32, 400, 80, 22)
+    codex_status = add_label(agents_tab, "", 130, 400, 240, 22)
+    add_button(agents_tab, "Install", 400, 396, 90, 28, target, "installCodexHooks:")
+    add_button(agents_tab, "Uninstall", 500, 396, 100, 28, target, "uninstallCodexHooks:")
 
-    add_label(agents_tab, "Claude", 32, 326, 80, 22)
-    claude_status = add_label(agents_tab, "", 130, 326, 240, 22)
-    add_button(agents_tab, "Install", 400, 322, 90, 28, target, "installClaudeHooks:")
-    add_button(agents_tab, "Uninstall", 500, 322, 100, 28, target, "uninstallClaudeHooks:")
+    add_label(agents_tab, "Claude", 32, 366, 80, 22)
+    claude_status = add_label(agents_tab, "", 130, 366, 240, 22)
+    add_button(agents_tab, "Install", 400, 362, 90, 28, target, "installClaudeHooks:")
+    add_button(agents_tab, "Uninstall", 500, 362, 100, 28, target, "uninstallClaudeHooks:")
 
-    add_label(agents_tab, "Grok", 32, 292, 80, 22)
-    grok_status = add_label(agents_tab, "", 130, 292, 240, 22)
-    add_button(agents_tab, "Install", 400, 288, 90, 28, target, "installGrokHooks:")
-    add_button(agents_tab, "Uninstall", 500, 288, 100, 28, target, "uninstallGrokHooks:")
+    add_label(agents_tab, "Grok", 32, 332, 80, 22)
+    grok_status = add_label(agents_tab, "", 130, 332, 240, 22)
+    add_button(agents_tab, "Install", 400, 328, 90, 28, target, "installGrokHooks:")
+    add_button(agents_tab, "Uninstall", 500, 328, 100, 28, target, "uninstallGrokHooks:")
 
-    add_separator(agents_tab, 24, 258, tab_width - 48)
+    add_label(agents_tab, "OpenCode", 32, 298, 80, 22)
+    opencode_status = add_label(agents_tab, "", 130, 298, 240, 22)
+    add_button(agents_tab, "Install", 400, 294, 90, 28, target, "installOpenCodeHooks:")
+    add_button(agents_tab, "Uninstall", 500, 294, 100, 28, target, "uninstallOpenCodeHooks:")
+
+    add_separator(agents_tab, 24, 250, tab_width - 48)
     add_label(agents_tab, "Session Opening", 24, 224, 240, 24)
     add_label(agents_tab, "Codex", 32, 188, 100, 22)
     codex_opener = add_provider_opener_popup(agents_tab, "codex", 160, 186, target)
@@ -3378,6 +3460,8 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "codex_hook_status": codex_status,
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
+        "opencode_hook_status": opencode_status,
+        "t3code_hook_status": t3code_status,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,
@@ -3530,7 +3614,10 @@ def provider_open_action_label(provider: str, action: str, settings=None) -> str
         return "VS Code"
     if action == SESSION_OPEN_TERMINAL:
         return "Resume in Terminal"
-    return {"codex": "Codex", "claude": "Claude"}.get(provider, "App")
+    return {"codex": "Codex", "claude": "Claude", "opencode": "OpenCode"}.get(
+        provider,
+        "App",
+    )
 
 
 def refresh_provider_opener_popup(popup, provider: str, action: str, settings) -> None:
@@ -3947,6 +4034,8 @@ def build_session_menu_item(
 
 def native_session_menu_title(status: AgentStatus, *, disambiguate: bool = False) -> str:
     title, project = session_title_parts(status)
+    if normalized_origin_text(status.origin) == "t3 code":
+        title = f"T3 Code  {title}"
     if disambiguate and status.session_id:
         title = f"{title} ({status.session_id[:8]})"
     parts = [title]
@@ -4028,6 +4117,8 @@ def session_origin_icon_for_status(status: AgentStatus):
     host_icon = host_icon_for_origin(status.origin)
     if host_icon is None:
         return provider_icon
+    if normalized_origin_text(status.origin) == "t3 code":
+        return host_icon
     return composite_app_icons(host_icon, provider_icon)
 
 
@@ -4053,6 +4144,11 @@ def provider_icon_for_provider(provider: str):
         if image is not None:
             return image
         return grok_badge_icon()
+    if provider == "opencode":
+        image = first_app_icon(("/Applications/OpenCode.app", "/Applications/opencode.app"))
+        if image is not None:
+            return image
+        return image_for_symbol("chevron.left.forwardslash.chevron.right", "OpenCode")
     return image_for_symbol("terminal", provider.title() or "Agent")
 
 
@@ -4060,6 +4156,15 @@ def host_icon_for_origin(origin: str | None):
     normalized = normalized_origin_text(origin)
     if not normalized:
         return None
+    if normalized == "t3 code" or "t3code" in normalized:
+        return first_app_icon(
+            (
+                "/Applications/T3 Code.app",
+                "/Applications/T3 Code (Alpha).app",
+                "/Applications/T3 Code (Nightly).app",
+                "/Applications/t3-code.app",
+            )
+        ) or image_for_symbol("square.stack.3d.up", "T3 Code")
     if "vs code" in normalized or "vscode" in normalized or "visual studio code" in normalized:
         return first_app_icon(
             (
@@ -4429,6 +4534,22 @@ def open_url(url: str) -> None:
     ns_url = NSURL.URLWithString_(url)
     if ns_url is not None:
         NSWorkspace.sharedWorkspace().openURL_(ns_url)
+
+
+def open_host_application(host: str) -> None:
+    if host != "t3code":
+        return
+    paths = (
+        "/Applications/T3 Code.app",
+        "/Applications/T3 Code (Alpha).app",
+        "/Applications/T3 Code (Nightly).app",
+        "/Applications/t3-code.app",
+    )
+    path = next((candidate for candidate in paths if Path(candidate).exists()), None)
+    if path is None:
+        subprocess.Popen(["open", "-a", "T3 Code"])
+        return
+    NSWorkspace.sharedWorkspace().openURL_(NSURL.fileURLWithPath_(path))
 
 
 def open_terminal_command(
