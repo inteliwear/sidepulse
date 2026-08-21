@@ -48,7 +48,7 @@ try:
         NSWindowStyleMaskTitled,
         NSVariableStatusItemLength,
     )
-    from Foundation import NSObject, NSString, NSTimer, NSURL
+    from Foundation import NSObject, NSProcessInfo, NSString, NSTimer, NSURL
 except ImportError as exc:  # pragma: no cover - only exercised on non-macOS setups.
     raise SystemExit(
         f"The status-bar app requires PyObjC/AppKit ({exc}):\n"
@@ -73,6 +73,7 @@ from .audit import (
     default_status_history_log_path,
     export_status_audit_csv,
     export_status_audit_html,
+    rotate_status_audit_log,
     read_status_history_records,
     status_history_record,
 )
@@ -379,6 +380,7 @@ class StatusBarController(NSObject):
         self.setup_window = None
         self.settings_fields = {}
         self.settings_buttons = {}
+        self.settings_message_generation = 0
         self.setup_fields = {}
         self.setup_buttons = {}
         self.last_snapshot = None
@@ -422,7 +424,9 @@ class StatusBarController(NSObject):
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
+        NSProcessInfo.processInfo().setProcessName_("SidePulse")
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        self.remove_unavailable_virtual_device()
         log_status_bar("launching status item")
         self.start_event_server()
         self.replay_debug_logs()
@@ -463,6 +467,22 @@ class StatusBarController(NSObject):
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
+
+    def remove_unavailable_virtual_device(self) -> None:
+        if SCREEN_BAR_FEATURE_ENABLED:
+            return
+        has_virtual_device = any(
+            device.device_id == VIRTUAL_DEVICE_ID for device in self.settings.devices
+        )
+        if not self.settings.virtual_status_device_enabled and not has_virtual_device:
+            return
+        try:
+            self.settings = self.settings.with_virtual_status_device(False)
+            self.settings = self.settings.without_device(VIRTUAL_DEVICE_ID)
+            save_settings(self.settings)
+            log_status_bar("removed unavailable Screen Bar setting")
+        except Exception as exc:
+            log_status_bar(f"could not remove unavailable Screen Bar setting: {exc}")
 
     @objc.IBAction
     def refresh_(self, _sender):
@@ -1117,9 +1137,26 @@ class StatusBarController(NSObject):
             chart.setRecords_(records)
 
     def set_settings_message(self, message: str) -> None:
+        self.settings_message_generation += 1
         set_field_value(self.settings_fields.get("message"), message)
         if message:
             log_status_bar(f"settings: {message}")
+            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                6.0,
+                self,
+                "clearSettingsMessage:",
+                self.settings_message_generation,
+                False,
+            )
+
+    @objc.IBAction
+    def clearSettingsMessage_(self, timer):
+        if int(timer.userInfo()) == self.settings_message_generation:
+            set_field_value(self.settings_fields.get("message"), "")
+
+    def tabView_didSelectTabViewItem_(self, _tab_view, _item):
+        self.settings_message_generation += 1
+        set_field_value(self.settings_fields.get("message"), "")
 
     def set_session_terminal(
         self,
@@ -1158,6 +1195,15 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def exportDebugHtml_(self, _sender):
         self.export_debug_log("html")
+
+    @objc.IBAction
+    def archiveDebugLog_(self, _sender):
+        path = default_status_audit_log_path()
+        if rotate_status_audit_log(path, max_bytes=1):
+            self.set_settings_message("Debug log archived and cleared.")
+        else:
+            self.set_settings_message("Debug log is already empty.")
+        self.refresh_settings_window()
 
     @objc.IBAction
     def refreshHistoryChart_(self, _sender):
@@ -1379,6 +1425,7 @@ class StatusBarController(NSObject):
         if not SCREEN_BAR_FEATURE_ENABLED:
             try:
                 self.settings = self.settings.with_virtual_status_device(False)
+                self.settings = self.settings.without_device(VIRTUAL_DEVICE_ID)
                 save_settings(self.settings)
             except Exception as exc:
                 self.set_settings_message(f"Could not disable Screen Bar: {exc}")
@@ -1995,7 +2042,13 @@ class StatusBarController(NSObject):
             )
         ]
         if not devices:
+            self.set_settings_message("No connected SidePulse device is available for preview.")
             return
+
+        self.set_settings_message(
+            f"Previewing {LID_ANIMATION_LABELS[kind]} on {len(devices)} device"
+            f"{'s' if len(devices) != 1 else ''}."
+        )
 
         self.led_animation_token += 1
         token = self.led_animation_token
@@ -2538,6 +2591,8 @@ def choose_debug_export_path(format_name: str) -> Path | None:
     panel.setNameFieldStringValue_(f"sidepulse-agent-debug.{extension}")
     if hasattr(panel, "setAllowedFileTypes_"):
         panel.setAllowedFileTypes_([extension])
+    NSApp.activateIgnoringOtherApps_(True)
+    panel.orderFrontRegardless()
     if panel.runModal() != 1:
         return None
     url = panel.URL()
@@ -3205,6 +3260,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     tab_width = width - 40
     tab_height = height - 84
     tab_view = NSTabView.alloc().initWithFrame_(((20, 54), (tab_width, tab_height)))
+    tab_view.setDelegate_(target)
     agents_tab = add_settings_tab(tab_view, "agents", "Agents", tab_width, tab_height)
     devices_tab = add_settings_tab(
         tab_view,
@@ -3368,6 +3424,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     debug_log_status = add_label(diagnostics_tab, "", 32, 360, 588, 22)
     add_button(diagnostics_tab, "Export CSV", 32, 318, 110, 28, target, "exportDebugCsv:")
     add_button(diagnostics_tab, "Export HTML", 152, 318, 120, 28, target, "exportDebugHtml:")
+    add_button(diagnostics_tab, "Archive & Clear", 282, 318, 130, 28, target, "archiveDebugLog:")
     add_separator(diagnostics_tab, 24, 280, tab_width - 48)
     add_label(diagnostics_tab, "Settings File", 24, 246, 240, 24)
     settings_path = add_label(diagnostics_tab, "", 32, 208, 588, 22)
