@@ -217,6 +217,7 @@ class AgentMonitor:
                 ):
                     continue
                 statuses_by_key[status.agent_id] = status
+                complete_subagents_for_ended_session(record, statuses_by_key)
 
         self._latest_status_signature = signature
         self._latest_statuses_by_key = dict(statuses_by_key)
@@ -420,6 +421,7 @@ class LiveAgentMonitor:
             ):
                 return
             self.statuses_by_key[status.agent_id] = status
+            complete_subagents_for_ended_session(record, self.statuses_by_key)
             self.write_latest_state()
 
     def snapshot(self, include_stale: bool = False) -> MonitorSnapshot:
@@ -1329,6 +1331,27 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
 
 def status_counts_active(status: AgentStatus) -> bool:
     return status.mode not in {AgentMode.COMPLETED, AgentMode.IDLE_READY}
+
+
+def complete_subagents_for_ended_session(
+    record: HookEvent,
+    statuses_by_key: dict[str, AgentStatus],
+) -> None:
+    """Mark a session's subagent rows completed when the session itself ends.
+
+    SubagentStop rows are keyed by agent id, so a later SessionEnd for the parent
+    session would otherwise leave them visible until the generic stale timeout.
+    """
+    if record.event_name != "SessionEnd" or record.agent_id or not record.session_id:
+        return
+    for key, status in statuses_by_key.items():
+        if (
+            key != record.status_key
+            and status.provider == record.provider
+            and status.session_id == record.session_id
+            and status_counts_active(status)
+        ):
+            statuses_by_key[key] = _replace_mode(status, AgentMode.COMPLETED)
 
 
 def track_pending_permissions(
