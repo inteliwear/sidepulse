@@ -85,6 +85,8 @@ DEFAULT_LID_CLOSED_ANIMATION_SECONDS = 0.9
 DEFAULT_LID_OPEN_ANIMATION_SECONDS = 1.0
 DEFAULT_RECENT_SESSION_RETENTION_SECONDS = 48 * 60 * 60
 DEFAULT_IDLE_TIMEOUT_SECONDS = 60 * 60
+DEFAULT_DND_START_TIME = "22:00"
+DEFAULT_DND_END_TIME = "07:00"
 DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT = 20.0
 HISTORY_TIMEFRAME_1H_SECONDS = 60 * 60
 HISTORY_TIMEFRAME_6H_SECONDS = 6 * 60 * 60
@@ -155,6 +157,12 @@ class AgentMonitorSettings:
     custom_terminal_path: str = ""
     recent_session_retention_seconds: float = DEFAULT_RECENT_SESSION_RETENTION_SECONDS
     idle_timeout_seconds: float = DEFAULT_IDLE_TIMEOUT_SECONDS
+    kitt_mode_enabled: bool = False
+    dnd_enabled: bool = False
+    dnd_schedule_enabled: bool = False
+    dnd_start_time: str = DEFAULT_DND_START_TIME
+    dnd_end_time: str = DEFAULT_DND_END_TIME
+    dnd_last_schedule_transition: str = ""
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
@@ -448,6 +456,47 @@ class AgentMonitorSettings:
             idle_timeout_seconds=idle_timeout,
         )
 
+    def with_kitt_mode(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, kitt_mode_enabled=bool(enabled))
+
+    def with_dnd(
+        self,
+        *,
+        enabled: bool | None = None,
+        schedule_enabled: bool | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        schedule_transition: str | None = None,
+    ) -> "AgentMonitorSettings":
+        return replace(
+            self,
+            dnd_enabled=(
+                self.dnd_enabled
+                if enabled is None
+                else bool(enabled)
+            ),
+            dnd_schedule_enabled=(
+                self.dnd_schedule_enabled
+                if schedule_enabled is None
+                else bool(schedule_enabled)
+            ),
+            dnd_start_time=(
+                self.dnd_start_time
+                if start_time is None
+                else normalize_dnd_time(start_time)
+            ),
+            dnd_end_time=(
+                self.dnd_end_time
+                if end_time is None
+                else normalize_dnd_time(end_time)
+            ),
+            dnd_last_schedule_transition=(
+                self.dnd_last_schedule_transition
+                if schedule_transition is None
+                else str(schedule_transition)
+            ),
+        )
+
     def with_sleep_prevention_battery_safeguard(self, percent: float) -> "AgentMonitorSettings":
         return replace(
             self,
@@ -484,6 +533,14 @@ class AgentMonitorSettings:
             "agent_list": {
                 "recent_session_retention_seconds": self.recent_session_retention_seconds,
                 "idle_timeout_seconds": self.idle_timeout_seconds,
+            },
+            "kitt_mode_enabled": self.kitt_mode_enabled,
+            "do_not_disturb": {
+                "enabled": self.dnd_enabled,
+                "schedule_enabled": self.dnd_schedule_enabled,
+                "start_time": self.dnd_start_time,
+                "end_time": self.dnd_end_time,
+                "last_schedule_transition": self.dnd_last_schedule_transition,
             },
             "sleep_prevention": {
                 "min_battery_percent": self.sleep_prevention_min_battery_percent,
@@ -537,6 +594,10 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
     agent_list = data.get("agent_list")
     if not isinstance(agent_list, dict):
         agent_list = {}
+
+    dnd = data.get("do_not_disturb")
+    if not isinstance(dnd, dict):
+        dnd = {}
 
     sleep_prevention = data.get("sleep_prevention")
     if not isinstance(sleep_prevention, dict):
@@ -605,6 +666,23 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         idle_timeout_seconds=_nonnegative_float_setting(
             agent_list.get("idle_timeout_seconds", data.get("idle_timeout_seconds")),
             DEFAULT_IDLE_TIMEOUT_SECONDS,
+        ),
+        kitt_mode_enabled=_bool_setting(data.get("kitt_mode_enabled"), False),
+        dnd_enabled=_bool_setting(
+            dnd.get("enabled"),
+            _bool_setting(dnd.get("manual_enabled"), False),
+        ),
+        dnd_schedule_enabled=_bool_setting(dnd.get("schedule_enabled"), False),
+        dnd_start_time=_dnd_time_setting(
+            dnd.get("start_time"),
+            DEFAULT_DND_START_TIME,
+        ),
+        dnd_end_time=_dnd_time_setting(
+            dnd.get("end_time"),
+            DEFAULT_DND_END_TIME,
+        ),
+        dnd_last_schedule_transition=_string_setting(
+            dnd.get("last_schedule_transition")
         ),
         sleep_prevention_min_battery_percent=normalize_percent_setting(
             sleep_prevention.get(
@@ -768,6 +846,27 @@ def _nonnegative_float_setting(value: object, default: float) -> float:
     if isinstance(value, (int, float)):
         return normalize_seconds_setting(value)
     return default
+
+
+def normalize_dnd_time(value: str) -> str:
+    text = str(value).strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if match is None:
+        raise ValueError("DND times must use 24-hour HH:MM format.")
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError("DND times must use 24-hour HH:MM format.")
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _dnd_time_setting(value: object, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    try:
+        return normalize_dnd_time(value)
+    except ValueError:
+        return default
 
 
 def normalize_seconds_setting(value: object) -> float:

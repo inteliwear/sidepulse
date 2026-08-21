@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -115,6 +116,8 @@ from sidepulse.settings import (
     CLOSED_LID_AWAKE_AGENTS,
     CLOSED_LID_AWAKE_ALWAYS,
     CLOSED_LID_AWAKE_NEVER,
+    DEFAULT_DND_END_TIME,
+    DEFAULT_DND_START_TIME,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_HISTORY_TIMEFRAME_SECONDS,
     DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
@@ -605,6 +608,44 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
+
+    def test_live_sidepulse_session_end_completes_lingering_subagents(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+        session_id = "03a6ef62-1ae1-49cc-b1fd-f9ebe272a677"
+        now = datetime.now(timezone.utc)
+
+        def ingest(event: dict[str, object]) -> None:
+            line = {
+                "logged_at": now.isoformat(),
+                "session_id": session_id,
+                "cwd": "/tmp/project",
+                **event,
+            }
+            record = parse_log_line("claude", json.dumps(line))
+            self.assertIsNotNone(record)
+            monitor.ingest_record(record)
+
+        ingest({"hook_event_name": "Stop", "last_assistant_message": "Done."})
+        ingest(
+            {
+                "hook_event_name": "SubagentStop",
+                "agent_id": "af896bde23bba0adc",
+                "last_assistant_message": "what about next week?",
+            }
+        )
+
+        modes = {s.agent_id: s.mode for s in monitor.snapshot().statuses}
+        self.assertEqual(
+            modes["claude:agent:af896bde23bba0adc"], AgentMode.WAITING_FOR_INPUT
+        )
+
+        ingest({"hook_event_name": "SessionEnd", "reason": "other"})
+
+        snapshot = monitor.snapshot(include_stale=True)
+        modes = {s.agent_id: s.mode for s in snapshot.statuses + snapshot.stale_statuses}
+        self.assertEqual(modes[f"claude:session:{session_id}"], AgentMode.COMPLETED)
+        self.assertEqual(modes["claude:agent:af896bde23bba0adc"], AgentMode.COMPLETED)
+        self.assertNotEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
 
     def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
         try:
@@ -1552,6 +1593,7 @@ class AgentMonitorTests(unittest.TestCase):
             brightness=128,
         )
         fake = SimpleNamespace(
+            settings=AgentMonitorSettings(),
             status_bar_devices=lambda remember=True: [device],
             ensure_device_selection=lambda: None,
             last_led_error="old",
@@ -1681,6 +1723,123 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertNotIn("Sleep Helper Missing", titles)
         self.assertIn("Setup...", titles)
 
+    def test_dnd_schedule_switches_the_toggle_at_overnight_boundaries(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        settings = AgentMonitorSettings().with_dnd(
+            schedule_enabled=True,
+            start_time="21:00",
+            end_time="07:00",
+        )
+        before_start = status_bar.settings_after_dnd_schedule_transition(
+            settings,
+            datetime(2026, 8, 17, 20, 59),
+            force=True,
+        )
+        self.assertFalse(before_start.dnd_enabled)
+
+        after_start = status_bar.settings_after_dnd_schedule_transition(
+            before_start,
+            datetime(2026, 8, 17, 21, 0),
+        )
+        self.assertTrue(after_start.dnd_enabled)
+
+        manual_override = after_start.with_dnd(enabled=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            save_settings(manual_override, settings_path)
+            restarted = load_settings(settings_path)
+            before_end = status_bar.settings_after_dnd_schedule_transition(
+                restarted,
+                datetime(2026, 8, 18, 6, 59),
+            )
+        self.assertEqual(before_end, manual_override)
+        self.assertFalse(status_bar.dnd_is_active(before_end))
+
+        after_end = status_bar.settings_after_dnd_schedule_transition(
+            before_end,
+            datetime(2026, 8, 18, 7, 0),
+        )
+        self.assertFalse(after_end.dnd_enabled)
+        self.assertNotEqual(
+            after_end.dnd_last_schedule_transition,
+            before_end.dnd_last_schedule_transition,
+        )
+
+    def test_dnd_toggle_can_override_schedule_in_either_direction(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        settings = AgentMonitorSettings().with_dnd(
+            enabled=False,
+            schedule_enabled=True,
+            start_time="21:00",
+            end_time="07:00",
+        )
+        self.assertFalse(status_bar.dnd_is_active(settings, datetime(2026, 8, 17, 23, 0)))
+
+        settings = settings.with_dnd(enabled=True)
+        self.assertTrue(status_bar.dnd_is_active(settings, datetime(2026, 8, 17, 12, 0)))
+        self.assertIn("LEDs are off", status_bar.dnd_status_text(settings))
+
+    def test_dnd_writes_off_once_per_physical_device(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        device = status_bar.StatusBarDevice(
+            device_id="/Volumes/SidePulseDot",
+            name="SidePulse Dot",
+            root=Path("/Volumes/SidePulseDot"),
+            target=Path("/Volumes/SidePulseDot/LEDS.LED"),
+            connected=True,
+            display="agent",
+        )
+        fake = SimpleNamespace(
+            status_bar_devices=lambda: [device],
+            dnd_off_targets=set(),
+            device_errors={},
+            last_led_error=None,
+        )
+        with patch("sidepulse.status_bar.write_led_program", return_value=device.target) as write:
+            status_bar.StatusBarController.sync_dnd_leds_now(fake)
+            status_bar.StatusBarController.sync_dnd_leds_now(fake)
+
+        write.assert_called_once_with("off", device_path=device.target)
+        self.assertEqual(fake.dnd_off_targets, {str(device.target)})
+        self.assertIsNone(fake.last_led_error)
+
+    def test_status_bar_menu_shows_dnd_toggle_and_schedule(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        snapshot = SimpleNamespace(statuses=[], collected_at=datetime.now(timezone.utc))
+        target = SimpleNamespace(
+            settings=AgentMonitorSettings().with_dnd(
+                enabled=True,
+                schedule_enabled=True,
+            ),
+            closed_lid_awake=SimpleNamespace(last_error=None),
+            status_bar_devices=lambda: [],
+        )
+        menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
+        by_title = {
+            menu.itemAtIndex_(index).title(): menu.itemAtIndex_(index)
+            for index in range(menu.numberOfItems())
+            if menu.itemAtIndex_(index).title()
+        }
+
+        self.assertIn("Do Not Disturb", by_title)
+        self.assertEqual(by_title["DND On"].state(), 1)
+
     def test_lid_animation_program_uses_device_brightness(self) -> None:
         try:
             from sidepulse import status_bar
@@ -1742,7 +1901,7 @@ class AgentMonitorTests(unittest.TestCase):
             if hasattr(view, "numberOfTabViewItems")
         ]
         self.assertEqual(len(tab_views), 1)
-        self.assertEqual(tab_views[0].numberOfTabViewItems(), 6)
+        self.assertEqual(tab_views[0].numberOfTabViewItems(), 7)
         self.assertIn("debug_log_status", target.settings_fields)
         self.assertIn("status_history_status", target.settings_fields)
         self.assertIn("status_history_chart", target.settings_fields)
@@ -1750,6 +1909,15 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("custom_terminal_path", target.settings_fields)
         self.assertIn("recent_session_retention_hours", target.settings_fields)
         self.assertIn("idle_timeout_minutes", target.settings_fields)
+        self.assertIn("remote_host_popup", target.settings_fields)
+        self.assertIn("remote_host_name", target.settings_fields)
+        self.assertIn("remote_ssh_target", target.settings_fields)
+        self.assertIn("remote_host_status", target.settings_fields)
+        self.assertIn("dnd_start_time", target.settings_fields)
+        self.assertIn("dnd_end_time", target.settings_fields)
+        self.assertIn("dnd_status", target.settings_fields)
+        self.assertIn("dnd_enabled", target.settings_buttons)
+        self.assertIn("dnd_schedule", target.settings_buttons)
         self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
         self.assertIn("status_history_timeframe", target.settings_fields)
         self.assertIn("closed_animation_program", target.settings_fields)
@@ -3537,7 +3705,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
-            "off\n#020204 6s pulse\nrepeat",
+            "off",
         )
         self.assertEqual(program_for_display_state(LedDisplayState.DONE), "#00FF66")
         self.assertIn("#FF3A00 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
@@ -3553,6 +3721,21 @@ class AgentMonitorTests(unittest.TestCase):
             len(program_for_display_state(LedDisplayState.WORKING, led_count=8).splitlines()),
             3,
         )
+        kitt_program = program_for_display_state(
+            LedDisplayState.WORKING,
+            led_count=8,
+            brightness=128,
+            kitt_mode=True,
+        )
+        validate_led_text(kitt_program)
+        self.assertLessEqual(len(kitt_program.encode("utf-8")), 512)
+        kitt_lines = kitt_program.splitlines()
+        self.assertIn("7:#00E5FF 320ms pulse 595ms", kitt_lines[2])
+        self.assertIn("6:#00E5FF 320ms pulse 0ms", kitt_lines[3])
+        self.assertIn("0:#00E5FF 320ms pulse 510ms", kitt_lines[3])
+        self.assertEqual(kitt_lines[2].count("7:#00E5FF"), 1)
+        self.assertEqual(kitt_lines[3].count("7:#00E5FF"), 0)
+        self.assertTrue(kitt_program.endswith("repeat"))
         self.assertEqual(
             program_for_display_state(LedDisplayState.DONE, brightness=128),
             "brightness 128\n#00FF66",
@@ -3578,7 +3761,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(
                 (device / "LEDS.LED").read_text(),
-                "off\n#020204 6s pulse\nrepeat",
+                "off",
             )
 
             write_mode_to_leds(AgentMode.COMPLETED, device_path=device, brightness=64)
@@ -3618,6 +3801,24 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
             self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
+
+    def test_agent_led_controller_rewrites_working_state_when_kitt_mode_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+
+            standard = controller.sync_mode(AgentMode.WORKING)
+            kitt = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+            unchanged = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+
+            self.assertTrue(standard.changed)
+            self.assertTrue(kitt.changed)
+            self.assertFalse(unchanged.changed)
+            program = (device / "LEDS.LED").read_text()
+            self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
+            self.assertIn("6:#00E5FF 320ms pulse 0ms", program)
+            self.assertIn("0:#00E5FF 320ms pulse 510ms", program)
 
     def test_battery_parser_uses_adapter_watts_and_raw_capacity(self) -> None:
         payload = plistlib.dumps(
@@ -4314,6 +4515,62 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(loaded.recent_session_retention_seconds, 36 * 60 * 60)
             self.assertEqual(loaded.idle_timeout_seconds, 15 * 60)
+
+    def test_settings_round_trip_dnd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings().with_dnd(
+                enabled=True,
+                schedule_enabled=True,
+                start_time="21:30",
+                end_time="6:15",
+                schedule_transition="2026-08-17:start:21:30",
+            )
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.dnd_enabled)
+            self.assertTrue(loaded.dnd_schedule_enabled)
+            self.assertEqual(loaded.dnd_start_time, "21:30")
+            self.assertEqual(loaded.dnd_end_time, "06:15")
+            self.assertEqual(
+                loaded.dnd_last_schedule_transition,
+                "2026-08-17:start:21:30",
+            )
+
+    def test_settings_round_trip_kitt_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings().with_kitt_mode(True)
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.kitt_mode_enabled)
+            self.assertFalse(AgentMonitorSettings().kitt_mode_enabled)
+
+    def test_settings_dnd_defaults_and_validation(self) -> None:
+        settings = AgentMonitorSettings()
+        self.assertFalse(settings.dnd_enabled)
+        self.assertFalse(settings.dnd_schedule_enabled)
+        self.assertEqual(settings.dnd_start_time, DEFAULT_DND_START_TIME)
+        self.assertEqual(settings.dnd_end_time, DEFAULT_DND_END_TIME)
+        with self.assertRaises(ValueError):
+            settings.with_dnd(start_time="25:00")
+        with self.assertRaises(ValueError):
+            settings.with_dnd(end_time="night")
+
+    def test_settings_migrates_legacy_manual_dnd_toggle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"do_not_disturb": {"manual_enabled": True}})
+            )
+
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.dnd_enabled)
 
     def test_settings_migrates_missing_agent_list_timing_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6501,6 +6758,13 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             SESSION_OPEN_APP,
         )
 
+        remote_claude = status_for("claude", "Claude on macmini")
+        remote_claude = replace(
+            remote_claude,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+        )
+        self.assertEqual(default_session_open_action(remote_claude), SESSION_OPEN_APP)
+
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
             provider="claude",
@@ -6513,7 +6777,10 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             cwd="/Users/pero/pgit/sdstatus_bitbang",
         )
 
-        self.assertEqual(session_deep_link(status), "claude://")
+        self.assertEqual(
+            session_deep_link(status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
         self.assertEqual(
             session_resume_command(status),
             "cd /Users/pero/pgit/sdstatus_bitbang && claude --resume 1ca4348e-2aec-4147-9e81-d7d56364d257",
@@ -6529,6 +6796,20 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "url",
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
+        )
+
+        remote_status = replace(
+            status,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+            origin="Claude on macmini",
+        )
+        self.assertEqual(
+            session_deep_link(remote_status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
+        self.assertEqual(
+            session_vscode_link(remote_status),
+            "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
         )
 
 

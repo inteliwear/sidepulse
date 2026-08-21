@@ -93,11 +93,11 @@ Agent status modes:
 
 | Mode | Meaning | LED pattern |
 | --- | --- | --- |
-| Idle / Ready | The agent is available and not currently running a task. | Very dim idle pulse. |
-| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation. |
-| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation. |
+| Idle / Ready | The agent is available and not currently running a task. | Off. |
+| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
+| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
-| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation. |
+| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
 | Completed | The agent finished successfully. | Solid green. |
 
@@ -276,6 +276,81 @@ Check the current hook configuration:
 sidepulse agent-monitor doctor
 ```
 
+### Remote Claude and Codex sessions over SSH
+
+SidePulse can monitor both Claude and Codex sessions whose agent process runs on
+another Mac while the SidePulse device remains connected to a client Mac. In this
+setup:
+
+- the **remote host** runs Claude and/or Codex and owns the project files;
+- the **SidePulse client** is any Mac with SidePulse Pro or SidePulse Dot plugged in;
+- each SidePulse client makes its own outbound SSH connection to the remote host.
+
+#### 1. Prepare each remote host
+
+Install SidePulse and both provider hooks once on every remote host that runs Claude
+or Codex:
+
+```sh
+# Run in a SidePulse checkout on the remote Mac.
+./scripts/install-user.sh
+~/.local/bin/sidepulse agent-monitor install codex
+~/.local/bin/sidepulse agent-monitor install claude
+~/.local/bin/sidepulse agent-monitor doctor
+```
+
+The hooks cover Claude and Codex independently, so either provider can be running and
+both can be monitored at the same time.
+
+#### 2. Prepare every Mac with SidePulse plugged in
+
+Install SidePulse on each client Mac, confirm that its SSH alias can reach the remote
+host without an interactive password prompt, and add the host:
+
+```sh
+# Run in a SidePulse checkout on each Mac connected to a SidePulse device.
+./scripts/install-user.sh
+
+# Replace these values with a local display name and a working SSH host or alias.
+~/.local/bin/sidepulse remote add macmini --ssh mini
+~/.local/bin/sidepulse remote list
+```
+
+`remote add` monitors both Claude and Codex by default, installs a per-user
+LaunchAgent, starts it immediately, and enables it at login. Repeat the client steps
+on every Mac that has a SidePulse device plugged in. Multiple SidePulse clients can
+monitor the same remote host independently.
+
+The same configuration is available in the macOS menu-bar app: open
+**Settings...**, select the **Remote** tab, enter a display name and SSH host or
+`~/.ssh/config` alias, then click **Add or Update Host**. The app can also select,
+refresh, and remove configured hosts and manages the background monitor automatically.
+
+To limit a connection to one provider, pass `--provider codex` or
+`--provider claude`. To monitor another remote host from the same SidePulse client,
+repeat `remote add` with another name and SSH target:
+
+```sh
+~/.local/bin/sidepulse remote add build-mac --ssh build-mac
+```
+
+The local monitor opens an outbound SSH connection, reconnects automatically, and
+starts at login. It does not expose a listening port or use a public relay. Remote
+session IDs are namespaced by host, and the status list identifies origins such as
+`Codex on macmini` and `Claude on macmini`.
+
+Manage configured hosts and the background monitor with:
+
+```sh
+~/.local/bin/sidepulse remote list
+~/.local/bin/sidepulse remote start
+~/.local/bin/sidepulse remote stop
+~/.local/bin/sidepulse remote remove macmini
+```
+
+Only hook events are streamed. Project files and command execution remain on the SSH
+host.
+
 Install or refresh the monitor hooks:
 
 ```sh
@@ -322,9 +397,8 @@ Working.
 
 `Completed` remains visible for 20 minutes so the status bar and LEDs can show
 Done long enough to be noticed. After that it drops out instead of counting as
-an active session for the full stale window, and the LEDs return to the very
-dim Idle pattern. Idle/session-start records also do not count as active
-sessions.
+an active session for the full stale window, and the LEDs turn off. Idle/session-start
+records also do not count as active sessions.
 
 Status detection is strongest when the agent tells the monitor its intended
 handoff state explicitly. A final assistant message can include a hidden marker
@@ -418,10 +492,32 @@ The status-bar item shows one of four collapsed states:
 | Done | The most recent active agent completed successfully. |
 | Ask | An agent needs input, permission, or attention. |
 
+### Do Not Disturb
+
+Do Not Disturb keeps all physical SidePulse LEDs and the optional Screen Bar off while
+agent monitoring continues normally. Toggle it immediately from the menu-bar dropdown,
+or open **Settings... → Devices & LEDs** to use the same DND toggle and optionally set a
+recurring daily schedule such as `21:00`–`07:00`. The schedule switches the toggle on at
+the start time and off at the end time. You can override the toggle at any time; that
+choice remains in effect until the next scheduled boundary, including across app
+restarts. Overnight schedules that cross midnight are supported.
+
+### KITT scanner
+
+Enable **KITT scanner while working** from the menu-bar dropdown or from
+**Settings... → Devices & LEDs**. Working, Tool Running, and Long Task Progress
+then sweep back and forth like KITT while keeping the normal working-state color
+and each device's configured brightness. Ask, Done, Idle, battery, custom, and DND
+displays are unchanged. The animation adapts to both the eight-LED SidePulse Pro
+and two-LED SidePulse Dot.
+
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
-provider app, Terminal resume, or Claude Code in VS Code.
+provider app, Terminal resume, or Claude Code in VS Code. Remote Claude sessions
+open the matching session in Claude Desktop by default; SidePulse keeps its
+host-qualified internal ID separate from the original Claude session UUID used
+by the Desktop deep link.
 
 The dropdown also includes a checked `Connect to Device` item. A checkmark means
 the status-bar app is actively connected to a mounted SidePulse Pro/SidePulse Dot target.

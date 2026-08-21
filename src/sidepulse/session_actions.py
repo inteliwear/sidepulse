@@ -17,20 +17,26 @@ SESSION_OPEN_VSCODE_SURFACES = ("vscode", "vs code", "visual studio code")
 
 def session_deep_link(status: AgentStatus) -> str | None:
     provider = status.provider.lower()
-    session_id = status.session_id
+    session_id = external_session_id(status)
 
     if provider == "codex" and session_id:
         return f"codex://threads/{quote(session_id, safe='')}"
     if provider == "claude":
+        if session_id:
+            params = {"session": session_id}
+            if status.cwd:
+                params["cwd"] = status.cwd
+            return "claude://resume?" + urlencode(params, quote_via=quote)
         return "claude://"
     return None
 
 
 def session_vscode_link(status: AgentStatus) -> str | None:
-    if status.provider.lower() != "claude" or not status.session_id:
+    session_id = external_session_id(status)
+    if status.provider.lower() != "claude" or not session_id:
         return None
     return "vscode://anthropic.claude-code/open?" + urlencode(
-        {"session": status.session_id},
+        {"session": session_id},
         quote_via=quote,
     )
 
@@ -60,6 +66,9 @@ def default_session_open_action(status: AgentStatus) -> str:
 
 
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
+    if status.provider.lower() == "claude" and remote_session_parts(status.session_id):
+        return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
+
     origin = normalized_origin(status.origin)
     if origin:
         if any(surface in origin for surface in SESSION_OPEN_VSCODE_SURFACES):
@@ -74,6 +83,22 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     if status.provider.lower() == "claude":
         return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
     return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
+
+
+def external_session_id(status: AgentStatus) -> str | None:
+    remote = remote_session_parts(status.session_id)
+    if remote:
+        return remote[1]
+    return status.session_id
+
+
+def remote_session_parts(session_id: str | None) -> tuple[str, str] | None:
+    if not session_id or not session_id.startswith("remote:"):
+        return None
+    parts = session_id.split(":", 2)
+    if len(parts) != 3 or not parts[1] or not parts[2]:
+        return None
+    return parts[1], parts[2]
 
 
 def normalized_origin(origin: str | None) -> str:

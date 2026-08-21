@@ -43,6 +43,15 @@ from .providers import (
     detect_log_path,
     default_log_path,
 )
+from .remote_hosts import (
+    DEFAULT_REMOTE_PROVIDERS,
+    RemoteHost,
+    load_remote_hosts,
+    remove_remote_host,
+    run_remote_monitor,
+    stream_remote_events,
+    upsert_remote_host,
+)
 from .settings import (
     LED_DISPLAY_BATTERY,
     LED_DISPLAY_CUSTOM,
@@ -132,11 +141,63 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     add_sidepulse_status_bar_parser(subparsers)
     add_sidepulse_sdejectguard_parser(subparsers)
     add_sidepulse_battery_parser(subparsers)
+    add_sidepulse_remote_parser(subparsers)
+    add_remote_agent_parser(subparsers)
     # Agent configs written by older installs invoke `sidepulse hook-log`
     # directly, and `python -m sidepulse` lands here too, so both CLIs must
     # accept it.
     add_hook_log_parser(subparsers)
     return parser
+
+
+def add_sidepulse_remote_parser(subparsers: argparse._SubParsersAction) -> None:
+    remote = subparsers.add_parser(
+        "remote",
+        help="Monitor Codex and Claude sessions running on SSH hosts.",
+    )
+    commands = remote.add_subparsers(dest="remote_command", required=True)
+
+    add = commands.add_parser("add", help="Add or update an SSH host and start monitoring it.")
+    add.add_argument("name", help="Stable display name, for example macmini.")
+    add.add_argument("--ssh", dest="ssh_target", required=True, help="SSH host or config alias.")
+    add.add_argument(
+        "--provider",
+        action="append",
+        choices=HOOK_PROVIDERS,
+        help="Provider to monitor. Repeat to select more than one. Default: codex and claude.",
+    )
+    add.add_argument("--no-start", action="store_true", help="Save without starting the monitor.")
+    add.set_defaults(func=cmd_remote_add)
+
+    remove = commands.add_parser("remove", help="Stop monitoring and remove an SSH host.")
+    remove.add_argument("name")
+    remove.set_defaults(func=cmd_remote_remove)
+
+    list_parser = commands.add_parser("list", help="List configured SSH hosts.")
+    list_parser.add_argument("--json", action="store_true")
+    list_parser.set_defaults(func=cmd_remote_list)
+
+    start = commands.add_parser("start", help="Install and start the remote-host monitor.")
+    start.set_defaults(func=cmd_remote_start)
+
+    stop = commands.add_parser("stop", help="Stop the remote-host monitor.")
+    stop.set_defaults(func=cmd_remote_stop)
+
+    monitor = commands.add_parser("monitor", help="Run the remote-host monitor in the foreground.")
+    monitor.set_defaults(func=cmd_remote_monitor)
+
+
+def add_remote_agent_parser(subparsers: argparse._SubParsersAction) -> None:
+    remote_agent = subparsers.add_parser(
+        "remote-agent",
+        help="Internal remote event streaming entry point.",
+    )
+    commands = remote_agent.add_subparsers(dest="remote_agent_command", required=True)
+    stream = commands.add_parser("stream", help=argparse.SUPPRESS)
+    stream.add_argument("--provider", action="append", choices=HOOK_PROVIDERS)
+    stream.add_argument("--replay-lines", type=int, default=300)
+    stream.add_argument("--poll-interval", type=float, default=0.25)
+    stream.set_defaults(func=cmd_remote_agent_stream)
 
 
 def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -859,6 +920,90 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 def cmd_hook_log(args: argparse.Namespace) -> int:
     return hook_log_main(args.provider, args.log)
+
+
+def cmd_remote_add(args: argparse.Namespace) -> int:
+    providers = tuple(args.provider or DEFAULT_REMOTE_PROVIDERS)
+    try:
+        host = RemoteHost(args.name, args.ssh_target, tuple(dict.fromkeys(providers)))
+    except ValueError as exc:
+        print(f"remote: {exc}", file=sys.stderr)
+        return 2
+    target = upsert_remote_host(host)
+    print(f"remote: saved {host.name} ({host.ssh_target})")
+    print(f"  providers: {', '.join(host.providers)}")
+    print(f"  config: {target}")
+    if not args.no_start:
+        from .remote_launch import install_remote_launch_agent
+
+        result = install_remote_launch_agent(start=True)
+        print(f"  monitor: started ({result.plist_path})")
+    return 0
+
+
+def cmd_remote_remove(args: argparse.Namespace) -> int:
+    target, changed = remove_remote_host(args.name)
+    if not changed:
+        print(f"remote: {args.name} is not configured")
+        return 1
+
+    remaining = load_remote_hosts(target)
+    from .remote_launch import install_remote_launch_agent, uninstall_remote_launch_agent
+
+    if remaining:
+        install_remote_launch_agent(start=True)
+        action = "monitor restarted"
+    else:
+        uninstall_remote_launch_agent()
+        action = "monitor stopped"
+    print(f"remote: removed {args.name}; {action}")
+    print(f"  config: {target}")
+    return 0
+
+
+def cmd_remote_list(args: argparse.Namespace) -> int:
+    hosts = load_remote_hosts()
+    if args.json:
+        print(json.dumps({"hosts": [host.to_dict() for host in hosts]}, indent=2))
+        return 0
+    if not hosts:
+        print("No remote hosts configured.")
+        return 0
+    for host in hosts:
+        print(f"{host.name}: {host.ssh_target} ({', '.join(host.providers)})")
+    return 0
+
+
+def cmd_remote_start(_args: argparse.Namespace) -> int:
+    if not load_remote_hosts():
+        print("remote: no hosts configured", file=sys.stderr)
+        return 1
+    from .remote_launch import install_remote_launch_agent
+
+    result = install_remote_launch_agent(start=True)
+    print(f"remote: started ({result.plist_path})")
+    return 0
+
+
+def cmd_remote_stop(_args: argparse.Namespace) -> int:
+    from .remote_launch import uninstall_remote_launch_agent
+
+    result = uninstall_remote_launch_agent()
+    action = "stopped" if result.changed else "already stopped"
+    print(f"remote: {action}")
+    return 0
+
+
+def cmd_remote_monitor(_args: argparse.Namespace) -> int:
+    return run_remote_monitor()
+
+
+def cmd_remote_agent_stream(args: argparse.Namespace) -> int:
+    return stream_remote_events(
+        args.provider or DEFAULT_REMOTE_PROVIDERS,
+        replay_lines=max(0, args.replay_lines),
+        poll_interval=args.poll_interval,
+    )
 
 
 def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:
