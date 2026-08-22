@@ -422,6 +422,21 @@ class LiveAgentMonitor:
             self.statuses_by_key[status.agent_id] = status
             self.write_latest_state()
 
+    def clear_statuses(self) -> int:
+        """Forget every tracked agent session and persist the empty state.
+
+        Live agents re-register on their next hook event; this only drops what
+        the monitor is currently holding.
+        """
+        with self.lock:
+            cleared = len(self.statuses_by_key)
+            self.statuses_by_key.clear()
+            self.metadata_by_session.clear()
+            self.metadata_by_status.clear()
+            self.pending_permissions_by_key.clear()
+            self.write_latest_state()
+        return cleared
+
     def snapshot(self, include_stale: bool = False) -> MonitorSnapshot:
         now = datetime.now(timezone.utc)
         with self.lock:

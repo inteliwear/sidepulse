@@ -20,6 +20,8 @@ import ast
 import os
 import re
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,6 +69,7 @@ from sidepulse import status_bar as sb  # noqa: E402
 from sidepulse import virtual_device as vd  # noqa: E402
 from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
+from sidepulse.settings import AgentMonitorSettings  # noqa: E402
 
 
 # A selector literal: camelCase identifier ending in a single colon.
@@ -402,6 +405,211 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(
                     sb.image_for_symbol(state.symbol, state.label), NSImage
                 )
+
+
+class ClearAgentsTests(StatusBarTestCase):
+    """The menu's Clear Agents entry drops sessions and returns LEDs to Idle."""
+
+    def setUp(self):
+        patcher = patch.object(sb, "discover_devices", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.controller.monitor.statuses_by_key.clear)
+
+    def test_clear_agents_item_appears_only_when_sessions_are_listed(self):
+        empty = sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller)
+        self.assertNotIn(
+            "Clear Agents & Idle LEDs",
+            [item.title() for item in walk_menu(empty)],
+        )
+
+        populated = sb.build_menu(
+            make_snapshot(statuses=[make_status()]),
+            sb.STATE_WORKING,
+            self.controller,
+        )
+        clear = next(
+            item for item in walk_menu(populated)
+            if item.title() == "Clear Agents & Idle LEDs"
+        )
+        self.assertTrue(clear.target().respondsToSelector_("clearAgents:"))
+
+    def test_clear_agents_empties_the_monitor_and_leaves_an_idle_aggregate(self):
+        class FakeStatusItem:
+            """The real NSStatusItem only exists once the app has launched."""
+
+            def __init__(self):
+                self.menu = None
+
+            def button(self):
+                return None
+
+            def setMenu_(self, menu):
+                self.menu = menu
+
+        status = make_status(mode=AgentMode.WAITING_FOR_INPUT)
+        self.controller.monitor.statuses_by_key[status.agent_id] = status
+        self.controller.status_item = FakeStatusItem()
+        self.addCleanup(setattr, self.controller, "status_item", None)
+        # A lid animation in flight would otherwise repaint the LEDs after the
+        # clear, so the clear has to cancel it.
+        self.controller.led_animation_until_monotonic = time.monotonic() + 600
+
+        self.controller.clear_agents()
+
+        self.assertEqual({}, self.controller.monitor.statuses_by_key)
+        self.assertEqual(
+            AgentMode.IDLE_READY,
+            self.controller.monitor.snapshot().aggregate.mode,
+        )
+        self.assertEqual(0.0, self.controller.led_animation_until_monotonic)
+        self.assertFalse(self.controller.agent_awake_requested)
+        self.assertIsNotNone(self.controller.status_item.menu)
+
+
+class LidClosedLedIdleTests(StatusBarTestCase):
+    """With the setting on, a closed lid pins every LED display to Idle."""
+
+    def setUp(self):
+        original = self.controller.settings
+        original_lid = self.controller.last_lid_closed
+        self.addCleanup(setattr, self.controller, "settings", original)
+        self.addCleanup(setattr, self.controller, "last_lid_closed", original_lid)
+
+    def configure(self, *, enabled: bool, lid_closed, led_display=sb.LED_DISPLAY_AGENT):
+        self.controller.settings = AgentMonitorSettings(
+            lid_closed_led_idle_enabled=enabled,
+            led_display=led_display,
+        )
+        self.controller.last_lid_closed = lid_closed
+
+    def test_override_requires_both_the_setting_and_a_closed_lid(self):
+        cases = {
+            (True, True): True,
+            (True, False): False,
+            (True, None): False,   # lid state not read yet
+            (False, True): False,
+            (False, False): False,
+        }
+        for (enabled, lid_closed), expected in cases.items():
+            with self.subTest(enabled=enabled, lid_closed=lid_closed):
+                self.configure(enabled=enabled, lid_closed=lid_closed)
+                self.assertIs(expected, self.controller.led_idle_override_active())
+
+    def test_closed_lid_pins_a_battery_display_back_to_agent_status(self):
+        self.configure(
+            enabled=True,
+            lid_closed=True,
+            led_display=sb.LED_DISPLAY_BATTERY,
+        )
+        device = make_device()
+        battery_device = sb.StatusBarDevice(
+            device_id=device.device_id,
+            name=device.name,
+            root=device.root,
+            target=device.target,
+            connected=True,
+            display=sb.LED_DISPLAY_BATTERY,
+            brightness=255,
+        )
+
+        self.assertEqual(
+            sb.LED_DISPLAY_AGENT,
+            self.controller.active_led_display_kind(None),
+        )
+        self.assertEqual(
+            sb.LED_DISPLAY_AGENT,
+            self.controller.active_led_display_kind_for_device(battery_device, None),
+        )
+
+        # Open the lid again and the battery display comes straight back.
+        self.controller.last_lid_closed = False
+        self.assertEqual(
+            sb.LED_DISPLAY_BATTERY,
+            self.controller.active_led_display_kind(None),
+        )
+        self.assertEqual(
+            sb.LED_DISPLAY_BATTERY,
+            self.controller.active_led_display_kind_for_device(battery_device, None),
+        )
+
+    def test_manual_devices_keep_their_program_while_the_lid_is_closed(self):
+        """Manual means the user owns the strip; the override must not steal it."""
+        self.configure(enabled=True, lid_closed=True)
+        manual = sb.StatusBarDevice(
+            device_id="manual",
+            name="MANUAL",
+            root=Path("/Volumes/MANUAL"),
+            target=Path("/Volumes/MANUAL/leds.txt"),
+            connected=True,
+            display=sb.LED_DISPLAY_CUSTOM,
+            brightness=255,
+        )
+        self.assertEqual(
+            sb.LED_DISPLAY_CUSTOM,
+            self.controller.active_led_display_kind_for_device(manual, None),
+        )
+
+    def test_sync_leds_forces_idle_while_the_lid_is_closed(self):
+        self.configure(
+            enabled=True,
+            lid_closed=True,
+            led_display=sb.LED_DISPLAY_BATTERY,
+        )
+        seen = []
+        done = threading.Event()
+
+        def capture(mode, battery_snapshot, display_kind):
+            seen.append((mode, battery_snapshot, display_kind))
+            done.set()
+
+        self.controller.sync_leds_now = capture
+        self.addCleanup(lambda: self.controller.__dict__.pop("sync_leds_now", None))
+
+        self.controller.sync_leds(
+            AgentMode.WORKING,
+            object(),  # a battery snapshot the override must discard
+            sb.LED_DISPLAY_BATTERY,
+        )
+
+        self.assertTrue(done.wait(5), "sync_leds never reached the LED writer")
+        self.assertEqual(
+            [(AgentMode.IDLE_READY, None, sb.LED_DISPLAY_AGENT)],
+            seen,
+        )
+
+    def test_sync_leds_passes_the_real_mode_through_when_the_lid_is_open(self):
+        self.configure(enabled=True, lid_closed=False)
+        seen = []
+        done = threading.Event()
+
+        def capture(mode, battery_snapshot, display_kind):
+            seen.append((mode, display_kind))
+            done.set()
+
+        self.controller.sync_leds_now = capture
+        self.addCleanup(lambda: self.controller.__dict__.pop("sync_leds_now", None))
+
+        self.controller.sync_leds(AgentMode.WORKING, None, sb.LED_DISPLAY_AGENT)
+
+        self.assertTrue(done.wait(5), "sync_leds never reached the LED writer")
+        self.assertEqual([(AgentMode.WORKING, sb.LED_DISPLAY_AGENT)], seen)
+
+    def test_lid_idle_menu_item_tracks_the_setting(self):
+        with patch.object(sb, "discover_devices", return_value=[]):
+            for enabled in (True, False):
+                with self.subTest(enabled=enabled):
+                    self.configure(enabled=enabled, lid_closed=None)
+                    menu = sb.build_menu(
+                        make_snapshot(),
+                        sb.STATE_IDLE,
+                        self.controller,
+                    )
+                    item = next(
+                        item for item in walk_menu(menu)
+                        if item.title() == "Idle LEDs When Lid Closed"
+                    )
+                    self.assertEqual(1 if enabled else 0, item.state())
 
 
 class PureUiLogicTests(unittest.TestCase):

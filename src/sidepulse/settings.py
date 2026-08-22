@@ -140,6 +140,7 @@ class AgentMonitorSettings:
     sleep_prevention_policy: str = SLEEP_PREVENTION_AGENTS
     virtual_status_device_enabled: bool = False
     closed_lid_system_override_enabled: bool = False
+    lid_closed_led_idle_enabled: bool = False
     lid_closed_animation: LedAnimationSetting = field(
         default_factory=lambda: default_lid_animation(LID_ANIMATION_CLOSED)
     )
@@ -407,6 +408,9 @@ class AgentMonitorSettings:
     def with_closed_lid_system_override(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, closed_lid_system_override_enabled=bool(enabled))
 
+    def with_lid_closed_led_idle(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, lid_closed_led_idle_enabled=bool(enabled))
+
     def with_lid_animation(
         self,
         kind: str,
@@ -464,6 +468,7 @@ class AgentMonitorSettings:
             "sleep_prevention_policy": self.sleep_prevention_policy,
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
             "closed_lid_system_override_enabled": self.closed_lid_system_override_enabled,
+            "lid_closed_led_idle_enabled": self.lid_closed_led_idle_enabled,
             "lid_closed_animation": self.lid_closed_animation.to_dict(),
             "lid_open_animation": self.lid_open_animation.to_dict(),
             "transcript_monitoring": {
@@ -570,6 +575,10 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         ),
         closed_lid_system_override_enabled=_bool_setting(
             data.get("closed_lid_system_override_enabled"),
+            False,
+        ),
+        lid_closed_led_idle_enabled=_bool_setting(
+            data.get("lid_closed_led_idle_enabled"),
             False,
         ),
         lid_closed_animation=_lid_animation_setting(
