@@ -711,6 +711,18 @@ class StatusBarController(NSObject):
         self.set_battery_led_display(sender.state() == NSOnState)
 
     @objc.IBAction
+    def toggleLidClosedLedIdle_(self, _sender):
+        self.set_lid_closed_led_idle(not self.settings.lid_closed_led_idle_enabled)
+
+    @objc.IBAction
+    def setLidClosedLedIdleFromCheckbox_(self, sender):
+        self.set_lid_closed_led_idle(sender.state() == NSOnState)
+
+    @objc.IBAction
+    def clearAgents_(self, _sender):
+        self.clear_agents()
+
+    @objc.IBAction
     def toggleBatteryPowerPreview_(self, _sender):
         self.set_battery_power_preview(not self.settings.battery_show_on_power_change)
 
@@ -1036,6 +1048,10 @@ class StatusBarController(NSObject):
             self.settings_buttons.get("battery_power_preview"),
             self.settings.battery_show_on_power_change,
         )
+        set_checkbox_state(
+            self.settings_buttons.get("lid_closed_led_idle"),
+            self.settings.lid_closed_led_idle_enabled,
+        )
         for provider in ("codex", "claude", "grok"):
             popup = self.settings_fields.get(f"{provider}_session_opener")
             if popup is not None:
@@ -1277,6 +1293,44 @@ class StatusBarController(NSObject):
         self.reset_led_controllers_for_display_change()
         self.set_settings_message(f"LED display set to {self.settings.led_display}.")
         self.refresh_settings_window()
+        self.refresh_(None)
+
+    def set_lid_closed_led_idle(self, enabled: bool) -> None:
+        try:
+            self.settings = self.settings.with_lid_closed_led_idle(enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save settings: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        self.reset_led_controllers_for_display_change()
+        self.set_settings_message(
+            "LEDs idle while the lid is closed."
+            if self.settings.lid_closed_led_idle_enabled
+            else "LEDs keep their normal display while the lid is closed."
+        )
+        self.refresh_settings_window()
+        self.refresh_(None)
+
+    def clear_agents(self) -> None:
+        try:
+            cleared = self.monitor.clear_statuses()
+        except Exception as exc:
+            log_status_bar(f"clear agents error: {exc}")
+            self.set_settings_message(f"Could not clear agents: {exc}")
+            return
+
+        log_status_bar(f"agents cleared count={cleared}")
+        self.agent_awake_last_mode = None
+        self.agent_awake_grace_until_monotonic = None
+        self.agent_awake_requested = False
+        # Drop any in-flight lid animation so its restore pass cannot repaint
+        # the LEDs after the idle write below.
+        self.led_animation_token += 1
+        self.led_animation_until_monotonic = 0.0
+        self.reset_led_controllers_for_display_change()
         self.refresh_(None)
 
     def set_device_display(self, device_id: str | None, display: str) -> None:
@@ -1665,9 +1719,15 @@ class StatusBarController(NSObject):
 
         self.last_status_history_error = None
 
+    def led_idle_override_active(self) -> bool:
+        """True while the lid-closed setting should force the LEDs to Idle."""
+        return bool(self.settings.lid_closed_led_idle_enabled) and self.last_lid_closed is True
+
     def active_led_display_kind(self, snapshot: BatterySnapshot | None) -> str:
         if self.settings.led_display == LED_DISPLAY_CUSTOM:
             return LED_DISPLAY_CUSTOM
+        if self.led_idle_override_active():
+            return LED_DISPLAY_AGENT
         if self.settings.led_display == LED_DISPLAY_BATTERY:
             return LED_DISPLAY_BATTERY
         if snapshot is not None and time.monotonic() < self.battery_preview_until:
@@ -1830,6 +1890,8 @@ class StatusBarController(NSObject):
     ) -> str:
         if device.display == LED_DISPLAY_CUSTOM:
             return LED_DISPLAY_CUSTOM
+        if self.led_idle_override_active():
+            return LED_DISPLAY_AGENT
         if device.display == LED_DISPLAY_BATTERY:
             return LED_DISPLAY_BATTERY
         if battery_snapshot is not None and time.monotonic() < self.battery_preview_until:
@@ -1845,6 +1907,11 @@ class StatusBarController(NSObject):
         if not self.leds_enabled:
             return
 
+        if self.led_idle_override_active():
+            mode = AgentMode.IDLE_READY
+            battery_snapshot = None
+            display_kind = LED_DISPLAY_AGENT
+
         self.sync_virtual_status_device(mode, battery_snapshot)
 
         if time.monotonic() < self.led_animation_until_monotonic:
@@ -1859,6 +1926,15 @@ class StatusBarController(NSObject):
             daemon=True,
         )
         thread.start()
+
+    def resync_leds_from_last_snapshot(self) -> None:
+        if self.last_snapshot is None:
+            return
+        self.sync_leds(
+            self.last_snapshot.aggregate.mode,
+            self.last_battery_snapshot,
+            self.active_led_display_kind(self.last_battery_snapshot),
+        )
 
     def sync_virtual_status_device(
         self,
@@ -2151,6 +2227,13 @@ class StatusBarController(NSObject):
         kind = LID_ANIMATION_CLOSED if closed else LID_ANIMATION_OPEN
         log_status_bar(f"lid_state={'closed' if closed else 'open'}")
         self.play_lid_animation(kind)
+        if self.settings.lid_closed_led_idle_enabled:
+            log_status_bar(f"lid_led_idle={'active' if closed else 'released'}")
+            # The animation's restore pass resyncs the LEDs when one played;
+            # without it nothing else would apply the override until the next
+            # 15s refresh.
+            if time.monotonic() >= self.led_animation_until_monotonic:
+                self.resync_leds_from_last_snapshot()
 
     @objc.IBAction
     def pollDevices_(self, _sender):
@@ -2302,6 +2385,14 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
                 )
             )
 
+        clear_agents = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Clear Agents & Idle LEDs",
+            "clearAgents:",
+            "",
+        )
+        clear_agents.setTarget_(target)
+        menu.addItem_(clear_agents)
+
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Devices"))
     devices = target.status_bar_devices()
@@ -2318,6 +2409,17 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         )
         virtual_toggle.setTarget_(target)
         menu.addItem_(virtual_toggle)
+
+    menu.addItem_(NSMenuItem.separatorItem())
+    menu.addItem_(disabled_menu_item("Closed Lid"))
+    lid_idle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Idle LEDs When Lid Closed",
+        "toggleLidClosedLedIdle:",
+        "",
+    )
+    lid_idle.setTarget_(target)
+    lid_idle.setState_(1 if target.settings.lid_closed_led_idle_enabled else 0)
+    menu.addItem_(lid_idle)
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Closed-Lid Sleep Prevention"))
@@ -3317,6 +3419,16 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         target,
         "setBatteryPowerPreviewFromCheckbox:",
     )
+    lid_closed_led_idle = add_checkbox(
+        devices_tab,
+        "Idle LEDs while the lid is closed",
+        32,
+        280,
+        320,
+        24,
+        target,
+        "setLidClosedLedIdleFromCheckbox:",
+    )
 
     add_label(sleep_tab, "Lid Closed", 24, 398, 120, 22)
     add_label(sleep_tab, "Duration", 516, 398, 70, 22)
@@ -3402,6 +3514,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_transcripts": claude_transcripts,
         "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
+        "lid_closed_led_idle": lid_closed_led_idle,
     }
     return window
 

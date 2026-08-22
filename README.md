@@ -434,6 +434,11 @@ battery status. When agent status is selected, `Show Battery on Plug/Unplug`
 can briefly show the battery animation for seven seconds after the power source
 changes.
 
+When sessions are listed, the Agents section also offers
+**Clear Agents & Idle LEDs**. It forgets every tracked session and returns the
+LEDs to Idle in one click, which is the quick way out of a stale Ask or Done
+state. Live agents reappear on their next hook event.
+
 The Devices section also offers **Add Screen Bar**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers
 the camera island/notch footprint and adds a straight 5 px LED band along the
@@ -454,6 +459,12 @@ live updates from the local hook event socket. Settings are stored at
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`
 and shows the path from provider hook event to interpreted SidePulse status.
+
+The `Closed Lid` menu section has **Idle LEDs When Lid Closed** (also a
+checkbox in Settings under Devices & LEDs, off by default). While it is on and
+the lid is shut, every LED display falls back to the dim Idle animation instead
+of agent or battery status; opening the lid restores the normal display. Devices
+set to `Manual` keep whatever program you wrote to them.
 
 The `Keep Awake With Lid Closed` menu section controls the stronger sleep
 prevention policy:

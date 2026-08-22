@@ -606,6 +606,42 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
 
+    def test_live_sidepulse_clear_statuses_empties_state_and_persists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            source = SourceSpec("event-bus", base / "events.sock")
+            monitor = LiveAgentMonitor(
+                sources=(source,),
+                stale_after_seconds=3600,
+                latest_state_path=latest,
+            )
+            line = {
+                "logged_at": datetime.now(timezone.utc).isoformat(),
+                "event": {
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "codex-session",
+                    "cwd": "/tmp/project",
+                    "tool_name": "Bash",
+                },
+            }
+            monitor.ingest_record(parse_log_line("codex", json.dumps(line)))
+            self.assertEqual(monitor.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
+
+            cleared = monitor.clear_statuses()
+
+            self.assertEqual(cleared, 1)
+            self.assertEqual(monitor.snapshot(include_stale=True).statuses, ())
+            self.assertEqual(monitor.snapshot().aggregate.mode, AgentMode.IDLE_READY)
+            # A cleared session must not come back when the app restarts.
+            reloaded = LiveAgentMonitor(
+                sources=(source,),
+                stale_after_seconds=3600,
+                latest_state_path=latest,
+            )
+            self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.IDLE_READY)
+            self.assertEqual(monitor.clear_statuses(), 0)
+
     def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
         try:
             from sidepulse import status_bar
@@ -4515,6 +4551,13 @@ class AgentMonitorTests(unittest.TestCase):
             loaded_enabled = load_settings(settings_path)
             self.assertTrue(loaded_enabled.closed_lid_system_override_enabled)
 
+            self.assertFalse(settings.lid_closed_led_idle_enabled)
+            lid_idle = settings.with_lid_closed_led_idle(True)
+            save_settings(lid_idle, settings_path)
+            self.assertTrue(load_settings(settings_path).lid_closed_led_idle_enabled)
+            save_settings(lid_idle.with_lid_closed_led_idle(False), settings_path)
+            self.assertFalse(load_settings(settings_path).lid_closed_led_idle_enabled)
+
             completed = settings.with_setup_screen_completed(True)
             save_settings(completed, settings_path)
             loaded_completed = load_settings(settings_path)
@@ -4531,6 +4574,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(loaded.sleep_prevention_min_battery_percent, 20)
             self.assertEqual(loaded.history_timeframe_seconds, DEFAULT_HISTORY_TIMEFRAME_SECONDS)
             self.assertFalse(loaded.closed_lid_system_override_enabled)
+            self.assertFalse(loaded.lid_closed_led_idle_enabled)
             self.assertFalse(loaded.setup_screen_completed)
             self.assertEqual(
                 loaded.lid_animation(LID_ANIMATION_CLOSED),
