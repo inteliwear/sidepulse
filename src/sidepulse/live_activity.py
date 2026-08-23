@@ -348,6 +348,57 @@ class APNsLiveActivityClient:
 SUMMARY_MAX_CHARS = 60
 
 
+class PromptTracker:
+    """Latest user prompt per session, tailed from the hook logs.
+
+    Sampling snapshot statuses misses UserPromptSubmit between ticks, and a
+    session's display name carries only its FIRST prompt — useless for
+    summarizing what a long session is doing now.
+    """
+
+    def __init__(self) -> None:
+        self._prompts: dict[str, str] = {}
+        self._offsets: dict[str, int] = {}
+
+    def prompt_for(self, session_id: str) -> str | None:
+        return self._prompts.get(session_id)
+
+    def poll(self) -> None:
+        for name in ("claude.jsonl", "codex.jsonl"):
+            path = default_state_dir() / name
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            offset = self._offsets.get(name, max(0, size - 262144))
+            if size < offset:
+                offset = 0  # rotated/truncated
+            if size == offset:
+                continue
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(offset)
+                    chunk = handle.read(size - offset)
+            except OSError:
+                continue
+            self._offsets[name] = size
+            for raw_line in chunk.splitlines():
+                try:
+                    record = json.loads(raw_line)
+                except ValueError:
+                    continue
+                event = record.get("event", record)
+                if not isinstance(event, dict):
+                    continue
+                if event.get("hook_event_name") != "UserPromptSubmit":
+                    continue
+                session_id = event.get("session_id")
+                prompt = event.get("prompt")
+                if isinstance(session_id, str) and isinstance(prompt, str) and prompt.strip():
+                    self._prompts[session_id] = prompt.strip()
+
+
+
 class SessionSummarizer:
     """Turns a session's last assistant message into a tiny outcome line
     ("TestFlight build deployed") via `claude -p` on a fast model.
@@ -385,16 +436,17 @@ class SessionSummarizer:
     ) -> str | None:
         if not message:
             with self._lock:
-                cached = self._results.get(session_id)
+                cached = self._results.get(f"{session_id}|{style}")
             return cached[1] if cached else None
-        source_hash = hashlib.sha256(f"{style}:{message}".encode()).hexdigest()[:16]
+        key = f"{session_id}|{style}"
+        source_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
         with self._lock:
-            cached = self._results.get(session_id)
+            cached = self._results.get(key)
             if cached and cached[0] == source_hash:
                 return cached[1]
-            if session_id not in self._pending:
-                self._pending.add(session_id)
-                self._queue.put((session_id, source_hash, message, context, style))
+            if key not in self._pending:
+                self._pending.add(key)
+                self._queue.put((key, source_hash, message, context, style))
             return cached[1] if cached else None
 
     def _load_cache(self) -> None:
@@ -418,12 +470,12 @@ class SessionSummarizer:
 
     def _worker(self) -> None:
         while True:
-            session_id, source_hash, message, context, style = self._queue.get()
+            key, source_hash, message, context, style = self._queue.get()
             summary = self._generate(message, context, style)
             with self._lock:
-                self._pending.discard(session_id)
+                self._pending.discard(key)
                 if summary:
-                    self._results[session_id] = (source_hash, summary)
+                    self._results[key] = (source_hash, summary)
             if summary:
                 self._save_cache()
 
@@ -508,6 +560,7 @@ class LiveActivityDaemon:
         self.summarizer = (
             SessionSummarizer(config.summary_model) if config.summaries_enabled else None
         )
+        self._prompt_tracker = PromptTracker()
 
     # -- snapshot loop -------------------------------------------------
 
@@ -542,6 +595,7 @@ class LiveActivityDaemon:
         statuses = list(snapshot.statuses)
         self._sync_background_tasks(statuses, now_ts)
         if self.summarizer is not None:
+            self._prompt_tracker.poll()
             statuses = [self._apply_summary(status) for status in statuses]
         self._remember_finished(statuses, now_ts)
         content_state = build_content_state(
@@ -650,12 +704,17 @@ class LiveActivityDaemon:
         if settled:
             summary = self.summarizer.summary_for(status.session_id, status.message, context)
         elif status.mode.value in {"working", "tool_running", "long_task_progress"}:
-            # While working, summarize the task itself: the display name
-            # carries the driving prompt and only changes when a new prompt
-            # arrives, so this costs one generation per turn.
-            summary = self.summarizer.summary_for(
-                status.session_id, status.display_name, context, style="task"
-            )
+            # While working, summarize the CURRENT prompt (tracked from the
+            # hook logs — the display name only ever carries the first one).
+            # Without a tracked prompt, fall back to the last outcome rather
+            # than a confidently wrong stale task.
+            prompt = self._prompt_tracker.prompt_for(status.session_id)
+            if prompt:
+                summary = self.summarizer.summary_for(
+                    status.session_id, prompt, context, style="task"
+                )
+            else:
+                summary = self.summarizer.summary_for(status.session_id, None, style="outcome")
         else:
             return status
         if not summary:
