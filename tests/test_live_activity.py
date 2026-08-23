@@ -11,7 +11,13 @@ from sidepulse.live_activity import (
 from sidepulse.models import AgentMode, AgentStatus
 
 
-def make_status(agent_id: str, mode: AgentMode, name: str = "", tool: str | None = None) -> AgentStatus:
+def make_status(
+    agent_id: str,
+    mode: AgentMode,
+    name: str = "",
+    tool: str | None = None,
+    session_id: str | None = None,
+) -> AgentStatus:
     return AgentStatus(
         provider="claude",
         agent_id=agent_id,
@@ -20,6 +26,7 @@ def make_status(agent_id: str, mode: AgentMode, name: str = "", tool: str | None
         updated_at=datetime.now(timezone.utc),
         event_name="PreToolUse",
         tool_name=tool,
+        session_id=session_id,
     )
 
 
@@ -118,6 +125,31 @@ def test_compute_alerts_completed_and_blocked():
     assert any("Blocked" in title for title in titles)
     blocked_alert = next(alert for alert in alerts if "Blocked" in alert["title"])
     assert blocked_alert["body"] == "pytest"
+
+
+def test_finished_waits_for_subagents():
+    from sidepulse.live_activity import compute_alerts
+
+    main_done = make_status(
+        "claude:session:s1", AgentMode.COMPLETED, name="Big Task", session_id="s1"
+    )
+    subagent = make_status(
+        "claude:agent:sub1", AgentMode.TOOL_RUNNING, name="Subtask", session_id="s1"
+    )
+    prev = {"claude:session:s1": "working", "claude:agent:sub1": "tool_running"}
+    last_alerts: dict[tuple[str, str], float] = {}
+
+    # Main session completed but a subagent still runs: no Finished alert.
+    alerts, modes = compute_alerts(prev, [main_done, subagent], now=100.0, last_alerts=last_alerts)
+    assert alerts == []
+
+    # Subagent finishes too: exactly one Finished alert, named after the session.
+    sub_done = make_status(
+        "claude:agent:sub1", AgentMode.COMPLETED, name="Subtask", session_id="s1"
+    )
+    alerts, modes = compute_alerts(modes, [main_done, sub_done], now=200.0, last_alerts=last_alerts)
+    assert len(alerts) == 1
+    assert alerts[0]["title"] == "Finished: Big Task"
 
 
 def test_ignored_cwd_sessions_are_filtered(monkeypatch):

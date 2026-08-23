@@ -209,32 +209,68 @@ def compute_alerts(
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
     """Alerts for agents that TRANSITIONED into an alertable mode.
 
+    Needs-input and blocked alert per agent, immediately. Finished alerts
+    per SESSION GROUP: a main session reports completed while its subagents
+    are still running, so "Finished" only fires once every member of the
+    session is terminal.
+
     Returns (alerts, new_modes). ``last_alerts`` is mutated with sent
     timestamps so repeated flapping stays inside ALERT_COOLDOWN_SECONDS.
     An empty ``previous_modes`` produces no alerts — the first tick after a
     daemon restart must not replay every current state as news.
     """
     new_modes = {status.agent_id: status.mode.value for status in statuses}
+
+    groups: dict[str, list[AgentStatus]] = {}
+    for status in statuses:
+        key = f"group:{status.provider}:{status.session_id or status.agent_id}"
+        groups.setdefault(key, []).append(status)
+    for group_key, members in groups.items():
+        all_done = all(member.mode.value in TERMINAL_MODES for member in members)
+        new_modes[group_key] = "completed" if all_done else "active"
+
     alerts: list[dict[str, str]] = []
     if not previous_modes:
         return alerts, new_modes
+
+    def fire(key: tuple[str, str], title: str, body: str, thread_id: str) -> None:
+        last_sent = last_alerts.get(key)
+        if last_sent is not None and now - last_sent < ALERT_COOLDOWN_SECONDS:
+            return
+        last_alerts[key] = now
+        alerts.append({"title": title, "body": body, "thread_id": thread_id})
+
     for status in statuses:
         mode = status.mode.value
-        if mode not in ALERT_MODES:
+        if mode not in ("waiting_for_input", "blocked_error"):
             continue
         if previous_modes.get(status.agent_id) == mode:
             continue
-        key = (status.agent_id, mode)
-        last_sent = last_alerts.get(key)
-        if last_sent is not None and now - last_sent < ALERT_COOLDOWN_SECONDS:
+        fire(
+            (status.agent_id, mode),
+            f"{ALERT_MODES[mode]}: {_truncate(status.display_name, MAX_NAME_CHARS)}",
+            status.tool_name or status.message or status.mode_label,
+            status.agent_id,
+        )
+
+    for group_key, members in groups.items():
+        if new_modes[group_key] != "completed":
             continue
-        last_alerts[key] = now
-        alerts.append(
-            {
-                "title": f"{ALERT_MODES[mode]}: {_truncate(status.display_name, MAX_NAME_CHARS)}",
-                "body": status.tool_name or status.message or status.mode_label,
-                "thread_id": status.agent_id,
-            }
+        was_active = previous_modes.get(group_key) == "active" or any(
+            previous_modes.get(member.agent_id) not in (None, *TERMINAL_MODES)
+            for member in members
+        )
+        if not was_active:
+            continue
+        main = next(
+            (member for member in members if ":session:" in member.agent_id),
+            members[0],
+        )
+        fire(
+            (group_key, "completed"),
+            f"{ALERT_MODES['completed']}: {_truncate(main.display_name, MAX_NAME_CHARS)}",
+            main.mode_label,
+            group_key,
         )
     return alerts, new_modes
 
