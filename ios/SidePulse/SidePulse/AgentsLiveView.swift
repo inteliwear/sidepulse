@@ -104,46 +104,49 @@ private struct AgentLiveRow: View {
     }
 
     private var rowContent: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(color(agent.mode))
-                .frame(width: 10, height: 10)
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 10) {
+                Circle()
+                    .fill(color(agent.mode))
+                    .frame(width: 10, height: 10)
+                    .padding(.top, 5)
                 Text(agent.name)
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 4) {
-                    if let provider = agent.provider {
-                        Text(provider.capitalized)
-                            .font(.caption2.bold())
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color(.tertiarySystemFill))
-                            .clipShape(Capsule())
-                    }
-                    Text(secondaryLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
+            HStack(spacing: 6) {
+                if let provider = agent.provider {
+                    Text(provider.capitalized)
+                        .font(.caption2.bold())
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(Capsule())
+                }
+                Text(secondaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
                 Text(AgentModeStyle.label(agent.mode))
                     .font(.caption.bold())
                     .foregroundStyle(color(agent.mode))
+                    .fixedSize()
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 } else {
                     Image(systemName: "arrow.up.forward.app")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
+            .padding(.leading, 20)
         }
         .padding(.vertical, 2)
     }

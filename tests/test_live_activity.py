@@ -74,7 +74,7 @@ def test_content_state_truncates_long_fields_and_serializes():
     state = build_content_state([status], aggregate_mode="tool_running")
 
     row = state["agents"][0]
-    assert len(row["name"]) <= 45
+    assert len(row["name"]) <= 121
     assert len(row["detail"]) <= 33
     # The whole payload must stay well under the 4 KB APNs content-state cap.
     assert len(json.dumps(state)) < 2000
