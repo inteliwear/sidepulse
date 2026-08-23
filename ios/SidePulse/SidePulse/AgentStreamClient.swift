@@ -10,6 +10,7 @@ struct AgentSnapshot: Codable, Equatable {
         var detail: String?
         var provider: String?
         var cwd: String?
+        var finishedAt: Double?
     }
 
     var aggregateMode: String

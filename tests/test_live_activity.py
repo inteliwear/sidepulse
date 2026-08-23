@@ -24,14 +24,32 @@ def make_status(agent_id: str, mode: AgentMode, name: str = "", tool: str | None
 
 
 def test_content_state_orders_by_mode_priority_and_caps_rows():
-    statuses = [make_status(f"idle-{i}", AgentMode.IDLE_READY) for i in range(MAX_AGENT_ROWS)]
+    statuses = [make_status(f"work-{i}", AgentMode.WORKING) for i in range(MAX_AGENT_ROWS)]
     statuses.append(make_status("blocked", AgentMode.BLOCKED_ERROR))
     state = build_content_state(statuses, aggregate_mode="blocked_error")
 
+    # activeCount counts non-terminal sessions; rows cap at MAX_AGENT_ROWS.
     assert state["activeCount"] == MAX_AGENT_ROWS + 1
     assert len(state["agents"]) == MAX_AGENT_ROWS
     assert state["agents"][0]["id"] == "blocked"
     assert state["aggregateMode"] == "blocked_error"
+
+
+def test_content_state_appends_recent_finished_without_duplicates():
+    working = make_status("a", AgentMode.WORKING, name="Running")
+    finished = [
+        {"id": "gone", "name": "Old Task", "mode": "completed", "detail": None,
+         "provider": "claude", "cwd": "repo", "finishedAt": 1000.0},
+        {"id": "a", "name": "Running", "mode": "completed", "detail": None,
+         "provider": "claude", "cwd": "repo", "finishedAt": 2000.0},
+    ]
+    state = build_content_state([working], aggregate_mode="working", recent_finished=finished)
+
+    assert state["activeCount"] == 1
+    ids = [row["id"] for row in state["agents"]]
+    # The active row wins; its stale finished entry is not duplicated.
+    assert ids == ["a", "gone"]
+    assert state["agents"][1]["mode"] == "completed"
 
 
 def test_content_state_truncates_long_fields_and_serializes():

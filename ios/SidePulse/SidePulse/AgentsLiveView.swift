@@ -129,9 +129,15 @@ private struct AgentLiveRow: View {
                 Text(AgentModeStyle.label(agent.mode))
                     .font(.caption.bold())
                     .foregroundStyle(color(agent.mode))
-                Image(systemName: "arrow.up.forward.app")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if let finishedAt = agent.finishedAt {
+                    Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.vertical, 2)

@@ -31,6 +31,9 @@ from .models import MODE_PRIORITY, AgentStatus
 from .providers import default_state_dir
 
 MAX_AGENT_ROWS = 6
+MAX_FINISHED_ROWS = 3
+RECENT_FINISHED_SECONDS = 30 * 60.0
+TERMINAL_MODES = {"completed", "idle_ready"}
 MAX_NAME_CHARS = 44
 MAX_DETAIL_CHARS = 32
 PUSH_MIN_INTERVAL_SECONDS = 3.0
@@ -146,27 +149,54 @@ def _truncate(value: str, limit: int) -> str:
     return value[: limit - 1] + "…"
 
 
-def build_content_state(statuses: list[AgentStatus], aggregate_mode: str) -> dict[str, Any]:
-    """Wire format shared with AgentActivityAttributes.ContentState."""
+def status_row(status: AgentStatus) -> dict[str, Any]:
+    return {
+        "id": status.agent_id,
+        "name": _truncate(status.display_name, MAX_NAME_CHARS),
+        "mode": status.mode.value,
+        "detail": _truncate(status.tool_name, MAX_DETAIL_CHARS) if status.tool_name else None,
+        "provider": status.provider,
+        "cwd": _truncate(Path(status.cwd).name, MAX_DETAIL_CHARS) if status.cwd else None,
+    }
+
+
+def build_content_state(
+    statuses: list[AgentStatus],
+    aggregate_mode: str,
+    recent_finished: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Wire format shared with AgentActivityAttributes.ContentState.
+
+    Active sessions come first, then recently finished ones — either still
+    reported as completed by the collector or remembered by the daemon after
+    the session closed. ``activeCount`` counts only non-terminal sessions.
+    """
     ordered = sorted(
         statuses,
         key=lambda status: (MODE_PRIORITY.get(status.mode, 99), -status.updated_at.timestamp()),
     )
-    agents = [
-        {
-            "id": status.agent_id,
-            "name": _truncate(status.display_name, MAX_NAME_CHARS),
-            "mode": status.mode.value,
-            "detail": _truncate(status.tool_name, MAX_DETAIL_CHARS) if status.tool_name else None,
-            "provider": status.provider,
-            "cwd": _truncate(Path(status.cwd).name, MAX_DETAIL_CHARS) if status.cwd else None,
-        }
-        for status in ordered[:MAX_AGENT_ROWS]
-    ]
+    active_rows = [
+        status_row(status)
+        for status in ordered
+        if status.mode.value not in TERMINAL_MODES
+    ][:MAX_AGENT_ROWS]
+
+    seen_ids = {row["id"] for row in active_rows}
+    finished_rows = []
+    for row in sorted(recent_finished or [], key=lambda r: -r.get("finishedAt", 0.0)):
+        if row["id"] in seen_ids:
+            continue
+        seen_ids.add(row["id"])
+        finished_rows.append(row)
+        if len(finished_rows) >= MAX_FINISHED_ROWS:
+            break
+
     return {
         "aggregateMode": aggregate_mode,
-        "activeCount": len(statuses),
-        "agents": agents,
+        "activeCount": sum(
+            1 for status in statuses if status.mode.value not in TERMINAL_MODES
+        ),
+        "agents": active_rows + finished_rows,
         "updatedAt": round(time.time(), 1),
     }
 
@@ -286,6 +316,8 @@ class LiveActivityDaemon:
         self._activity_live = False
         self._agent_modes: dict[str, str] = {}
         self._last_alerts: dict[tuple[str, str], float] = {}
+        self._last_rows: dict[str, dict[str, Any]] = {}
+        self._recent_finished: dict[str, dict[str, Any]] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -317,7 +349,13 @@ class LiveActivityDaemon:
     def _tick(self) -> None:
         snapshot = self.monitor.snapshot(include_stale=False)
         statuses = list(snapshot.statuses)
-        content_state = build_content_state(statuses, snapshot.aggregate.mode.value)
+        now_ts = time.time()
+        self._remember_finished(statuses, now_ts)
+        content_state = build_content_state(
+            statuses,
+            snapshot.aggregate.mode.value,
+            recent_finished=list(self._recent_finished.values()),
+        )
 
         with self._condition:
             changed = self._meaningfully_changed(content_state)
@@ -334,25 +372,60 @@ class LiveActivityDaemon:
         for alert in alerts:
             self._push_alert(alert)
 
+        if self.tokens.tokens("update") and (
+            (changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS)
+            or (active and now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS)
+        ):
+            self._push_update(content_state, now)
+
         if active:
             self._idle_since = None
             if not self._activity_live:
                 self._maybe_push_to_start(content_state, now)
-            if self.tokens.tokens("update") and (
-                (changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS)
-                or now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS
-            ):
-                self._push_update(content_state, now)
         else:
             if self._idle_since is None:
                 self._idle_since = now
-                if self.tokens.tokens("update") and changed:
-                    self._push_update(content_state, now)
             elif (
                 self._activity_live
                 and now - self._idle_since >= self.config.idle_end_minutes * 60
             ):
                 self._push_end(content_state, now)
+
+    def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
+        current = {status.agent_id: status for status in statuses}
+
+        # Sessions that vanished while doing something count as finished:
+        # a closed session emits SessionEnd and drops out of the collector
+        # before its completed state becomes visible anywhere.
+        for agent_id, prev_mode in self._agent_modes.items():
+            if agent_id in current or prev_mode in TERMINAL_MODES:
+                continue
+            row = self._last_rows.get(agent_id)
+            if row:
+                self._recent_finished[agent_id] = {
+                    **row,
+                    "mode": "completed",
+                    "detail": None,
+                    "finishedAt": now,
+                }
+
+        for status in current.values():
+            if status.mode.value == "completed":
+                previous = self._recent_finished.get(status.agent_id, {})
+                self._recent_finished[status.agent_id] = {
+                    **status_row(status),
+                    "detail": None,
+                    "finishedAt": previous.get("finishedAt", now),
+                }
+            elif status.mode.value not in TERMINAL_MODES:
+                # Reactivated: it is no longer "recently finished".
+                self._recent_finished.pop(status.agent_id, None)
+
+        for agent_id in list(self._recent_finished):
+            if now - self._recent_finished[agent_id].get("finishedAt", 0.0) > RECENT_FINISHED_SECONDS:
+                del self._recent_finished[agent_id]
+
+        self._last_rows = {status.agent_id: status_row(status) for status in current.values()}
 
     def _meaningfully_changed(self, content_state: dict[str, Any]) -> bool:
         if self._latest is None:

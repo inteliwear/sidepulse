@@ -15,6 +15,7 @@ struct AgentActivityAttributes: ActivityAttributes {
         var detail: String?
         var provider: String?
         var cwd: String?
+        var finishedAt: Double?
     }
 
     struct ContentState: Codable, Hashable {

@@ -90,10 +90,17 @@ private struct AgentRowView: View {
                 .font(.caption)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            Text(agent.detail ?? AgentModeStyle.label(agent.mode))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if let finishedAt = agent.finishedAt {
+                Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text(agent.detail ?? AgentModeStyle.label(agent.mode))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 }
