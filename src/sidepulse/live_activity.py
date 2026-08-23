@@ -54,6 +54,7 @@ ALERT_MODES = {
     "completed": "Finished",
 }
 ALERT_COOLDOWN_SECONDS = 90.0
+FINISHED_ALERT_DEFER_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -564,6 +565,7 @@ class LiveActivityDaemon:
             SessionSummarizer(config.summary_model) if config.summaries_enabled else None
         )
         self._prompt_tracker = PromptTracker()
+        self._deferred_alerts: list[dict[str, Any]] = []
 
     # -- snapshot loop -------------------------------------------------
 
@@ -619,10 +621,11 @@ class LiveActivityDaemon:
         alerts, self._agent_modes = compute_alerts(
             self._agent_modes, statuses, now, self._last_alerts
         )
-        if alerts and self.tokens.tokens("update"):
+        ready_alerts = self._defer_finished_alerts(alerts, statuses, now)
+        if ready_alerts and self.tokens.tokens("update"):
             # Alerting Live Activity update: buzzes and highlights the
             # activity without posting a separate notification banner.
-            self._push_update(content_state, now, alert=alerts[0])
+            self._push_update(content_state, now, alert=ready_alerts[0])
         elif self.tokens.tokens("update") and (
             (changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS)
             or (active and now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS)
@@ -786,6 +789,50 @@ class LiveActivityDaemon:
                 self.tokens.drop(kind, token)
             elif status != 200:
                 print(f"live-activity: APNs {kind} push -> {status} {body[:120]}")
+
+    def _defer_finished_alerts(
+        self, alerts: list[dict[str, str]], statuses, now: float
+    ) -> list[dict[str, str]]:
+        """Hold Finished buzzes until the outcome summary exists, so the
+        alert names what happened rather than quoting the stale prompt.
+        Needs-input and blocked alerts stay immediate."""
+        ready: list[dict[str, str]] = []
+        for alert in alerts:
+            session_id = alert["thread_id"].split(":")[-1]
+            if (
+                self.summarizer is None
+                or not alert["title"].startswith(ALERT_MODES["completed"])
+                or self.summarizer.summary_for(session_id, None, style="outcome")
+            ):
+                ready.append(alert)
+            else:
+                self._deferred_alerts.append(
+                    {**alert, "session_id": session_id, "deadline": now + FINISHED_ALERT_DEFER_SECONDS}
+                )
+
+        still_waiting = []
+        for pending in self._deferred_alerts:
+            summary = (
+                self.summarizer.summary_for(pending["session_id"], None, style="outcome")
+                if self.summarizer
+                else None
+            )
+            if summary:
+                ready.append(
+                    {
+                        "title": f"{ALERT_MODES['completed']}: {_truncate(summary, MAX_NAME_CHARS)}",
+                        "body": pending["body"],
+                        "thread_id": pending["thread_id"],
+                    }
+                )
+            elif now >= pending["deadline"]:
+                ready.append(
+                    {k: pending[k] for k in ("title", "body", "thread_id")}
+                )
+            else:
+                still_waiting.append(pending)
+        self._deferred_alerts = still_waiting
+        return ready
 
     def _maybe_push_to_start(self, content_state: dict[str, Any], now: float) -> None:
         if not self.tokens.tokens("push_to_start"):
