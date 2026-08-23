@@ -21,7 +21,7 @@ struct AgentsLauncherWidget: Widget {
         }
         .configurationDisplayName("Mac Agents")
         .description("Agent sessions on the Mac.")
-        .supportedFamilies([.accessoryRectangular, .accessoryCircular])
+        .supportedFamilies([.accessoryRectangular])
     }
 }
 
@@ -79,7 +79,6 @@ struct LauncherProvider: TimelineProvider {
 }
 
 struct LauncherView: View {
-    @Environment(\.widgetFamily) private var family
     let snapshot: AgentSnapshot?
 
     private var accent: Color {
@@ -93,25 +92,8 @@ struct LauncherView: View {
     }
 
     var body: some View {
-        Group {
-            if family == .accessoryCircular {
-                ZStack {
-                    Circle().fill(accent.opacity(0.2))
-                    if let snapshot {
-                        Text("\(snapshot.activeCount)")
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                            .foregroundStyle(accent)
-                    } else {
-                        Image(systemName: "bolt.horizontal.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(accent)
-                    }
-                }
-            } else {
-                rectangular
-            }
-        }
-        .widgetURL(URL(string: "sidepulse://agents"))
+        rectangular
+            .widgetURL(URL(string: "sidepulse://agents"))
     }
 
     @ViewBuilder
