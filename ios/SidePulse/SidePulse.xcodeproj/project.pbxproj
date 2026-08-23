@@ -25,6 +25,10 @@
         9F0000010000000000000017 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
         9F0000010000000000000018 /* AgentsLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000121 /* AgentsLiveView.swift */; };
         9F0000010000000000000016 /* SidePulseWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000119 /* SidePulseWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+        9F0000010000000000000019 /* SidePulseWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000122 /* SidePulseWatchApp.swift */; };
+        9F0000010000000000000020 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
+        9F0000010000000000000021 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
+        9F0000010000000000000022 /* SidePulseWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000123 /* SidePulseWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,6 +38,13 @@
             proxyType = 1;
             remoteGlobalIDString = 9F0000010000000000000402;
             remoteInfo = SidePulseWidgets;
+        };
+        9F0000010000000000000414 /* PBXContainerItemProxy */ = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 9F0000010000000000000701 /* Project object */;
+            proxyType = 1;
+            remoteGlobalIDString = 9F0000010000000000000403;
+            remoteInfo = SidePulseWatch;
         };
 /* End PBXContainerItemProxy section */
 
@@ -47,6 +58,17 @@
                 9F0000010000000000000016 /* SidePulseWidgets.appex in Embed Foundation Extensions */,
             );
             name = "Embed Foundation Extensions";
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        9F0000010000000000000605 /* Embed Watch Content */ = {
+            isa = PBXCopyFilesBuildPhase;
+            buildActionMask = 2147483647;
+            dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+            dstSubfolderSpec = 16;
+            files = (
+                9F0000010000000000000022 /* SidePulseWatch.app in Embed Watch Content */,
+            );
+            name = "Embed Watch Content";
             runOnlyForDeploymentPostprocessing = 0;
         };
 /* End PBXCopyFilesBuildPhase section */
@@ -73,6 +95,8 @@
         9F0000010000000000000120 /* AgentStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStreamClient.swift; sourceTree = "<group>"; };
         9F0000010000000000000121 /* AgentsLiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsLiveView.swift; sourceTree = "<group>"; };
         9F0000010000000000000119 /* SidePulseWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SidePulseWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+        9F0000010000000000000122 /* SidePulseWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidePulseWatchApp.swift; sourceTree = "<group>"; };
+        9F0000010000000000000123 /* SidePulseWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SidePulseWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,6 +114,13 @@
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
+        9F0000010000000000000203 /* Frameworks */ = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -98,6 +129,7 @@
             children = (
                 9F0000010000000000000302 /* SidePulse */,
                 9F0000010000000000000304 /* SidePulseWidgets */,
+                9F0000010000000000000305 /* SidePulseWatch */,
                 9F0000010000000000000303 /* Products */,
             );
             sourceTree = "<group>";
@@ -130,6 +162,7 @@
             children = (
                 9F0000010000000000000111 /* SidePulse.app */,
                 9F0000010000000000000119 /* SidePulseWidgets.appex */,
+                9F0000010000000000000123 /* SidePulseWatch.app */,
             );
             name = Products;
             sourceTree = "<group>";
@@ -144,6 +177,14 @@
             path = SidePulseWidgets;
             sourceTree = "<group>";
         };
+        9F0000010000000000000305 /* SidePulseWatch */ = {
+            isa = PBXGroup;
+            children = (
+                9F0000010000000000000122 /* SidePulseWatchApp.swift */,
+            );
+            path = SidePulseWatch;
+            sourceTree = "<group>";
+        };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -155,11 +196,13 @@
                 9F0000010000000000000201 /* Frameworks */,
                 9F0000010000000000000601 /* Resources */,
                 9F0000010000000000000603 /* Embed Foundation Extensions */,
+                9F0000010000000000000605 /* Embed Watch Content */,
             );
             buildRules = (
             );
             dependencies = (
                 9F0000010000000000000411 /* PBXTargetDependency */,
+                9F0000010000000000000413 /* PBXTargetDependency */,
             );
             name = SidePulse;
             productName = SidePulse;
@@ -182,6 +225,23 @@
             productName = SidePulseWidgets;
             productReference = 9F0000010000000000000119 /* SidePulseWidgets.appex */;
             productType = "com.apple.product-type.app-extension";
+        };
+        9F0000010000000000000403 /* SidePulseWatch */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 9F0000010000000000000904 /* Build configuration list for PBXNativeTarget "SidePulseWatch" */;
+            buildPhases = (
+                9F0000010000000000000503 /* Sources */,
+                9F0000010000000000000203 /* Frameworks */,
+                9F0000010000000000000604 /* Resources */,
+            );
+            buildRules = (
+            );
+            dependencies = (
+            );
+            name = SidePulseWatch;
+            productName = SidePulseWatch;
+            productReference = 9F0000010000000000000123 /* SidePulseWatch.app */;
+            productType = "com.apple.product-type.application";
         };
 /* End PBXNativeTarget section */
 
@@ -213,6 +273,7 @@
             targets = (
                 9F0000010000000000000401 /* SidePulse */,
                 9F0000010000000000000402 /* SidePulseWidgets */,
+                9F0000010000000000000403 /* SidePulseWatch */,
             );
         };
 /* End PBXProject section */
@@ -227,6 +288,13 @@
             runOnlyForDeploymentPostprocessing = 0;
         };
         9F0000010000000000000602 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        9F0000010000000000000604 /* Resources */ = {
             isa = PBXResourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
@@ -266,6 +334,16 @@
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
+        9F0000010000000000000503 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+                9F0000010000000000000019 /* SidePulseWatchApp.swift in Sources */,
+                9F0000010000000000000020 /* AgentStreamClient.swift in Sources */,
+                9F0000010000000000000021 /* AgentActivityAttributes.swift in Sources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -273,6 +351,11 @@
             isa = PBXTargetDependency;
             target = 9F0000010000000000000402 /* SidePulseWidgets */;
             targetProxy = 9F0000010000000000000412 /* PBXContainerItemProxy */;
+        };
+        9F0000010000000000000413 /* PBXTargetDependency */ = {
+            isa = PBXTargetDependency;
+            target = 9F0000010000000000000403 /* SidePulseWatch */;
+            targetProxy = 9F0000010000000000000414 /* PBXContainerItemProxy */;
         };
 /* End PBXTargetDependency section */
 
@@ -510,6 +593,66 @@
             };
             name = Release;
         };
+        9F0000010000000000000807 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = "";
+                ENABLE_PREVIEWS = YES;
+                GENERATE_INFOPLIST_FILE = YES;
+                INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
+                INFOPLIST_KEY_WKApplication = YES;
+                INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(SIDEPULSE_APP_BUNDLE_ID)";
+                INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID).watchkitapp";
+                PRODUCT_NAME = SidePulseWatch;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_WATCH_PROFILE)";
+                SDKROOT = watchos;
+                SKIP_INSTALL = YES;
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 4;
+                WATCHOS_DEPLOYMENT_TARGET = 10.0;
+            };
+            name = Debug;
+        };
+        9F0000010000000000000808 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = "";
+                ENABLE_PREVIEWS = YES;
+                GENERATE_INFOPLIST_FILE = YES;
+                INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
+                INFOPLIST_KEY_WKApplication = YES;
+                INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(SIDEPULSE_APP_BUNDLE_ID)";
+                INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID).watchkitapp";
+                PRODUCT_NAME = SidePulseWatch;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_WATCH_PROFILE)";
+                SDKROOT = watchos;
+                SKIP_INSTALL = YES;
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 4;
+                WATCHOS_DEPLOYMENT_TARGET = 10.0;
+            };
+            name = Release;
+        };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -536,6 +679,15 @@
             buildConfigurations = (
                 9F0000010000000000000805 /* Debug */,
                 9F0000010000000000000806 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
+        9F0000010000000000000904 /* Build configuration list for PBXNativeTarget "SidePulseWatch" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                9F0000010000000000000807 /* Debug */,
+                9F0000010000000000000808 /* Release */,
             );
             defaultConfigurationIsVisible = 0;
             defaultConfigurationName = Release;
