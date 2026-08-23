@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // and the update token must still be captured and uploaded.
         Task { @MainActor in
             LiveMonitorManager.shared.startIfEnabled(model: AppModel.shared)
+            WatchRelay.shared.activate()
         }
 
         if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {

@@ -9,80 +9,59 @@ struct SidePulseWatchApp: App {
     }
 }
 
-/// Live session list on the wrist. Streams from the daemon over the local
-/// network; away from home the mirrored Live Activity in the Smart Stack
-/// covers the glanceable case.
+/// Companion view: agent snapshots arrive relayed from the iPhone app,
+/// which streams them from the Mac over its own network (incl. Tailscale).
 struct WatchAgentsView: View {
-    @StateObject private var stream = AgentStreamClient()
-    @AppStorage("watchServerURL") private var serverURL = "http://192.168.1.168:8787"
+    @StateObject private var store = WatchSessionStore.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             List {
                 header
 
-                if case .failed(let message) = stream.state {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                }
-
-                if let snapshot = stream.snapshot, !snapshot.agents.isEmpty {
+                if let snapshot = store.snapshot, !snapshot.agents.isEmpty {
                     ForEach(snapshot.agents) { agent in
                         WatchAgentRow(agent: agent)
                     }
-                } else if stream.snapshot != nil {
+                } else if store.snapshot != nil {
                     Text("All quiet")
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Waiting for data…")
+                    Text("Open SidePulse on the iPhone once if this persists.")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Agents")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        Form {
-                            TextField("Server URL", text: $serverURL)
-                                .onSubmit { stream.start(baseURL: serverURL) }
-                            Text("Use the Mac's LAN IP; the watch cannot reach Tailscale names.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .navigationTitle("Server")
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-            }
         }
         .task {
-            stream.start(baseURL: serverURL)
+            store.activate()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                store.requestStart()
+            }
         }
     }
 
     @ViewBuilder
     private var header: some View {
         HStack {
-            switch stream.state {
-            case .live:
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(.green)
-            case .connecting:
-                Image(systemName: "arrow.triangle.2.circlepath")
+            if store.snapshot != nil {
+                Image(systemName: "iphone.radiowaves.left.and.right")
+                    .foregroundStyle(store.phoneReachable ? .green : .orange)
+            } else {
+                Image(systemName: "iphone.slash")
                     .foregroundStyle(.orange)
-            case .failed:
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-            case .idle:
-                Image(systemName: "pause.circle")
-                    .foregroundStyle(.secondary)
             }
             Spacer()
-            if let snapshot = stream.snapshot {
+            if let snapshot = store.snapshot {
                 Text("\(snapshot.activeCount) active")
                     .font(.footnote.bold())
+                Text(Date(timeIntervalSince1970: snapshot.updatedAt), style: .relative)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
             }
         }
     }
