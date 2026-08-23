@@ -79,6 +79,16 @@ extension WatchSessionStore: WCSessionDelegate {
 
     nonisolated func session(
         _ session: WCSession,
+        didReceiveUserInfo userInfo: [String: Any] = [:]
+    ) {
+        let payload = userInfo
+        Task { @MainActor in
+            self.decode(from: payload)
+        }
+    }
+
+    nonisolated func session(
+        _ session: WCSession,
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
         let payload = applicationContext

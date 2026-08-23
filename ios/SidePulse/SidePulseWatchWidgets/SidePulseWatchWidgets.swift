@@ -31,6 +31,11 @@ struct LauncherEntry: TimelineEntry {
 }
 
 struct LauncherProvider: TimelineProvider {
+    private static let endpoints = [
+        "http://macmini8005:8787/snapshot",
+        "http://192.168.1.168:8787/snapshot",
+    ]
+
     func placeholder(in context: Context) -> LauncherEntry {
         LauncherEntry(date: .now, snapshot: nil)
     }
@@ -40,8 +45,36 @@ struct LauncherProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<LauncherEntry>) -> Void) {
-        let entry = LauncherEntry(date: .now, snapshot: SharedSnapshotStore.load())
-        completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(15 * 60))))
+        // Try a live fetch each refresh; fall back to whatever the watch app
+        // last relayed. Refresh again after ten minutes, budget permitting.
+        fetchLive { fetched in
+            let snapshot = fetched ?? SharedSnapshotStore.load()
+            if let fetched, let data = try? JSONEncoder().encode(fetched) {
+                SharedSnapshotStore.save(data)
+            }
+            let entry = LauncherEntry(date: .now, snapshot: snapshot)
+            completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(10 * 60))))
+        }
+    }
+
+    private func fetchLive(
+        _ completion: @escaping (AgentSnapshot?) -> Void,
+        index: Int = 0
+    ) {
+        guard index < Self.endpoints.count, let url = URL(string: Self.endpoints[index]) else {
+            completion(nil)
+            return
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let parsed = try? JSONDecoder().decode(AgentSnapshot.self, from: data) {
+                completion(parsed)
+            } else {
+                self.fetchLive(completion, index: index + 1)
+            }
+        }.resume()
     }
 }
 

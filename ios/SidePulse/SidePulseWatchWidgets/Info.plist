@@ -20,6 +20,13 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>SidePulse reads agent statuses from your Mac on the local network.</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

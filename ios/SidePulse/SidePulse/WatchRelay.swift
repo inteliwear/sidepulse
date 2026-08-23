@@ -41,6 +41,9 @@ final class WatchRelay: NSObject, ObservableObject {
         stream.stop()
     }
 
+    private var lastComplicationPush: Date = .distantPast
+    private var lastComplicationState: (String, Int)?
+
     private func forward(_ snapshot: AgentSnapshot) {
         #if canImport(WatchConnectivity)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
@@ -49,6 +52,18 @@ final class WatchRelay: NSObject, ObservableObject {
             session.sendMessage(["snapshot": data], replyHandler: nil, errorHandler: nil)
         }
         try? session.updateApplicationContext(["snapshot": data])
+
+        // Wake the watch app in the background on significant changes so the
+        // Smart Stack widget stays current without the app open. Budgeted by
+        // the system (~50/day with an active complication), so throttle hard.
+        let state = (snapshot.aggregateMode, snapshot.activeCount)
+        if session.isComplicationEnabled,
+           lastComplicationState.map({ $0 != state }) ?? true,
+           Date().timeIntervalSince(lastComplicationPush) > 10 * 60 {
+            lastComplicationState = state
+            lastComplicationPush = Date()
+            session.transferCurrentComplicationUserInfo(["snapshot": data])
+        }
         #endif
     }
 }

@@ -4,5 +4,12 @@
 <dict>
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>SidePulse reads agent statuses from your Mac on the local network.</string>
 </dict>
 </plist>
