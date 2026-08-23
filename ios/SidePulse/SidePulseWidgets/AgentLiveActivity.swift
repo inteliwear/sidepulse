@@ -29,6 +29,16 @@ private struct ModeGroups {
         if working > 0 { return (working, .statusWorking) }
         return (done, .statusDone)
     }
+
+    /// Icon for the most urgent state: warning when blocked, a question
+    /// bubble when a session wants input, a bolt while working, a check
+    /// when everything is done.
+    var symbol: (name: String, color: Color) {
+        if blocked > 0 { return ("exclamationmark.triangle.fill", .statusBlocked) }
+        if waiting > 0 { return ("questionmark.bubble.fill", .statusWaiting) }
+        if working > 0 { return ("bolt.fill", .statusWorking) }
+        return ("checkmark.circle.fill", .statusDone)
+    }
 }
 
 private extension Color {
@@ -58,9 +68,9 @@ struct AgentLiveActivity: Widget {
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 5) {
-                        Image(systemName: "desktopcomputer")
+                        Image(systemName: groups.symbol.name)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(groups.symbol.color)
                         Text(context.attributes.hostLabel)
                             .font(.caption.bold())
                             .foregroundStyle(.primary)
@@ -86,22 +96,22 @@ struct AgentLiveActivity: Widget {
                     .widgetURL(URL(string: "sidepulse://agents"))
                 }
             } compactLeading: {
-                let headline = groups.headline
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(headline.color)
+                let symbol = groups.symbol
+                Image(systemName: symbol.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(symbol.color)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } compactTrailing: {
                 CompactCounts(groups: groups)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
-                let headline = groups.headline
+                let symbol = groups.symbol
                 ZStack {
                     Circle()
-                        .fill(headline.color.opacity(0.25))
-                    Text("\(headline.count)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(headline.color)
+                        .fill(symbol.color.opacity(0.22))
+                    Image(systemName: symbol.name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(symbol.color)
                 }
                 .widgetURL(URL(string: "sidepulse://agents"))
             }
@@ -208,9 +218,9 @@ private struct LockScreenView: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 HStack(spacing: 5) {
-                    Image(systemName: "desktopcomputer")
+                    Image(systemName: groups.symbol.name)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(groups.symbol.color)
                     Text(context.attributes.hostLabel)
                         .font(.subheadline.bold())
                         .foregroundStyle(.white)
