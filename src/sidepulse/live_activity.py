@@ -400,11 +400,14 @@ class SessionSummarizer:
 
     def _generate(self, message: str, context: str) -> str | None:
         prompt = (
-            "Summarize the state or outcome this AI coding assistant message "
-            "describes, in at most six words, and start with the project name "
-            "taken from the context — like 'sidepulse: TestFlight build "
-            "deployed' or 'kleido: waiting for API key decision'. Respond "
-            "with only that phrase.\n\n"
+            "Summarize the state or outcome this AI assistant message "
+            "describes, in at most six words, starting with the project or "
+            "app name — like 'sidepulse: TestFlight build deployed' or "
+            "'kleido: waiting for API key decision'. Infer the project from "
+            "the MESSAGE CONTENT first; generic directory names like 'Git' "
+            "are never project names. If there is no project, use a one-word "
+            "topic instead (e.g. 'weather: ...'). Respond with only that "
+            "phrase.\n\n"
             f"Context: {context[:300]}\n\n"
             f"Message:\n{message[:3000]}"
         )
@@ -583,7 +586,7 @@ class LiveActivityDaemon:
         show what actually happened instead."""
         from dataclasses import replace as dataclass_replace
 
-        if status.provider != "claude" or not status.session_id:
+        if status.provider not in {"claude", "codex"} or not status.session_id:
             return status
         settled = status.event_name in {"Stop", "SubagentStop"} and status.mode.value in {
             "completed",
