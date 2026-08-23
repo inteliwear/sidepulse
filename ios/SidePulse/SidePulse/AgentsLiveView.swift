@@ -116,6 +116,8 @@ private struct AgentLiveRow: View {
                     if let provider = agent.provider {
                         Text(provider.capitalized)
                             .font(.caption2.bold())
+                            .lineLimit(1)
+                            .fixedSize()
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Color(.tertiarySystemFill))

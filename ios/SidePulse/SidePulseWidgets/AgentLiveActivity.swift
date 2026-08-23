@@ -221,6 +221,8 @@ private struct AgentRowView: View {
             if let provider = agent.provider {
                 Text(provider.capitalized)
                     .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
