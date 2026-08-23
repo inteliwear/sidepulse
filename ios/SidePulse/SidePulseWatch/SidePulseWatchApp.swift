@@ -82,7 +82,6 @@ private struct WatchAgentRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.name)
                     .font(.footnote)
-                    .lineLimit(2)
                 HStack(spacing: 4) {
                     if let provider = agent.provider {
                         Text(provider.capitalized)

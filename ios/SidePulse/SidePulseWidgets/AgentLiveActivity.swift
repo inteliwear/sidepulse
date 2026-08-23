@@ -191,18 +191,21 @@ private struct WatchAgentRowView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(agent.mode == "completed" ? .secondary : .primary)
                 .lineLimit(1)
-            Spacer(minLength: 4)
-            if let finishedAt = agent.finishedAt {
-                Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            } else {
-                Text(agent.detail ?? AgentModeStyle.label(agent.mode))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color.forMode(agent.mode))
-                    .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: 3)
+            Group {
+                if let finishedAt = agent.finishedAt {
+                    Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(agent.detail ?? AgentModeStyle.label(agent.mode))
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color.forMode(agent.mode))
+                }
             }
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .frame(maxWidth: 42, alignment: .trailing)
         }
     }
 }
@@ -279,8 +282,9 @@ private struct LockScreenView: View {
                 Text(context.attributes.hostLabel)
                     .font(.system(size: 11, weight: .bold))
                     .lineLimit(1)
-                Spacer(minLength: 4)
+                Spacer(minLength: 3)
                 StatusChips(groups: groups)
+                    .fixedSize()
             }
             ForEach(context.state.agents.prefix(3)) { agent in
                 WatchAgentRowView(agent: agent)
