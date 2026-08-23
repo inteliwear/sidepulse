@@ -361,7 +361,7 @@ class SessionSummarizer:
         self._results: dict[str, tuple[str, str]] = {}  # session -> (source_hash, summary)
         self._pending: set[str] = set()
         self._lock = threading.Lock()
-        self._queue: "queue.Queue[tuple[str, str, str]]" = queue.Queue()
+        self._queue: "queue.Queue[tuple[str, str, str, str]]" = queue.Queue()
         base = default_state_dir() / "summarizer"
         # "memories" is on the ignored-directory list, hiding these runs
         # from every sidepulse consumer.
@@ -372,7 +372,9 @@ class SessionSummarizer:
         worker = threading.Thread(target=self._worker, daemon=True)
         worker.start()
 
-    def summary_for(self, session_id: str, message: str | None) -> str | None:
+    def summary_for(
+        self, session_id: str, message: str | None, context: str = ""
+    ) -> str | None:
         if not message:
             with self._lock:
                 cached = self._results.get(session_id)
@@ -384,23 +386,26 @@ class SessionSummarizer:
                 return cached[1]
             if session_id not in self._pending:
                 self._pending.add(session_id)
-                self._queue.put((session_id, source_hash, message))
+                self._queue.put((session_id, source_hash, message, context))
             return cached[1] if cached else None
 
     def _worker(self) -> None:
         while True:
-            session_id, source_hash, message = self._queue.get()
-            summary = self._generate(message)
+            session_id, source_hash, message, context = self._queue.get()
+            summary = self._generate(message, context)
             with self._lock:
                 self._pending.discard(session_id)
                 if summary:
                     self._results[session_id] = (source_hash, summary)
 
-    def _generate(self, message: str) -> str | None:
+    def _generate(self, message: str, context: str) -> str | None:
         prompt = (
             "Summarize the state or outcome this AI coding assistant message "
-            "describes, in at most six words, like 'TestFlight build deployed' "
-            "or 'waiting for API key decision'. Respond with only that phrase.\n\n"
+            "describes, in at most six words, and start with the project name "
+            "taken from the context — like 'sidepulse: TestFlight build "
+            "deployed' or 'kleido: waiting for API key decision'. Respond "
+            "with only that phrase.\n\n"
+            f"Context: {context[:300]}\n\n"
             f"Message:\n{message[:3000]}"
         )
         env = dict(os.environ)
@@ -587,12 +592,11 @@ class LiveActivityDaemon:
         }
         if not settled:
             return status
-        summary = self.summarizer.summary_for(status.session_id, status.message)
+        context = f"working directory: {status.cwd or 'unknown'}; session title: {status.display_name}"
+        summary = self.summarizer.summary_for(status.session_id, status.message, context)
         if not summary:
             return status
-        prefix = Path(status.cwd).name if status.cwd else None
-        display = f"{prefix}: {summary}" if prefix else summary
-        return dataclass_replace(status, display_name=display)
+        return dataclass_replace(status, display_name=summary)
 
     def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
         current = {status.agent_id: status for status in statuses}

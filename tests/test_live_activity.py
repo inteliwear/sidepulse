@@ -246,7 +246,7 @@ def test_summarizer_replaces_display_name(tmp_path, monkeypatch):
 
     monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: tmp_path)
     fake = tmp_path / "claude"
-    fake.write_text("#!/bin/sh\necho 'TestFlight build deployed'\n")
+    fake.write_text("#!/bin/sh\necho 'sidepulse: TestFlight build deployed'\n")
     fake.chmod(0o755)
 
     config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
