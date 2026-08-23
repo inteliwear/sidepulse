@@ -32,6 +32,10 @@
         9F0000010000000000000020 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
         9F0000010000000000000021 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
         9F0000010000000000000022 /* SidePulseWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000123 /* SidePulseWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+        9F0000010000000000000028 /* SharedSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000131 /* SharedSnapshotStore.swift */; };
+        9F0000010000000000000029 /* SharedSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000131 /* SharedSnapshotStore.swift */; };
+        9F0000010000000000000030 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
+        9F0000010000000000000031 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
         9F0000010000000000000026 /* SidePulseWatchWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000128 /* SidePulseWatchWidgets.swift */; };
         9F0000010000000000000027 /* SidePulseWatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000129 /* SidePulseWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -126,6 +130,9 @@
         9F0000010000000000000123 /* SidePulseWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SidePulseWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
         9F0000010000000000000128 /* SidePulseWatchWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidePulseWatchWidgets.swift; sourceTree = "<group>"; };
         9F0000010000000000000129 /* SidePulseWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SidePulseWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+        9F0000010000000000000131 /* SharedSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedSnapshotStore.swift; sourceTree = "<group>"; };
+        9F0000010000000000000132 /* SidePulseWatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SidePulseWatch.entitlements; sourceTree = "<group>"; };
+        9F0000010000000000000133 /* SidePulseWatchWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SidePulseWatchWidgets.entitlements; sourceTree = "<group>"; };
         9F0000010000000000000130 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -222,6 +229,8 @@
             children = (
                 9F0000010000000000000122 /* SidePulseWatchApp.swift */,
                 9F0000010000000000000127 /* WatchSessionStore.swift */,
+                9F0000010000000000000131 /* SharedSnapshotStore.swift */,
+                9F0000010000000000000132 /* SidePulseWatch.entitlements */,
                 9F0000010000000000000124 /* Assets.xcassets */,
                 9F0000010000000000000125 /* Info.plist */,
             );
@@ -232,6 +241,7 @@
             isa = PBXGroup;
             children = (
                 9F0000010000000000000128 /* SidePulseWatchWidgets.swift */,
+                9F0000010000000000000133 /* SidePulseWatchWidgets.entitlements */,
                 9F0000010000000000000130 /* Info.plist */,
             );
             path = SidePulseWatchWidgets;
@@ -421,6 +431,7 @@
             files = (
                 9F0000010000000000000019 /* SidePulseWatchApp.swift in Sources */,
                 9F0000010000000000000025 /* WatchSessionStore.swift in Sources */,
+                9F0000010000000000000028 /* SharedSnapshotStore.swift in Sources */,
                 9F0000010000000000000020 /* AgentStreamClient.swift in Sources */,
                 9F0000010000000000000021 /* AgentActivityAttributes.swift in Sources */,
             );
@@ -431,6 +442,9 @@
             buildActionMask = 2147483647;
             files = (
                 9F0000010000000000000026 /* SidePulseWatchWidgets.swift in Sources */,
+                9F0000010000000000000029 /* SharedSnapshotStore.swift in Sources */,
+                9F0000010000000000000030 /* AgentStreamClient.swift in Sources */,
+                9F0000010000000000000031 /* AgentActivityAttributes.swift in Sources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
@@ -697,6 +711,7 @@
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
                 ENABLE_PREVIEWS = YES;
+                CODE_SIGN_ENTITLEMENTS = SidePulseWatch/SidePulseWatch.entitlements;
                 GENERATE_INFOPLIST_FILE = YES;
                 INFOPLIST_FILE = SidePulseWatch/Info.plist;
                 INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
@@ -729,6 +744,7 @@
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
                 ENABLE_PREVIEWS = YES;
+                CODE_SIGN_ENTITLEMENTS = SidePulseWatch/SidePulseWatch.entitlements;
                 GENERATE_INFOPLIST_FILE = YES;
                 INFOPLIST_FILE = SidePulseWatch/Info.plist;
                 INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
@@ -758,6 +774,7 @@
                 CODE_SIGN_STYLE = Automatic;
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
+                CODE_SIGN_ENTITLEMENTS = SidePulseWatchWidgets/SidePulseWatchWidgets.entitlements;
                 GENERATE_INFOPLIST_FILE = NO;
                 INFOPLIST_FILE = SidePulseWatchWidgets/Info.plist;
                 LD_RUNPATH_SEARCH_PATHS = (
@@ -784,6 +801,7 @@
                 CODE_SIGN_STYLE = Automatic;
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
+                CODE_SIGN_ENTITLEMENTS = SidePulseWatchWidgets/SidePulseWatchWidgets.entitlements;
                 GENERATE_INFOPLIST_FILE = NO;
                 INFOPLIST_FILE = SidePulseWatchWidgets/Info.plist;
                 LD_RUNPATH_SEARCH_PATHS = (

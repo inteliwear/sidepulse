@@ -8,67 +8,121 @@ struct SidePulseWatchWidgetsBundle: WidgetBundle {
     }
 }
 
-/// Smart Stack shortcut into the watch app's session list. Live Activity
-/// taps always route to the iPhone on watchOS; this widget is the one-tap
-/// on-wrist path.
+/// Smart Stack tile: last relayed agent snapshot, and always a one-tap way
+/// into the watch app (Live Activity taps route to the iPhone by policy).
 struct AgentsLauncherWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(
             kind: "AgentsLauncher",
             provider: LauncherProvider()
-        ) { _ in
-            LauncherView()
+        ) { entry in
+            LauncherView(snapshot: entry.snapshot)
                 .containerBackground(.black.gradient, for: .widget)
         }
         .configurationDisplayName("Mac Agents")
-        .description("Open the live agent session list.")
+        .description("Agent sessions on the Mac.")
         .supportedFamilies([.accessoryRectangular, .accessoryCircular])
     }
 }
 
 struct LauncherEntry: TimelineEntry {
     let date: Date
+    let snapshot: AgentSnapshot?
 }
 
 struct LauncherProvider: TimelineProvider {
     func placeholder(in context: Context) -> LauncherEntry {
-        LauncherEntry(date: .now)
+        LauncherEntry(date: .now, snapshot: nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (LauncherEntry) -> Void) {
-        completion(LauncherEntry(date: .now))
+        completion(LauncherEntry(date: .now, snapshot: SharedSnapshotStore.load()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<LauncherEntry>) -> Void) {
-        completion(Timeline(entries: [LauncherEntry(date: .now)], policy: .never))
+        let entry = LauncherEntry(date: .now, snapshot: SharedSnapshotStore.load())
+        completion(Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(15 * 60))))
     }
 }
 
 struct LauncherView: View {
     @Environment(\.widgetFamily) private var family
+    let snapshot: AgentSnapshot?
+
+    private var accent: Color {
+        guard let snapshot, snapshot.activeCount > 0 else {
+            return Color(red: 0.29, green: 0.87, blue: 0.42)
+        }
+        let modes = snapshot.agents.map(\.mode)
+        if modes.contains("blocked_error") { return Color(red: 1.0, green: 0.28, blue: 0.29) }
+        if modes.contains("waiting_for_input") { return Color(red: 1.0, green: 0.62, blue: 0.11) }
+        return Color(red: 0.25, green: 0.85, blue: 0.95)
+    }
 
     var body: some View {
         Group {
             if family == .accessoryCircular {
-                Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(Color(red: 0.25, green: 0.85, blue: 0.95))
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "bolt.horizontal.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(Color(red: 0.25, green: 0.85, blue: 0.95))
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Mac Agents")
-                            .font(.headline)
-                        Text("Live session list")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                ZStack {
+                    Circle().fill(accent.opacity(0.2))
+                    if let snapshot {
+                        Text("\(snapshot.activeCount)")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(accent)
+                    } else {
+                        Image(systemName: "bolt.horizontal.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(accent)
                     }
-                    Spacer()
                 }
+            } else {
+                rectangular
             }
         }
         .widgetURL(URL(string: "sidepulse://agents"))
+    }
+
+    @ViewBuilder
+    private var rectangular: some View {
+        if let snapshot {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Circle().fill(accent).frame(width: 7, height: 7)
+                    Text("\(snapshot.activeCount) active")
+                        .font(.headline)
+                    Spacer()
+                    Text(Date(timeIntervalSince1970: snapshot.updatedAt), style: .relative)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                if let top = snapshot.agents.first {
+                    Text(top.name)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(top.detail ?? AgentModeStyle.label(top.mode))
+                        .font(.system(size: 10))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                } else {
+                    Text("All quiet")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.horizontal.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Mac Agents")
+                        .font(.headline)
+                    Text("Live session list")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
     }
 }

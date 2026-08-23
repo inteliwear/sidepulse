@@ -1,5 +1,6 @@
 import Foundation
 import WatchConnectivity
+import WidgetKit
 
 /// Receives agent snapshots relayed by the iPhone app.
 @MainActor
@@ -25,12 +26,26 @@ final class WatchSessionStore: NSObject, ObservableObject {
         decode(from: session.receivedApplicationContext)
     }
 
+    private var lastWidgetReload: Date = .distantPast
+    private var lastWidgetState: (String, Int)?
+
     private func decode(from payload: [String: Any]) {
         guard let data = payload["snapshot"] as? Data,
               let parsed = try? JSONDecoder().decode(AgentSnapshot.self, from: data) else {
             return
         }
         snapshot = parsed
+        SharedSnapshotStore.save(data)
+
+        // Widget reloads are budgeted; refresh on meaningful change, at most
+        // once a minute.
+        let state = (parsed.aggregateMode, parsed.activeCount)
+        if lastWidgetState.map({ $0 != state }) ?? true,
+           Date().timeIntervalSince(lastWidgetReload) > 60 {
+            lastWidgetState = state
+            lastWidgetReload = Date()
+            WidgetCenter.shared.reloadTimelines(ofKind: "AgentsLauncher")
+        }
     }
 }
 
