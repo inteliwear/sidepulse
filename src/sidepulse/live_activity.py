@@ -39,6 +39,14 @@ PUSH_TO_START_COOLDOWN_SECONDS = 300.0
 SSE_HEARTBEAT_SECONDS = 10.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
 
+# Modes worth interrupting the user for, and their notification titles.
+ALERT_MODES = {
+    "waiting_for_input": "Needs your input",
+    "blocked_error": "Blocked",
+    "completed": "Finished",
+}
+ALERT_COOLDOWN_SECONDS = 90.0
+
 
 @dataclass(frozen=True)
 class LiveActivityConfig:
@@ -76,6 +84,7 @@ class TokenStore:
         self._data: dict[str, dict[str, dict[str, Any]]] = {
             "push_to_start": {},
             "update": {},
+            "device": {},
         }
         self._load()
 
@@ -84,7 +93,7 @@ class TokenStore:
             raw = json.loads(self.path.read_text())
         except (OSError, ValueError):
             return
-        for kind in ("push_to_start", "update"):
+        for kind in ("push_to_start", "update", "device"):
             entries = raw.get(kind)
             if isinstance(entries, dict):
                 self._data[kind] = {
@@ -156,6 +165,44 @@ def build_content_state(statuses: list[AgentStatus], aggregate_mode: str) -> dic
     }
 
 
+def compute_alerts(
+    previous_modes: dict[str, str],
+    statuses: list[AgentStatus],
+    now: float,
+    last_alerts: dict[tuple[str, str], float],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """Alerts for agents that TRANSITIONED into an alertable mode.
+
+    Returns (alerts, new_modes). ``last_alerts`` is mutated with sent
+    timestamps so repeated flapping stays inside ALERT_COOLDOWN_SECONDS.
+    An empty ``previous_modes`` produces no alerts — the first tick after a
+    daemon restart must not replay every current state as news.
+    """
+    new_modes = {status.agent_id: status.mode.value for status in statuses}
+    alerts: list[dict[str, str]] = []
+    if not previous_modes:
+        return alerts, new_modes
+    for status in statuses:
+        mode = status.mode.value
+        if mode not in ALERT_MODES:
+            continue
+        if previous_modes.get(status.agent_id) == mode:
+            continue
+        key = (status.agent_id, mode)
+        last_sent = last_alerts.get(key)
+        if last_sent is not None and now - last_sent < ALERT_COOLDOWN_SECONDS:
+            continue
+        last_alerts[key] = now
+        alerts.append(
+            {
+                "title": f"{ALERT_MODES[mode]}: {_truncate(status.display_name, MAX_NAME_CHARS)}",
+                "body": status.tool_name or status.message or status.mode_label,
+                "thread_id": status.agent_id,
+            }
+        )
+    return alerts, new_modes
+
+
 class APNsLiveActivityClient:
     """Minimal APNs client for liveactivity pushes (JWT auth, HTTP/2)."""
 
@@ -190,7 +237,14 @@ class APNsLiveActivityClient:
         self._jwt_issued_at = now
         return self._jwt
 
-    def send(self, token: str, payload: dict[str, Any], priority: int = 10) -> tuple[int, str]:
+    def send(
+        self,
+        token: str,
+        payload: dict[str, Any],
+        priority: int = 10,
+        push_type: str = "liveactivity",
+        topic: str | None = None,
+    ) -> tuple[int, str]:
         import httpx
 
         if self._client is None:
@@ -198,8 +252,8 @@ class APNsLiveActivityClient:
         url = f"https://{self.config.apns_host}/3/device/{token}"
         headers = {
             "authorization": f"bearer {self._token()}",
-            "apns-topic": self.config.liveactivity_topic,
-            "apns-push-type": "liveactivity",
+            "apns-topic": topic or self.config.liveactivity_topic,
+            "apns-push-type": push_type,
             "apns-priority": str(priority),
             "apns-expiration": "0",
         }
@@ -224,6 +278,8 @@ class LiveActivityDaemon:
         self._last_start_push_at = 0.0
         self._idle_since: float | None = None
         self._activity_live = False
+        self._agent_modes: dict[str, str] = {}
+        self._last_alerts: dict[tuple[str, str], float] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -266,6 +322,12 @@ class LiveActivityDaemon:
         now = time.time()
         active = content_state["activeCount"] > 0
 
+        alerts, self._agent_modes = compute_alerts(
+            self._agent_modes, statuses, now, self._last_alerts
+        )
+        for alert in alerts:
+            self._push_alert(alert)
+
         if active:
             self._idle_since = None
             if not self._activity_live:
@@ -305,6 +367,30 @@ class LiveActivityDaemon:
                 self.tokens.drop(kind, token)
             elif status != 200:
                 print(f"live-activity: APNs {kind} push -> {status} {body[:120]}")
+
+    def _push_alert(self, alert: dict[str, str]) -> None:
+        payload = {
+            "aps": {
+                "alert": {"title": alert["title"], "body": alert["body"]},
+                "sound": "default",
+                "thread-id": alert["thread_id"],
+            },
+            "host": self.config.host_label,
+        }
+        print(f"live-activity: alert -> {alert['title']}")
+        for token in self.tokens.tokens("device"):
+            status, body = self.apns.send(
+                token,
+                payload,
+                push_type="alert",
+                topic=self.config.bundle_id,
+            )
+            if status in (400, 410) and (
+                "BadDeviceToken" in body or "Unregistered" in body or "ExpiredToken" in body
+            ):
+                self.tokens.drop("device", token)
+            elif status != 200:
+                print(f"live-activity: APNs alert push -> {status} {body[:120]}")
 
     def _maybe_push_to_start(self, content_state: dict[str, Any], now: float) -> None:
         if not self.tokens.tokens("push_to_start"):
@@ -419,8 +505,12 @@ class LiveActivityDaemon:
                     return
                 kind = body.get("kind")
                 token = body.get("token", "")
-                if kind not in ("push_to_start", "update") or not isinstance(token, str) or not token:
-                    self._json(400, {"error": "kind must be push_to_start|update with a token"})
+                if (
+                    kind not in ("push_to_start", "update", "device")
+                    or not isinstance(token, str)
+                    or not token
+                ):
+                    self._json(400, {"error": "kind must be push_to_start|update|device with a token"})
                     return
                 meta = {
                     "device": str(body.get("device", "")),

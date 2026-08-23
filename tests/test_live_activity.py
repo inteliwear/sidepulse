@@ -57,3 +57,46 @@ def test_token_store_round_trip(tmp_path):
     reloaded.drop("update", "bb22")
     assert reloaded.tokens("update") == []
     assert TokenStore(tmp_path / "tokens.json").tokens("update") == []
+
+
+def test_compute_alerts_only_on_transition_with_cooldown():
+    from sidepulse.live_activity import compute_alerts
+
+    working = make_status("a", AgentMode.WORKING, name="Session A")
+    waiting = make_status("a", AgentMode.WAITING_FOR_INPUT, name="Session A")
+    last_alerts: dict[tuple[str, str], float] = {}
+
+    # First tick after restart: seeds state, never alerts.
+    alerts, modes = compute_alerts({}, [waiting], now=100.0, last_alerts=last_alerts)
+    assert alerts == []
+
+    # working -> waiting transitions and alerts once.
+    alerts, modes = compute_alerts({"a": "working"}, [waiting], now=200.0, last_alerts=last_alerts)
+    assert len(alerts) == 1
+    assert "Needs your input" in alerts[0]["title"]
+    assert "Session A" in alerts[0]["title"]
+
+    # Flapping back within the cooldown stays silent.
+    alerts, modes = compute_alerts(modes, [working], now=210.0, last_alerts=last_alerts)
+    assert alerts == []
+    alerts, modes = compute_alerts(modes, [waiting], now=220.0, last_alerts=last_alerts)
+    assert alerts == []
+
+    # After the cooldown the same transition alerts again.
+    alerts, modes = compute_alerts({"a": "working"}, [waiting], now=400.0, last_alerts=last_alerts)
+    assert len(alerts) == 1
+
+
+def test_compute_alerts_completed_and_blocked():
+    from sidepulse.live_activity import compute_alerts
+
+    done = make_status("b", AgentMode.COMPLETED, name="Deploy")
+    blocked = make_status("c", AgentMode.BLOCKED_ERROR, name="Tests", tool="pytest")
+    alerts, _ = compute_alerts(
+        {"b": "working", "c": "tool_running"}, [done, blocked], now=50.0, last_alerts={}
+    )
+    titles = sorted(alert["title"] for alert in alerts)
+    assert any("Finished" in title for title in titles)
+    assert any("Blocked" in title for title in titles)
+    blocked_alert = next(alert for alert in alerts if "Blocked" in alert["title"])
+    assert blocked_alert["body"] == "pytest"

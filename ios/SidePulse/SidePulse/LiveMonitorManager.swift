@@ -36,6 +36,12 @@ final class LiveMonitorManager: ObservableObject {
         observersStarted = true
         statusMessage = "Registering with \(model.liveMonitorServerURL)…"
 
+        // The daemon sends alert pushes (finished / needs input / blocked)
+        // to the app's normal APNs device token.
+        if !model.pushToken.isEmpty, let tokenData = Data(hexString: model.pushToken) {
+            Task { await self.register(kind: "device", token: tokenData, model: model) }
+        }
+
         Task {
             for await tokenData in Activity<AgentActivityAttributes>.pushToStartTokenUpdates {
                 await self.register(kind: "push_to_start", token: tokenData, model: model)
@@ -110,3 +116,19 @@ final class LiveMonitorManager: ObservableObject {
 #if canImport(UIKit)
 import UIKit
 #endif
+
+private extension Data {
+    init?(hexString: String) {
+        let cleaned = hexString.filter(\.isHexDigit)
+        guard cleaned.count % 2 == 0 else { return nil }
+        var bytes: [UInt8] = []
+        var index = cleaned.startIndex
+        while index < cleaned.endIndex {
+            let next = cleaned.index(index, offsetBy: 2)
+            guard let byte = UInt8(cleaned[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        self.init(bytes)
+    }
+}
