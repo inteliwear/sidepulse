@@ -482,9 +482,12 @@ class SessionSummarizer:
     def _generate(self, message: str, context: str, style: str = "outcome") -> str | None:
         if style == "task":
             instruction = (
-                "Summarize what this AI coding session is currently working "
-                "on, in at most six words, present tense — 'sidepulse: "
-                "reworking watch card layout', 'kleido: fixing credits bug'. "
+                "This is the user's newest request to an AI coding session. "
+                "State the request's goal in at most six words, present "
+                "tense — 'sidepulse: reworking watch card layout', 'kleido: "
+                "releasing Android build'. The request may contain heavy "
+                "typos; read through them. Never invent work that is not in "
+                "the request. "
             )
         else:
             instruction = (
@@ -713,11 +716,14 @@ class LiveActivityDaemon:
             # than a confidently wrong stale task.
             prompt = self._prompt_tracker.prompt_for(status.session_id)
             if prompt:
+                last_outcome = self.summarizer.summary_for(
+                    status.session_id, None, style="outcome"
+                )
+                task_context = f"working directory: {status.cwd or 'unknown'}"
+                if last_outcome:
+                    task_context += f"; the session's previous work: {last_outcome}"
                 summary = self.summarizer.summary_for(
-                    status.session_id,
-                    prompt,
-                    f"working directory: {status.cwd or 'unknown'}",
-                    style="task",
+                    status.session_id, prompt, task_context, style="task"
                 )
             else:
                 summary = self.summarizer.summary_for(status.session_id, None, style="outcome")
