@@ -25,6 +25,7 @@
         9F0000010000000000000017 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
         9F0000010000000000000018 /* AgentsLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000121 /* AgentsLiveView.swift */; };
         9F0000010000000000000016 /* SidePulseWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000119 /* SidePulseWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+        9F0000010000000000000023 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000124 /* Assets.xcassets */; };
         9F0000010000000000000019 /* SidePulseWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000122 /* SidePulseWatchApp.swift */; };
         9F0000010000000000000020 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
         9F0000010000000000000021 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
@@ -96,6 +97,8 @@
         9F0000010000000000000121 /* AgentsLiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsLiveView.swift; sourceTree = "<group>"; };
         9F0000010000000000000119 /* SidePulseWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SidePulseWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
         9F0000010000000000000122 /* SidePulseWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidePulseWatchApp.swift; sourceTree = "<group>"; };
+        9F0000010000000000000125 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+        9F0000010000000000000124 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
         9F0000010000000000000123 /* SidePulseWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SidePulseWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -181,6 +184,8 @@
             isa = PBXGroup;
             children = (
                 9F0000010000000000000122 /* SidePulseWatchApp.swift */,
+                9F0000010000000000000124 /* Assets.xcassets */,
+                9F0000010000000000000125 /* Info.plist */,
             );
             path = SidePulseWatch;
             sourceTree = "<group>";
@@ -298,6 +303,7 @@
             isa = PBXResourcesBuildPhase;
             buildActionMask = 2147483647;
             files = (
+                9F0000010000000000000023 /* Assets.xcassets in Resources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
@@ -596,12 +602,14 @@
         9F0000010000000000000807 /* Debug */ = {
             isa = XCBuildConfiguration;
             buildSettings = {
+                ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
                 ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
                 CODE_SIGN_STYLE = Automatic;
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
                 ENABLE_PREVIEWS = YES;
                 GENERATE_INFOPLIST_FILE = YES;
+                INFOPLIST_FILE = SidePulseWatch/Info.plist;
                 INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
                 INFOPLIST_KEY_WKApplication = YES;
                 INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(SIDEPULSE_APP_BUNDLE_ID)";
@@ -626,12 +634,14 @@
         9F0000010000000000000808 /* Release */ = {
             isa = XCBuildConfiguration;
             buildSettings = {
+                ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
                 ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
                 CODE_SIGN_STYLE = Automatic;
                 CURRENT_PROJECT_VERSION = 1;
                 DEVELOPMENT_TEAM = "";
                 ENABLE_PREVIEWS = YES;
                 GENERATE_INFOPLIST_FILE = YES;
+                INFOPLIST_FILE = SidePulseWatch/Info.plist;
                 INFOPLIST_KEY_CFBundleDisplayName = SidePulse;
                 INFOPLIST_KEY_WKApplication = YES;
                 INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(SIDEPULSE_APP_BUNDLE_ID)";
