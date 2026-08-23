@@ -420,7 +420,16 @@ class SessionSummarizer:
         env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "/usr/bin:/bin")
         try:
             result = subprocess.run(
-                [self.claude, "-p", prompt, "--model", self.model],
+                [
+                    self.claude,
+                    "-p", prompt,
+                    "--model", self.model,
+                    # Strip startup weight: no MCP servers, no hooks, no
+                    # session persistence. Roughly halves the latency.
+                    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                    "--settings", '{"disableAllHooks":true}',
+                    "--no-session-persistence",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=120,
