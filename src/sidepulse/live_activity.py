@@ -371,8 +371,10 @@ class SessionSummarizer:
         self.moonside_dir = base / "moonside"
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.moonside_dir.mkdir(parents=True, exist_ok=True)
-        worker = threading.Thread(target=self._worker, daemon=True)
-        worker.start()
+        self._cache_path = base / "summaries.json"
+        self._load_cache()
+        for _ in range(2):
+            threading.Thread(target=self._worker, daemon=True).start()
 
     def summary_for(
         self, session_id: str, message: str | None, context: str = ""
@@ -391,6 +393,25 @@ class SessionSummarizer:
                 self._queue.put((session_id, source_hash, message, context))
             return cached[1] if cached else None
 
+    def _load_cache(self) -> None:
+        try:
+            raw = json.loads(self._cache_path.read_text())
+            self._results = {
+                str(sid): (str(pair[0]), str(pair[1]))
+                for sid, pair in raw.items()
+                if isinstance(pair, list) and len(pair) == 2
+            }
+        except (OSError, ValueError):
+            pass
+
+    def _save_cache(self) -> None:
+        try:
+            with self._lock:
+                data = {sid: list(pair) for sid, pair in list(self._results.items())[-200:]}
+            self._cache_path.write_text(json.dumps(data))
+        except OSError:
+            pass
+
     def _worker(self) -> None:
         while True:
             session_id, source_hash, message, context = self._queue.get()
@@ -399,6 +420,8 @@ class SessionSummarizer:
                 self._pending.discard(session_id)
                 if summary:
                     self._results[session_id] = (source_hash, summary)
+            if summary:
+                self._save_cache()
 
     def _generate(self, message: str, context: str) -> str | None:
         prompt = (
@@ -605,7 +628,7 @@ class LiveActivityDaemon:
 
         if status.provider not in {"claude", "codex"} or not status.session_id:
             return status
-        settled = status.event_name in {"Stop", "SubagentStop"} and status.mode.value in {
+        settled = status.event_name in {"Stop", "SubagentStop", "SessionEnd"} and status.mode.value in {
             "completed",
             "waiting_for_input",
             "long_task_progress",
