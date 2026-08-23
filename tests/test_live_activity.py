@@ -118,3 +118,26 @@ def test_compute_alerts_completed_and_blocked():
     assert any("Blocked" in title for title in titles)
     blocked_alert = next(alert for alert in alerts if "Blocked" in alert["title"])
     assert blocked_alert["body"] == "pytest"
+
+
+def test_ignored_cwd_sessions_are_filtered(monkeypatch):
+    from sidepulse.collector import StatusMetadata, should_ignore_record
+    from sidepulse.models import HookEvent
+
+    def record(cwd):
+        return HookEvent(
+            provider="claude",
+            logged_at=datetime.now(timezone.utc),
+            event_name="PreToolUse",
+            raw={},
+            session_id="s1",
+            cwd=cwd,
+        )
+
+    meta = StatusMetadata(cwd=None)
+    assert should_ignore_record(record("/Users/x/Git/aura-server"), meta)
+    assert should_ignore_record(record("/Users/x/.claude/memories"), meta)
+    assert not should_ignore_record(record("/Users/x/Git/sidepulse"), meta)
+
+    monkeypatch.setenv("SIDEPULSE_IGNORE_DIRS", "scratch")
+    assert should_ignore_record(record("/tmp/scratch"), meta)

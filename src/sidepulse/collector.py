@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -1413,7 +1414,25 @@ def should_ignore_status_transition(
     )
 
 
+# Sessions running in these directories are background automation (memory
+# writers, the aura-server agent loop) and never worth surfacing on LEDs,
+# in the status bar, or on the phone. Extend with SIDEPULSE_IGNORE_DIRS
+# (comma-separated directory names).
+DEFAULT_IGNORED_CWD_NAMES = ("memories", "aura-server")
+
+
+def ignored_cwd_names() -> frozenset[str]:
+    extra = os.environ.get("SIDEPULSE_IGNORE_DIRS", "")
+    names = set(DEFAULT_IGNORED_CWD_NAMES)
+    names.update(part.strip() for part in extra.split(",") if part.strip())
+    return frozenset(names)
+
+
 def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
+    cwd = metadata.cwd or record.cwd
+    if cwd and Path(cwd).name in ignored_cwd_names():
+        return True
+
     if record.provider != "codex":
         return False
 
