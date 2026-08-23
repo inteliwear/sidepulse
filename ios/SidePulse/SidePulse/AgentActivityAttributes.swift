@@ -13,6 +13,8 @@ struct AgentActivityAttributes: ActivityAttributes {
         var name: String
         var mode: String
         var detail: String?
+        var provider: String?
+        var cwd: String?
     }
 
     struct ContentState: Codable, Hashable {

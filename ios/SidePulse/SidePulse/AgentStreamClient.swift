@@ -8,6 +8,8 @@ struct AgentSnapshot: Codable, Equatable {
         var name: String
         var mode: String
         var detail: String?
+        var provider: String?
+        var cwd: String?
     }
 
     var aggregateMode: String
@@ -60,19 +62,18 @@ final class AgentStreamClient: ObservableObject {
                     throw URLError(.badServerResponse)
                 }
                 attempt = 0
-                var dataBuffer = ""
                 for try await line in bytes.lines {
                     if Task.isCancelled { return }
-                    if line.hasPrefix("data:") {
-                        dataBuffer += line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                    } else if line.isEmpty, !dataBuffer.isEmpty {
-                        if let parsed = try? JSONDecoder().decode(
-                            AgentSnapshot.self, from: Data(dataBuffer.utf8)
-                        ) {
-                            snapshot = parsed
-                            state = .live
-                        }
-                        dataBuffer = ""
+                    // AsyncLineSequence never yields empty lines, so the SSE
+                    // blank-line delimiter is invisible here. Each event is a
+                    // single-line JSON payload; decode it directly.
+                    guard line.hasPrefix("data:") else { continue }
+                    let body = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    if let parsed = try? JSONDecoder().decode(
+                        AgentSnapshot.self, from: Data(body.utf8)
+                    ) {
+                        snapshot = parsed
+                        state = .live
                     }
                 }
             } catch {

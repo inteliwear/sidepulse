@@ -154,6 +154,8 @@ def build_content_state(statuses: list[AgentStatus], aggregate_mode: str) -> dic
             "name": _truncate(status.display_name, MAX_NAME_CHARS),
             "mode": status.mode.value,
             "detail": _truncate(status.tool_name, MAX_DETAIL_CHARS) if status.tool_name else None,
+            "provider": status.provider,
+            "cwd": _truncate(Path(status.cwd).name, MAX_DETAIL_CHARS) if status.cwd else None,
         }
         for status in ordered[:MAX_AGENT_ROWS]
     ]
@@ -374,6 +376,7 @@ class LiveActivityDaemon:
                 "alert": {"title": alert["title"], "body": alert["body"]},
                 "sound": "default",
                 "thread-id": alert["thread_id"],
+                "interruption-level": "time-sensitive",
             },
             "host": self.config.host_label,
         }

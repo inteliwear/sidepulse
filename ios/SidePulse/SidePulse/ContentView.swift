@@ -7,6 +7,7 @@ struct ContentView: View {
     @StateObject private var model: AppModel
     @State private var isShowingFolderPicker = false
     @State private var activeSheet: ActiveSheet?
+    @State private var isShowingAgents = false
 
     init() {
         _model = StateObject(wrappedValue: AppModel.shared)
@@ -41,6 +42,9 @@ struct ContentView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("SidePulse")
+            .navigationDestination(isPresented: $isShowingAgents) {
+                AgentsLiveView(model: model)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
@@ -54,6 +58,11 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Settings")
                 }
+            }
+        }
+        .onOpenURL { url in
+            if url.host == "agents" {
+                isShowingAgents = true
             }
         }
         .sheet(item: $activeSheet) { sheet in

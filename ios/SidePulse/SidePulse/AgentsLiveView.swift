@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Realtime agent monitor: streams snapshots from the Mac over the local
 /// network / Tailscale while the app is in the foreground.
@@ -67,6 +68,39 @@ private struct AgentLiveRow: View {
     let agent: AgentSnapshot.Agent
 
     var body: some View {
+        Button {
+            openProviderApp()
+        } label: {
+            rowContent
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// claude sessions open the Claude app, codex sessions the ChatGPT app.
+    private func openProviderApp() {
+        let provider = agent.provider ?? String(agent.id.split(separator: ":").first ?? "")
+        let candidates: [URL]
+        switch provider {
+        case "claude":
+            candidates = [URL(string: "claude://")!, URL(string: "https://claude.ai")!]
+        case "codex":
+            candidates = [URL(string: "chatgpt://")!, URL(string: "https://chatgpt.com")!]
+        default:
+            return
+        }
+        open(candidates: candidates)
+    }
+
+    private func open(candidates: [URL]) {
+        guard let first = candidates.first else { return }
+        UIApplication.shared.open(first) { success in
+            if !success, candidates.count > 1 {
+                open(candidates: Array(candidates.dropFirst()))
+            }
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(color(agent.mode))
@@ -75,17 +109,37 @@ private struct AgentLiveRow: View {
                 Text(agent.name)
                     .font(.body)
                     .lineLimit(1)
-                Text(agent.detail ?? AgentModeStyle.label(agent.mode))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if let provider = agent.provider {
+                        Text(provider == "codex" ? "ChatGPT" : provider.capitalized)
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color(.tertiarySystemFill))
+                            .clipShape(Capsule())
+                    }
+                    Text(secondaryLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer()
-            Text(AgentModeStyle.label(agent.mode))
-                .font(.caption.bold())
-                .foregroundStyle(color(agent.mode))
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(AgentModeStyle.label(agent.mode))
+                    .font(.caption.bold())
+                    .foregroundStyle(color(agent.mode))
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.vertical, 2)
+    }
+
+    private var secondaryLine: String {
+        let parts = [agent.cwd, agent.detail].compactMap { $0 }
+        return parts.isEmpty ? AgentModeStyle.label(agent.mode) : parts.joined(separator: " · ")
     }
 
     private func color(_ mode: String) -> Color {

@@ -9,6 +9,7 @@ struct AgentLiveActivity: Widget {
             LockScreenView(context: context)
                 .activityBackgroundTint(Color.black.opacity(0.8))
                 .activitySystemActionForegroundColor(.white)
+                .widgetURL(URL(string: "sidepulse://agents"))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -30,6 +31,7 @@ struct AgentLiveActivity: Widget {
                             AgentRowView(agent: agent)
                         }
                     }
+                    .widgetURL(URL(string: "sidepulse://agents"))
                 }
             } compactLeading: {
                 modeDot(context.state.aggregateMode, size: 10)

@@ -11,6 +11,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         application.registerForRemoteNotifications()
         EventLog.append("App launched; registered for remote notifications")
 
+        // Arm the Live Activity token observers here rather than in the UI:
+        // a push-to-start launches the app in the background with no scene,
+        // and the update token must still be captured and uploaded.
+        Task { @MainActor in
+            LiveMonitorManager.shared.startIfEnabled(model: AppModel.shared)
+        }
+
         if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
             processNotification(userInfo, source: "Launch notification")
         }
