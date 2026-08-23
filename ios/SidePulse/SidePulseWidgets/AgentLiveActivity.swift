@@ -263,7 +263,7 @@ private struct LockScreenView: View {
     /// Smart Stack on the watch: the card's height is fixed and small, so
     /// two compact rows at most — the header chips carry the full counts.
     private func watchBody(groups: ModeGroups) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Image(systemName: groups.symbol.name)
                     .font(.system(size: 10))
@@ -274,17 +274,12 @@ private struct LockScreenView: View {
                 Spacer(minLength: 4)
                 StatusChips(groups: groups)
             }
-            ForEach(context.state.agents.prefix(2)) { agent in
+            ForEach(context.state.agents.prefix(3)) { agent in
                 WatchAgentRowView(agent: agent)
-            }
-            if context.state.agents.count > 2 {
-                Text("+\(context.state.agents.count - 2) more")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
     }
 
     private func phoneBody(groups: ModeGroups) -> some View {
