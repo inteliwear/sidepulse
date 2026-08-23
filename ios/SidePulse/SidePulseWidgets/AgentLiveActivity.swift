@@ -179,6 +179,34 @@ private struct StatusChips: View {
     }
 }
 
+private struct WatchAgentRowView: View {
+    let agent: AgentActivityAttributes.AgentRow
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color.forMode(agent.mode))
+                .frame(width: 6, height: 6)
+            Text(agent.name)
+                .font(.system(size: 11))
+                .foregroundStyle(agent.mode == "completed" ? .secondary : .primary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if let finishedAt = agent.finishedAt {
+                Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            } else {
+                Text(agent.detail ?? AgentModeStyle.label(agent.mode))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.forMode(agent.mode))
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
 private struct AgentRowView: View {
     let agent: AgentActivityAttributes.AgentRow
 
@@ -232,23 +260,31 @@ private struct LockScreenView: View {
         }
     }
 
-    /// Smart Stack on the watch: tighter, three rows, no footer.
+    /// Smart Stack on the watch: the card's height is fixed and small, so
+    /// two compact rows at most — the header chips carry the full counts.
     private func watchBody(groups: ModeGroups) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
                 Image(systemName: groups.symbol.name)
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(groups.symbol.color)
                 Text(context.attributes.hostLabel)
-                    .font(.system(size: 12, weight: .bold))
-                Spacer()
+                    .font(.system(size: 11, weight: .bold))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
                 StatusChips(groups: groups)
             }
-            ForEach(context.state.agents.prefix(3)) { agent in
-                AgentRowView(agent: agent)
+            ForEach(context.state.agents.prefix(2)) { agent in
+                WatchAgentRowView(agent: agent)
+            }
+            if context.state.agents.count > 2 {
+                Text("+\(context.state.agents.count - 2) more")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
             }
         }
-        .padding(8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 
     private func phoneBody(groups: ModeGroups) -> some View {
