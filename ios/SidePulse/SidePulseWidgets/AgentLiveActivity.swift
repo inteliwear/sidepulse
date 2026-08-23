@@ -226,22 +226,28 @@ private struct AgentRowView: View {
                     .padding(.vertical, 1)
                     .background(.white.opacity(0.12), in: Capsule())
             }
+            // The auto-updating relative time reserves greedy width;
+            // priority here hands the free space to the name instead.
             Text(agent.name)
                 .font(.caption)
                 .foregroundStyle(isDone ? .secondary : .primary)
                 .lineLimit(1)
+                .layoutPriority(1)
             Spacer(minLength: 6)
-            if let finishedAt = agent.finishedAt {
-                Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            } else {
-                Text(agent.detail ?? AgentModeStyle.label(agent.mode))
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(Color.forMode(agent.mode))
-                    .lineLimit(1)
+            Group {
+                if let finishedAt = agent.finishedAt {
+                    Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(agent.detail ?? AgentModeStyle.label(agent.mode))
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color.forMode(agent.mode))
+                }
             }
+            .font(.caption2)
+            .lineLimit(1)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: 64, alignment: .trailing)
         }
     }
 }
@@ -313,14 +319,6 @@ private struct LockScreenView: View {
                     }
                 }
             }
-
-            HStack(spacing: 4) {
-                Image(systemName: "clock")
-                    .font(.system(size: 8))
-                Text(context.state.updatedDate, style: .relative)
-                    .font(.caption2)
-            }
-            .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
