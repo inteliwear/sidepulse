@@ -415,6 +415,9 @@ class SessionSummarizer:
         )
         env = dict(os.environ)
         env["MOONSIDE_RUNTIME_DIR"] = str(self.moonside_dir)
+        # Under launchd the PATH lacks Homebrew, so the CLI's node-based
+        # hooks fail noisily and slow the call down.
+        env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "/usr/bin:/bin")
         try:
             result = subprocess.run(
                 [self.claude, "-p", prompt, "--model", self.model],
@@ -432,7 +435,10 @@ class SessionSummarizer:
             return None
         line = result.stdout.strip().splitlines()
         text = line[0].strip().strip("\"'") if line else ""
-        return _truncate(text, SUMMARY_MAX_CHARS) if text else None
+        if text:
+            print(f"live-activity: summary -> {text[:70]}")
+            return _truncate(text, SUMMARY_MAX_CHARS)
+        return None
 
 
 class LiveActivityDaemon:
