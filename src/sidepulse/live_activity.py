@@ -359,10 +359,14 @@ class PromptTracker:
 
     def __init__(self) -> None:
         self._prompts: dict[str, str] = {}
+        self._actions: dict[str, list[str]] = {}
         self._offsets: dict[str, int] = {}
 
     def prompt_for(self, session_id: str) -> str | None:
         return self._prompts.get(session_id)
+
+    def actions_for(self, session_id: str) -> list[str]:
+        return self._actions.get(session_id, [])
 
     def poll(self) -> None:
         for name in ("claude.jsonl", "codex.jsonl"):
@@ -391,12 +395,26 @@ class PromptTracker:
                 event = record.get("event", record)
                 if not isinstance(event, dict):
                     continue
-                if event.get("hook_event_name") != "UserPromptSubmit":
-                    continue
                 session_id = event.get("session_id")
-                prompt = event.get("prompt")
-                if isinstance(session_id, str) and isinstance(prompt, str) and prompt.strip():
-                    self._prompts[session_id] = prompt.strip()
+                if not isinstance(session_id, str):
+                    continue
+                hook = event.get("hook_event_name")
+                if hook == "UserPromptSubmit":
+                    prompt = event.get("prompt")
+                    if isinstance(prompt, str) and prompt.strip():
+                        self._prompts[session_id] = prompt.strip()
+                        self._actions[session_id] = []  # new turn, new actions
+                elif hook == "PreToolUse":
+                    tool_input = event.get("tool_input")
+                    description = (
+                        tool_input.get("description")
+                        if isinstance(tool_input, dict)
+                        else None
+                    )
+                    if isinstance(description, str) and description.strip():
+                        actions = self._actions.setdefault(session_id, [])
+                        actions.append(description.strip()[:80])
+                        del actions[:-4]
 
 
 
@@ -483,12 +501,13 @@ class SessionSummarizer:
     def _generate(self, message: str, context: str, style: str = "outcome") -> str | None:
         if style == "task":
             instruction = (
-                "This is the user's newest request to an AI coding session. "
-                "State the request's goal in at most six words, present "
-                "tense — 'sidepulse: reworking watch card layout', 'kleido: "
-                "releasing Android build'. The request may contain heavy "
-                "typos; read through them. Never invent work that is not in "
-                "the request. "
+                "An AI coding session is working on a request; its most "
+                "recent actions may be listed. In at most six words, present "
+                "progressive, say what it is doing RIGHT NOW — 'sidepulse: "
+                "deploying build to TestFlight', 'kleido: running tests "
+                "after merge'. Prefer the latest action over the request "
+                "when they differ. The text may contain heavy typos; read "
+                "through them. Never invent work not mentioned. "
             )
         else:
             instruction = (
@@ -566,6 +585,7 @@ class LiveActivityDaemon:
         )
         self._prompt_tracker = PromptTracker()
         self._deferred_alerts: list[dict[str, Any]] = []
+        self._task_sources: dict[str, tuple[str, float]] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -719,6 +739,19 @@ class LiveActivityDaemon:
             # than a confidently wrong stale task.
             prompt = self._prompt_tracker.prompt_for(status.session_id)
             if prompt:
+                # Refresh the progress source at most every 45s so the
+                # summary follows the work without hammering the API.
+                import time as _time
+
+                cached_source = self._task_sources.get(status.session_id)
+                if cached_source and _time.time() - cached_source[1] < 45:
+                    source = cached_source[0]
+                else:
+                    actions = self._prompt_tracker.actions_for(status.session_id)
+                    source = prompt[:1500]
+                    if actions:
+                        source += "\n\nMost recent actions (latest last):\n- " + "\n- ".join(actions)
+                    self._task_sources[status.session_id] = (source, _time.time())
                 last_outcome = self.summarizer.summary_for(
                     status.session_id, None, style="outcome"
                 )
@@ -726,7 +759,7 @@ class LiveActivityDaemon:
                 if last_outcome:
                     task_context += f"; the session's previous work: {last_outcome}"
                 summary = self.summarizer.summary_for(
-                    status.session_id, prompt, task_context, style="task"
+                    status.session_id, source, task_context, style="task"
                 )
             else:
                 summary = self.summarizer.summary_for(status.session_id, None, style="outcome")
