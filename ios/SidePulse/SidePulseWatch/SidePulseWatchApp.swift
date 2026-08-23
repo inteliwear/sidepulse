@@ -38,6 +38,10 @@ struct WatchAgentsView: View {
         .task {
             store.activate()
         }
+        .onOpenURL { _ in
+            // Live Activity taps land here; the agents list is the whole app.
+            store.requestStart()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 store.requestStart()

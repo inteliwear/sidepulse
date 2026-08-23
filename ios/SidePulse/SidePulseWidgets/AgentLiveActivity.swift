@@ -116,6 +116,7 @@ struct AgentLiveActivity: Widget {
                 .widgetURL(URL(string: "sidepulse://agents"))
             }
         }
+        .supplementalActivityFamilies([.small])
     }
 }
 
@@ -220,9 +221,37 @@ private struct AgentRowView: View {
 @available(iOSApplicationExtension 16.2, *)
 private struct LockScreenView: View {
     let context: ActivityViewContext<AgentActivityAttributes>
+    @Environment(\.activityFamily) private var activityFamily
 
     var body: some View {
         let groups = ModeGroups(agents: context.state.agents)
+        if activityFamily == .small {
+            watchBody(groups: groups)
+        } else {
+            phoneBody(groups: groups)
+        }
+    }
+
+    /// Smart Stack on the watch: tighter, three rows, no footer.
+    private func watchBody(groups: ModeGroups) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: groups.symbol.name)
+                    .font(.system(size: 11))
+                    .foregroundStyle(groups.symbol.color)
+                Text(context.attributes.hostLabel)
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                StatusChips(groups: groups)
+            }
+            ForEach(context.state.agents.prefix(3)) { agent in
+                AgentRowView(agent: agent)
+            }
+        }
+        .padding(8)
+    }
+
+    private func phoneBody(groups: ModeGroups) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 HStack(spacing: 5) {
