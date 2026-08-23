@@ -29,15 +29,6 @@ private struct ModeGroups {
         if working > 0 { return (working, .statusWorking) }
         return (done, .statusDone)
     }
-
-    var presentColors: [Color] {
-        var colors: [Color] = []
-        if blocked > 0 { colors.append(.statusBlocked) }
-        if waiting > 0 { colors.append(.statusWaiting) }
-        if working > 0 { colors.append(.statusWorking) }
-        if done > 0 { colors.append(.statusDone) }
-        return colors
-    }
 }
 
 private extension Color {
@@ -95,14 +86,13 @@ struct AgentLiveActivity: Widget {
                     .widgetURL(URL(string: "sidepulse://agents"))
                 }
             } compactLeading: {
-                DotCluster(colors: groups.presentColors)
+                let headline = groups.headline
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(headline.color)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } compactTrailing: {
-                let headline = groups.headline
-                Text("\(headline.count)")
-                    .font(.caption.bold())
-                    .foregroundStyle(headline.color)
-                    .contentTransition(.numericText())
+                CompactCounts(groups: groups)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
                 let headline = groups.headline
@@ -121,21 +111,28 @@ struct AgentLiveActivity: Widget {
 
 // MARK: - Pieces
 
-/// Up to three overlapping colored dots — one per status group present.
-private struct DotCluster: View {
-    let colors: [Color]
+/// Per-state counts as colored digits, most urgent first: a red digit
+/// appearing means blocked, orange waiting, cyan working, green finished —
+/// so transitions are visible right in the compact island.
+private struct CompactCounts: View {
+    let groups: ModeGroups
 
     var body: some View {
-        HStack(spacing: -4) {
-            ForEach(Array(colors.prefix(3).enumerated()), id: \.offset) { _, color in
-                Circle()
-                    .fill(color)
-                    .frame(width: 9, height: 9)
-                    .overlay(Circle().stroke(.black, lineWidth: 1.5))
-                    .shadow(color: color.opacity(0.8), radius: 3)
+        let parts: [(Int, Color)] = [
+            (groups.blocked, .statusBlocked),
+            (groups.waiting, .statusWaiting),
+            (groups.working, .statusWorking),
+            (groups.done, .statusDone),
+        ].filter { $0.0 > 0 }
+
+        HStack(spacing: 3) {
+            ForEach(Array(parts.prefix(3).enumerated()), id: \.offset) { _, part in
+                Text("\(part.0)")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(part.1)
+                    .contentTransition(.numericText())
             }
         }
-        .padding(.leading, 2)
     }
 }
 
