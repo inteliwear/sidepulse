@@ -96,12 +96,14 @@ struct AgentLiveActivity: Widget {
                 }
             } compactLeading: {
                 DotCluster(colors: groups.presentColors)
+                    .widgetURL(URL(string: "sidepulse://agents"))
             } compactTrailing: {
                 let headline = groups.headline
                 Text("\(headline.count)")
                     .font(.caption.bold())
                     .foregroundStyle(headline.color)
                     .contentTransition(.numericText())
+                    .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
                 let headline = groups.headline
                 ZStack {
@@ -111,6 +113,7 @@ struct AgentLiveActivity: Widget {
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(headline.color)
                 }
+                .widgetURL(URL(string: "sidepulse://agents"))
             }
         }
     }
