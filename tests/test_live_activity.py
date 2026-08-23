@@ -248,3 +248,22 @@ def test_sync_background_tasks_emits_and_restores(tmp_path, monkeypatch):
     assert _json.loads(log[-1])["hook_event_name"] == "Stop"
     assert (sessions / "s1").read_text().splitlines()[0] == "idle"
     assert "s1" not in daemon._bg_injected
+
+
+def test_stop_with_running_background_tasks_is_long_task():
+    from sidepulse.collector import mode_for_event
+    from sidepulse.models import HookEvent
+
+    def stop(background):
+        return HookEvent(
+            provider="claude",
+            logged_at=datetime.now(timezone.utc),
+            event_name="Stop",
+            raw={"background_tasks": background},
+            session_id="s1",
+        )
+
+    running = [{"id": "b1", "type": "shell", "status": "running"}]
+    assert mode_for_event(stop(running)) == AgentMode.LONG_TASK_PROGRESS
+    assert mode_for_event(stop([])) == AgentMode.COMPLETED
+    assert mode_for_event(stop([{"id": "b1", "status": "completed"}])) == AgentMode.COMPLETED

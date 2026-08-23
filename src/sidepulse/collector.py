@@ -1071,6 +1071,16 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"Stop", "SubagentStop"}:
         if _assistant_message_asks_question(raw.get("last_assistant_message")):
             return AgentMode.WAITING_FOR_INPUT
+        # The turn ended, but the harness reports background tasks still
+        # running (run_in_background shells, monitors) — the session is not
+        # done until they close, at which point the harness re-invokes the
+        # session and fresh events flow.
+        background_tasks = raw.get("background_tasks")
+        if isinstance(background_tasks, list) and any(
+            isinstance(task, dict) and task.get("status") == "running"
+            for task in background_tasks
+        ):
+            return AgentMode.LONG_TASK_PROGRESS
         return AgentMode.COMPLETED
     if event in {"SessionEnd"}:
         return AgentMode.COMPLETED
