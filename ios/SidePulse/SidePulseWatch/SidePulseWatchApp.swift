@@ -14,12 +14,18 @@ struct SidePulseWatchApp: App {
 /// covers the glanceable case.
 struct WatchAgentsView: View {
     @StateObject private var stream = AgentStreamClient()
-    @AppStorage("watchServerURL") private var serverURL = "http://macmini8005.local:8787"
+    @AppStorage("watchServerURL") private var serverURL = "http://192.168.1.168:8787"
 
     var body: some View {
         NavigationStack {
             List {
                 header
+
+                if case .failed(let message) = stream.state {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                }
 
                 if let snapshot = stream.snapshot, !snapshot.agents.isEmpty {
                     ForEach(snapshot.agents) { agent in
@@ -34,6 +40,22 @@ struct WatchAgentsView: View {
                 }
             }
             .navigationTitle("Agents")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        Form {
+                            TextField("Server URL", text: $serverURL)
+                                .onSubmit { stream.start(baseURL: serverURL) }
+                            Text("Use the Mac's LAN IP; the watch cannot reach Tailscale names.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .navigationTitle("Server")
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
         }
         .task {
             stream.start(baseURL: serverURL)
