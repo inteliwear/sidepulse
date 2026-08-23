@@ -120,6 +120,10 @@ class TokenStore:
         with self._lock:
             return list(self._data[kind])
 
+    def contains(self, kind: str, token: str) -> bool:
+        with self._lock:
+            return token in self._data[kind]
+
     def drop(self, kind: str, token: str) -> None:
         with self._lock:
             if self._data[kind].pop(token, None) is not None:
@@ -362,9 +366,7 @@ class LiveActivityDaemon:
     def _apns_fanout(self, kind: str, payload: dict[str, Any], priority: int = 10) -> None:
         for token in self.tokens.tokens(kind):
             status, body = self.apns.send(token, payload, priority=priority)
-            if status in (400, 410) and (
-                "BadDeviceToken" in body or "Unregistered" in body or "ExpiredToken" in body
-            ):
+            if status == 410 or (status == 400 and "BadDeviceToken" in body):
                 print(f"live-activity: dropping dead {kind} token ({status})")
                 self.tokens.drop(kind, token)
             elif status != 200:
@@ -519,9 +521,18 @@ class LiveActivityDaemon:
                     "device": str(body.get("device", "")),
                     "activity_id": str(body.get("activity_id", "")),
                 }
+                is_new = not daemon.tokens.contains(kind, token)
                 daemon.tokens.register(kind, token, meta)
                 if kind == "update":
                     daemon._activity_live = True
+                elif kind == "push_to_start" and is_new:
+                    # Fresh install or token rotation: any previously known
+                    # activity is dead. Forget its update tokens and allow an
+                    # immediate restart on the next tick.
+                    daemon.tokens.clear("update")
+                    daemon._activity_live = False
+                    daemon._last_start_push_at = 0.0
+                    print("live-activity: new push-to-start token; will restart the activity")
                 print(f"live-activity: registered {kind} token from {meta['device'] or 'unknown'}")
                 self._json(200, {"ok": True, "tokens": daemon.tokens.summary()})
 
