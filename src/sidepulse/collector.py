@@ -1019,6 +1019,9 @@ def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None)
     else:
         display_name = provider_label(record.provider)
 
+    if is_ignored_display_name(display_name):
+        return None
+
     return AgentStatus(
         provider=record.provider,
         agent_id=record.status_key,
@@ -1428,9 +1431,22 @@ def ignored_cwd_names() -> frozenset[str]:
     return frozenset(names)
 
 
+def is_ignored_path(cwd: str | None) -> bool:
+    if not cwd:
+        return False
+    ignored = ignored_cwd_names()
+    return any(part in ignored for part in Path(cwd).parts)
+
+
+def is_ignored_display_name(display_name: str) -> bool:
+    return any(display_name.startswith(f"{name}:") for name in ignored_cwd_names())
+
+
 def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
-    cwd = metadata.cwd or record.cwd
-    if cwd and Path(cwd).name in ignored_cwd_names():
+    # Match any path component: automation runs often use per-task
+    # subdirectories (aura-server/runs/2026...-routine-inbox), so the leaf
+    # name alone is not enough.
+    if is_ignored_path(metadata.cwd) or is_ignored_path(record.cwd):
         return True
 
     if record.provider != "codex":

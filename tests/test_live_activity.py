@@ -139,5 +139,18 @@ def test_ignored_cwd_sessions_are_filtered(monkeypatch):
     assert should_ignore_record(record("/Users/x/.claude/memories"), meta)
     assert not should_ignore_record(record("/Users/x/Git/sidepulse"), meta)
 
+    # Per-run subdirectories under an ignored dir are ignored too.
+    assert should_ignore_record(
+        record("/Users/x/Git/aura-server/runs/20260823-120000-routine-inbox"), meta
+    )
+
     monkeypatch.setenv("SIDEPULSE_IGNORE_DIRS", "scratch")
     assert should_ignore_record(record("/tmp/scratch"), meta)
+
+
+def test_ignored_display_name_prefix():
+    from sidepulse.collector import is_ignored_display_name
+
+    assert is_ignored_display_name("aura-server: You are an autonomous agent")
+    assert is_ignored_display_name("memories: Memory Writing Agent")
+    assert not is_ignored_display_name("sidepulse: Merge main")
