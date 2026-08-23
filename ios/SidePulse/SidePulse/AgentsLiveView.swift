@@ -111,7 +111,7 @@ private struct AgentLiveRow: View {
                     .lineLimit(1)
                 HStack(spacing: 4) {
                     if let provider = agent.provider {
-                        Text(provider == "codex" ? "ChatGPT" : provider.capitalized)
+                        Text(provider.capitalized)
                             .font(.caption2.bold())
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)

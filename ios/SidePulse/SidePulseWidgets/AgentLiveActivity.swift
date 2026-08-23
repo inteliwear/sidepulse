@@ -189,6 +189,14 @@ private struct AgentRowView: View {
                 .fill(Color.forMode(agent.mode))
                 .frame(width: 7, height: 7)
                 .shadow(color: Color.forMode(agent.mode).opacity(isDone ? 0 : 0.8), radius: 3)
+            if let provider = agent.provider {
+                Text(provider.capitalized)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.white.opacity(0.12), in: Capsule())
+            }
             Text(agent.name)
                 .font(.caption)
                 .foregroundStyle(isDone ? .secondary : .primary)
