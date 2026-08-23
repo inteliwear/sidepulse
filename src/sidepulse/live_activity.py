@@ -406,14 +406,14 @@ class PromptTracker:
                         self._actions[session_id] = []  # new turn, new actions
                 elif hook == "PreToolUse":
                     tool_input = event.get("tool_input")
-                    description = (
-                        tool_input.get("description")
-                        if isinstance(tool_input, dict)
-                        else None
-                    )
+                    description = None
+                    if isinstance(tool_input, dict):
+                        # Claude supplies a human description; Codex only the
+                        # raw command — the summarizer reads either.
+                        description = tool_input.get("description") or tool_input.get("command")
                     if isinstance(description, str) and description.strip():
                         actions = self._actions.setdefault(session_id, [])
-                        actions.append(description.strip()[:80])
+                        actions.append(description.strip().splitlines()[0][:80])
                         del actions[:-4]
 
 
