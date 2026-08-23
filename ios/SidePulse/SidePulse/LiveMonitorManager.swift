@@ -53,12 +53,30 @@ final class LiveMonitorManager: ObservableObject {
                 self.observe(activity: activity, model: model)
             }
         }
-        // Activities that already exist when the app launches.
+        // Activities that already exist when the app launches — and if there
+        // are none, tell the daemon so it can restart one immediately instead
+        // of updating an activity the last app update destroyed.
         if #available(iOS 17.2, *) {
-            for activity in Activity<AgentActivityAttributes>.activities {
+            let existing = Activity<AgentActivityAttributes>.activities
+            for activity in existing {
                 observe(activity: activity, model: model)
             }
+            if existing.isEmpty {
+                Task { await self.sendReset(model: model) }
+            }
         }
+    }
+
+    private func sendReset(model: AppModel) async {
+        guard let url = URL(string: model.liveMonitorServerURL)?.appendingPathComponent("register") else {
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["kind": "reset"])
+        request.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     @available(iOS 17.2, *)

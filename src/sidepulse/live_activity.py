@@ -38,7 +38,7 @@ MAX_NAME_CHARS = 44
 MAX_DETAIL_CHARS = 32
 PUSH_MIN_INTERVAL_SECONDS = 3.0
 PUSH_HEARTBEAT_SECONDS = 300.0
-PUSH_TO_START_COOLDOWN_SECONDS = 300.0
+PUSH_TO_START_COOLDOWN_SECONDS = 60.0
 SSE_HEARTBEAT_SECONDS = 10.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
 
@@ -583,6 +583,15 @@ class LiveActivityDaemon:
                     return
                 kind = body.get("kind")
                 token = body.get("token", "")
+                if kind == "reset":
+                    # The app launched and found no live activity on the
+                    # phone — whatever update tokens we hold are dead.
+                    daemon.tokens.clear("update")
+                    daemon._activity_live = False
+                    daemon._last_start_push_at = 0.0
+                    print("live-activity: app reports no activity; will restart")
+                    self._json(200, {"ok": True, "tokens": daemon.tokens.summary()})
+                    return
                 if (
                     kind not in ("push_to_start", "update", "device")
                     or not isinstance(token, str)
