@@ -31,6 +31,9 @@ struct AgentsLiveView: View {
         .task {
             stream.start(baseURL: model.liveMonitorServerURL)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            stream.start(baseURL: model.liveMonitorServerURL)
+        }
         .onDisappear {
             stream.stop()
         }

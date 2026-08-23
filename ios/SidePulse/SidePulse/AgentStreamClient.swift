@@ -53,7 +53,7 @@ final class AgentStreamClient: ObservableObject {
         }
         var attempt = 0
         while !Task.isCancelled {
-            state = attempt == 0 ? .connecting : .connecting
+            state = .connecting
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = 15
@@ -79,10 +79,15 @@ final class AgentStreamClient: ObservableObject {
                 }
             } catch {
                 if Task.isCancelled { return }
-                state = .failed(error.localizedDescription)
+                // The old connection dying as the app resurfaces is routine;
+                // only surface an error once reconnecting has failed a few
+                // times in a row.
+                if attempt >= 2 {
+                    state = .failed(error.localizedDescription)
+                }
             }
             attempt += 1
-            let backoff = min(Double(attempt) * 2.0, 15.0)
+            let backoff = attempt <= 1 ? 0.3 : min(Double(attempt) * 2.0, 15.0)
             try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
         }
     }
