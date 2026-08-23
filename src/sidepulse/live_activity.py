@@ -377,20 +377,24 @@ class SessionSummarizer:
             threading.Thread(target=self._worker, daemon=True).start()
 
     def summary_for(
-        self, session_id: str, message: str | None, context: str = ""
+        self,
+        session_id: str,
+        message: str | None,
+        context: str = "",
+        style: str = "outcome",
     ) -> str | None:
         if not message:
             with self._lock:
                 cached = self._results.get(session_id)
             return cached[1] if cached else None
-        source_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
+        source_hash = hashlib.sha256(f"{style}:{message}".encode()).hexdigest()[:16]
         with self._lock:
             cached = self._results.get(session_id)
             if cached and cached[0] == source_hash:
                 return cached[1]
             if session_id not in self._pending:
                 self._pending.add(session_id)
-                self._queue.put((session_id, source_hash, message, context))
+                self._queue.put((session_id, source_hash, message, context, style))
             return cached[1] if cached else None
 
     def _load_cache(self) -> None:
@@ -414,8 +418,8 @@ class SessionSummarizer:
 
     def _worker(self) -> None:
         while True:
-            session_id, source_hash, message, context = self._queue.get()
-            summary = self._generate(message, context)
+            session_id, source_hash, message, context, style = self._queue.get()
+            summary = self._generate(message, context, style)
             with self._lock:
                 self._pending.discard(session_id)
                 if summary:
@@ -423,18 +427,27 @@ class SessionSummarizer:
             if summary:
                 self._save_cache()
 
-    def _generate(self, message: str, context: str) -> str | None:
+    def _generate(self, message: str, context: str, style: str = "outcome") -> str | None:
+        if style == "task":
+            instruction = (
+                "Summarize what this AI coding session is currently working "
+                "on, in at most six words, present tense — 'sidepulse: "
+                "reworking watch card layout', 'kleido: fixing credits bug'. "
+            )
+        else:
+            instruction = (
+                "Summarize the state or outcome this AI assistant message "
+                "describes in at most six words — 'scalper fee cap fixed', "
+                "'sidepulse build on TestFlight'. "
+            )
         prompt = (
-            "Summarize the state or outcome this AI assistant message "
-            "describes in at most six words. Make clear what it concerns, "
-            "but weave the project or topic naturally into the phrase and "
-            "abbreviate long names — 'scalper fee cap fixed', 'kleido "
-            "credits bug fixed', 'sidepulse build on TestFlight'. Infer the "
-            "project from the MESSAGE CONTENT; generic directory names like "
-            "'Git' are never project names. No quotes, respond with only "
-            "the phrase.\n\n"
+            instruction
+            + "Make clear which project or topic it concerns, woven naturally "
+            "into the phrase, abbreviating long names. Infer the project from "
+            "the CONTENT; generic directory names like 'Git' are never "
+            "project names. No quotes, respond with only the phrase.\n\n"
             f"Context: {context[:300]}\n\n"
-            f"Message:\n{message[:3000]}"
+            f"Content:\n{message[:3000]}"
         )
         env = dict(os.environ)
         env["MOONSIDE_RUNTIME_DIR"] = str(self.moonside_dir)
@@ -628,15 +641,23 @@ class LiveActivityDaemon:
 
         if status.provider not in {"claude", "codex"} or not status.session_id:
             return status
+        context = f"working directory: {status.cwd or 'unknown'}; session title: {status.display_name}"
         settled = status.event_name in {"Stop", "SubagentStop", "SessionEnd"} and status.mode.value in {
             "completed",
             "waiting_for_input",
             "long_task_progress",
         }
-        if not settled:
+        if settled:
+            summary = self.summarizer.summary_for(status.session_id, status.message, context)
+        elif status.mode.value in {"working", "tool_running", "long_task_progress"}:
+            # While working, summarize the task itself: the display name
+            # carries the driving prompt and only changes when a new prompt
+            # arrives, so this costs one generation per turn.
+            summary = self.summarizer.summary_for(
+                status.session_id, status.display_name, context, style="task"
+            )
+        else:
             return status
-        context = f"working directory: {status.cwd or 'unknown'}; session title: {status.display_name}"
-        summary = self.summarizer.summary_for(status.session_id, status.message, context)
         if not summary:
             return status
         return dataclass_replace(status, display_name=summary)
