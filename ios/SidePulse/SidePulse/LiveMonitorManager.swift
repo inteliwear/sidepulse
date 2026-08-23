@@ -57,7 +57,15 @@ final class LiveMonitorManager: ObservableObject {
         // are none, tell the daemon so it can restart one immediately instead
         // of updating an activity the last app update destroyed.
         if #available(iOS 17.2, *) {
-            let existing = Activity<AgentActivityAttributes>.activities
+            var existing = Activity<AgentActivityAttributes>.activities
+            if existing.count > 1 {
+                existing.sort { $0.content.state.updatedAt > $1.content.state.updatedAt }
+                for stale in existing.dropFirst() {
+                    let activity = stale
+                    Task { await activity.end(nil, dismissalPolicy: .immediate) }
+                }
+                existing = [existing[0]]
+            }
             for activity in existing {
                 observe(activity: activity, model: model)
             }
@@ -81,6 +89,13 @@ final class LiveMonitorManager: ObservableObject {
 
     @available(iOS 17.2, *)
     private func observe(activity: Activity<AgentActivityAttributes>, model: AppModel) {
+        // iOS happily stacks a second Live Activity when the daemon restarts
+        // one — the newest activity wins, everything else ends immediately.
+        Task {
+            for other in Activity<AgentActivityAttributes>.activities where other.id != activity.id {
+                await other.end(nil, dismissalPolicy: .immediate)
+            }
+        }
         Task {
             for await tokenData in activity.pushTokenUpdates {
                 await self.register(kind: "update", token: tokenData, model: model, activityID: activity.id)

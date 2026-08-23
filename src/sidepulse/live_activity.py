@@ -505,6 +505,31 @@ class LiveActivityDaemon:
         self._apns_fanout("update", payload)
         self._activity_live = True
 
+    def _end_stale_activity(self, reason: str) -> None:
+        with self._condition:
+            latest = self._latest
+        if self.tokens.tokens("update"):
+            print(f"live-activity: {reason}; ending stale activity")
+            payload = {
+                "aps": {
+                    "timestamp": int(time.time()),
+                    "event": "end",
+                    "dismissal-date": int(time.time()),
+                    "content-state": latest or {
+                        "aggregateMode": "idle_ready",
+                        "activeCount": 0,
+                        "agents": [],
+                        "updatedAt": round(time.time(), 1),
+                    },
+                }
+            }
+            self._apns_fanout("update", payload)
+        else:
+            print(f"live-activity: {reason}; will restart")
+        self.tokens.clear("update")
+        self._activity_live = False
+        self._last_start_push_at = 0.0
+
     def _push_end(self, content_state: dict[str, Any], now: float) -> None:
         payload = {
             "aps": {
@@ -586,10 +611,7 @@ class LiveActivityDaemon:
                 if kind == "reset":
                     # The app launched and found no live activity on the
                     # phone — whatever update tokens we hold are dead.
-                    daemon.tokens.clear("update")
-                    daemon._activity_live = False
-                    daemon._last_start_push_at = 0.0
-                    print("live-activity: app reports no activity; will restart")
+                    daemon._end_stale_activity("app reports no activity")
                     self._json(200, {"ok": True, "tokens": daemon.tokens.summary()})
                     return
                 if (
@@ -609,12 +631,9 @@ class LiveActivityDaemon:
                     daemon._activity_live = True
                 elif kind == "push_to_start" and is_new:
                     # Fresh install or token rotation: any previously known
-                    # activity is dead. Forget its update tokens and allow an
-                    # immediate restart on the next tick.
-                    daemon.tokens.clear("update")
-                    daemon._activity_live = False
-                    daemon._last_start_push_at = 0.0
-                    print("live-activity: new push-to-start token; will restart the activity")
+                    # activity is stale. End it, forget its tokens, and allow
+                    # an immediate restart on the next tick.
+                    daemon._end_stale_activity("new push-to-start token")
                 print(f"live-activity: registered {kind} token from {meta['device'] or 'unknown'}")
                 self._json(200, {"ok": True, "tokens": daemon.tokens.summary()})
 
