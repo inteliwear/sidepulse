@@ -369,10 +369,11 @@ class LiveActivityDaemon:
         alerts, self._agent_modes = compute_alerts(
             self._agent_modes, statuses, now, self._last_alerts
         )
-        for alert in alerts:
-            self._push_alert(alert)
-
-        if self.tokens.tokens("update") and (
+        if alerts and self.tokens.tokens("update"):
+            # Alerting Live Activity update: buzzes and highlights the
+            # activity without posting a separate notification banner.
+            self._push_update(content_state, now, alert=alerts[0])
+        elif self.tokens.tokens("update") and (
             (changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS)
             or (active and now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS)
         ):
@@ -445,31 +446,6 @@ class LiveActivityDaemon:
             elif status != 200:
                 print(f"live-activity: APNs {kind} push -> {status} {body[:120]}")
 
-    def _push_alert(self, alert: dict[str, str]) -> None:
-        payload = {
-            "aps": {
-                "alert": {"title": alert["title"], "body": alert["body"]},
-                "sound": "default",
-                "thread-id": alert["thread_id"],
-                "interruption-level": "time-sensitive",
-            },
-            "host": self.config.host_label,
-        }
-        print(f"live-activity: alert -> {alert['title']}")
-        for token in self.tokens.tokens("device"):
-            status, body = self.apns.send(
-                token,
-                payload,
-                push_type="alert",
-                topic=self.config.bundle_id,
-            )
-            if status in (400, 410) and (
-                "BadDeviceToken" in body or "Unregistered" in body or "ExpiredToken" in body
-            ):
-                self.tokens.drop("device", token)
-            elif status != 200:
-                print(f"live-activity: APNs alert push -> {status} {body[:120]}")
-
     def _maybe_push_to_start(self, content_state: dict[str, Any], now: float) -> None:
         if not self.tokens.tokens("push_to_start"):
             return
@@ -493,16 +469,26 @@ class LiveActivityDaemon:
         self._apns_fanout("push_to_start", payload)
         self._activity_live = True
 
-    def _push_update(self, content_state: dict[str, Any], now: float) -> None:
+    def _push_update(
+        self,
+        content_state: dict[str, Any],
+        now: float,
+        alert: dict[str, str] | None = None,
+    ) -> None:
         self._last_push_at = now
-        payload = {
-            "aps": {
-                "timestamp": int(now),
-                "event": "update",
-                "content-state": content_state,
-            }
+        aps: dict[str, Any] = {
+            "timestamp": int(now),
+            "event": "update",
+            "content-state": content_state,
         }
-        self._apns_fanout("update", payload)
+        if alert:
+            print(f"live-activity: alerting update -> {alert['title']}")
+            aps["alert"] = {
+                "title": alert["title"],
+                "body": alert["body"],
+                "sound": "default",
+            }
+        self._apns_fanout("update", {"aps": aps})
         self._activity_live = True
 
     def _end_stale_activity(self, reason: str) -> None:
