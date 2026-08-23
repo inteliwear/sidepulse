@@ -186,3 +186,22 @@ def test_ignored_display_name_prefix():
     assert is_ignored_display_name("aura-server: You are an autonomous agent")
     assert is_ignored_display_name("memories: Memory Writing Agent")
     assert not is_ignored_display_name("sidepulse: Merge main")
+
+
+def test_background_tasks_keep_session_visible(tmp_path):
+    from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
+
+    config = LiveActivityConfig(
+        apns_key_path=tmp_path / "missing.p8",
+        apns_key_id="X", apns_team_id="Y",
+    )
+    daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "tokens.json"))
+    daemon._bg_task_counter = lambda session_id: 2 if session_id == "s1" else 0
+
+    done = make_status("claude:session:s1", AgentMode.COMPLETED, name="Deploy", session_id="s1")
+    overlaid = daemon._overlay_background_tasks(done, now=100.0)
+    assert overlaid.mode == AgentMode.LONG_TASK_PROGRESS
+    assert "background task" in (overlaid.tool_name or "")
+
+    quiet = make_status("claude:session:s2", AgentMode.COMPLETED, name="Idle", session_id="s2")
+    assert daemon._overlay_background_tasks(quiet, now=100.0).mode == AgentMode.COMPLETED

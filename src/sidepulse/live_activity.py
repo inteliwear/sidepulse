@@ -16,8 +16,11 @@ extra); the HTTP server and SSE stream are stdlib-only.
 
 from __future__ import annotations
 
+import glob
 import json
+import os
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -41,6 +44,7 @@ PUSH_HEARTBEAT_SECONDS = 300.0
 PUSH_TO_START_COOLDOWN_SECONDS = 60.0
 SSE_HEARTBEAT_SECONDS = 10.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
+BACKGROUND_TASK_CACHE_SECONDS = 10.0
 
 # Modes worth interrupting the user for, and their notification titles.
 ALERT_MODES = {
@@ -72,6 +76,32 @@ class LiveActivityConfig:
     @property
     def liveactivity_topic(self) -> str:
         return f"{self.bundle_id}.push-type.liveactivity"
+
+
+def claude_background_tasks(session_id: str) -> int:
+    """Running harness background tasks for a local Claude session.
+
+    A session emits Stop (completed) when its turn ends even though
+    run_in_background tasks keep working; those tasks hold their .output
+    files open for writing, which lsof can see.
+    """
+    total = 0
+    for tasks_dir in glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{session_id}/tasks"):
+        try:
+            result = subprocess.run(
+                ["/usr/sbin/lsof", "+D", tasks_dir, "-Fn"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        total += len({
+            line[1:]
+            for line in result.stdout.splitlines()
+            if line.startswith("n") and line.endswith(".output")
+        })
+    return total
 
 
 def default_token_store_path() -> Path:
@@ -354,6 +384,8 @@ class LiveActivityDaemon:
         self._last_alerts: dict[tuple[str, str], float] = {}
         self._last_rows: dict[str, dict[str, Any]] = {}
         self._recent_finished: dict[str, dict[str, Any]] = {}
+        self._bg_task_counter = claude_background_tasks
+        self._bg_task_cache: dict[str, tuple[float, int]] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -384,8 +416,11 @@ class LiveActivityDaemon:
 
     def _tick(self) -> None:
         snapshot = self.monitor.snapshot(include_stale=False)
-        statuses = list(snapshot.statuses)
         now_ts = time.time()
+        statuses = [
+            self._overlay_background_tasks(status, now_ts)
+            for status in snapshot.statuses
+        ]
         self._remember_finished(statuses, now_ts)
         content_state = build_content_state(
             statuses,
@@ -427,6 +462,34 @@ class LiveActivityDaemon:
                 and now - self._idle_since >= self.config.idle_end_minutes * 60
             ):
                 self._push_end(content_state, now)
+
+    def _overlay_background_tasks(self, status: AgentStatus, now: float) -> AgentStatus:
+        """A completed Claude session with running background tasks is not
+        done: show it as a long task so it stays visible and holds back the
+        group Finished alert until those tasks close."""
+        from dataclasses import replace as dataclass_replace
+
+        from .models import AgentMode
+
+        if (
+            status.provider != "claude"
+            or status.session_id is None
+            or status.mode.value not in TERMINAL_MODES
+        ):
+            return status
+        cached = self._bg_task_cache.get(status.session_id)
+        if cached is None or now - cached[0] > BACKGROUND_TASK_CACHE_SECONDS:
+            count = self._bg_task_counter(status.session_id)
+            self._bg_task_cache[status.session_id] = (now, count)
+        else:
+            count = cached[1]
+        if count <= 0:
+            return status
+        return dataclass_replace(
+            status,
+            mode=AgentMode.LONG_TASK_PROGRESS,
+            tool_name=f"{count} background task(s)",
+        )
 
     def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
         current = {status.agent_id: status for status in statuses}
