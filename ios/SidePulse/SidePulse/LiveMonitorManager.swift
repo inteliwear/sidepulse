@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
@@ -35,6 +36,11 @@ final class LiveMonitorManager: ObservableObject {
         guard !observersStarted else { return }
         observersStarted = true
         statusMessage = "Registering with \(model.liveMonitorServerURL)…"
+
+        // Alert pushes (finished / needs input / blocked) are silent unless
+        // the user granted notification permission, which otherwise only the
+        // Get Push Token button requests.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
 
         // The daemon sends alert pushes (finished / needs input / blocked)
         // to the app's normal APNs device token.
