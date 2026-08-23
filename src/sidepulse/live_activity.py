@@ -16,11 +16,9 @@ extra); the HTTP server and SSE stream are stdlib-only.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import socket
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -44,9 +42,6 @@ PUSH_HEARTBEAT_SECONDS = 300.0
 PUSH_TO_START_COOLDOWN_SECONDS = 60.0
 SSE_HEARTBEAT_SECONDS = 10.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
-BACKGROUND_TASK_CACHE_SECONDS = 10.0
-BACKGROUND_TASK_REEMIT_SECONDS = 60.0
-SYNTHETIC_TOOL_NAME = "BackgroundTask"
 
 # Modes worth interrupting the user for, and their notification titles.
 ALERT_MODES = {
@@ -78,32 +73,6 @@ class LiveActivityConfig:
     @property
     def liveactivity_topic(self) -> str:
         return f"{self.bundle_id}.push-type.liveactivity"
-
-
-def claude_background_tasks(session_id: str) -> int:
-    """Running harness background tasks for a local Claude session.
-
-    A session emits Stop (completed) when its turn ends even though
-    run_in_background tasks keep working; those tasks hold their .output
-    files open for writing, which lsof can see.
-    """
-    total = 0
-    for tasks_dir in glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{session_id}/tasks"):
-        try:
-            result = subprocess.run(
-                ["/usr/sbin/lsof", "+D", tasks_dir, "-Fn"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        total += len({
-            line[1:]
-            for line in result.stdout.splitlines()
-            if line.startswith("n") and line.endswith(".output")
-        })
-    return total
 
 
 def default_token_store_path() -> Path:
@@ -386,9 +355,7 @@ class LiveActivityDaemon:
         self._last_alerts: dict[tuple[str, str], float] = {}
         self._last_rows: dict[str, dict[str, Any]] = {}
         self._recent_finished: dict[str, dict[str, Any]] = {}
-        self._bg_task_counter = claude_background_tasks
-        self._bg_task_cache: dict[str, tuple[float, int]] = {}
-        self._bg_injected: dict[str, float] = {}
+        self._bg_holding: set[str] = set()
 
     # -- snapshot loop -------------------------------------------------
 
@@ -420,13 +387,8 @@ class LiveActivityDaemon:
     def _tick(self) -> None:
         snapshot = self.monitor.snapshot(include_stale=False)
         now_ts = time.time()
-        # Publish background-task state at the source so every consumer —
-        # remote status bars, Moonside, this daemon — sees the same thing.
-        self._sync_background_tasks(snapshot.statuses, now_ts)
-        statuses = [
-            self._overlay_background_tasks(status, now_ts)
-            for status in snapshot.statuses
-        ]
+        statuses = list(snapshot.statuses)
+        self._sync_background_tasks(statuses, now_ts)
         self._remember_finished(statuses, now_ts)
         content_state = build_content_state(
             statuses,
@@ -469,66 +431,31 @@ class LiveActivityDaemon:
             ):
                 self._push_end(content_state, now)
 
-    def _bg_count(self, session_id: str, now: float) -> int:
-        cached = self._bg_task_cache.get(session_id)
-        if cached is None or now - cached[0] > BACKGROUND_TASK_CACHE_SECONDS:
-            count = self._bg_task_counter(session_id)
-            self._bg_task_cache[session_id] = (now, count)
-            return count
-        return cached[1]
-
     def _sync_background_tasks(self, statuses, now: float) -> None:
-        """Reflect running background tasks into the shared event streams.
+        """Mirror held-open sessions onto the Moonside lamp markers.
 
-        Appends synthetic hook events to the claude log (which the local
-        collector AND every `remote-agent stream` consumer read) and flips
-        the Moonside session marker, so a session whose turn ended but whose
-        run_in_background tasks are still working shows as busy everywhere,
-        and finishes everywhere at once when they close.
+        The collector already classifies a Stop that reports running
+        background tasks as long-task progress (the harness includes the
+        list in the hook payload), so every sidepulse consumer agrees by
+        itself. Moonside has its own marker files whose Stop hook writes
+        idle immediately; flip them to working while the harness holds the
+        session open, and restore when it truly finishes.
         """
+        holding_now: set[str] = set()
         for status in statuses:
             if status.provider != "claude" or not status.session_id:
                 continue
-            session_id = status.session_id
-            synthetic = (
-                status.event_name == "PreToolUse"
-                and status.tool_name == SYNTHETIC_TOOL_NAME
-            )
-            if session_id in self._bg_injected:
-                if not synthetic and status.mode.value not in TERMINAL_MODES:
-                    # Real activity resumed; hand control back to the hooks.
-                    self._bg_injected.pop(session_id, None)
-                    continue
-                if self._bg_count(session_id, now) > 0:
-                    if now - self._bg_injected[session_id] > BACKGROUND_TASK_REEMIT_SECONDS:
-                        self._append_claude_event(status, "PreToolUse", SYNTHETIC_TOOL_NAME)
-                        self._bg_injected[session_id] = now
-                else:
-                    self._append_claude_event(status, "Stop", None)
-                    self._moonside_marker(session_id, "idle", expect=("working", "Stop"))
-                    self._bg_injected.pop(session_id, None)
-            elif status.mode.value in TERMINAL_MODES and self._bg_count(session_id, now) > 0:
-                self._append_claude_event(status, "PreToolUse", SYNTHETIC_TOOL_NAME)
-                self._moonside_marker(session_id, "working", expect=("idle", None))
-                self._bg_injected[session_id] = now
-                print(f"live-activity: {session_id[:8]} has background tasks; holding busy")
+            if status.mode.value == "long_task_progress" and status.event_name == "Stop":
+                holding_now.add(status.session_id)
 
-    def _append_claude_event(self, status: AgentStatus, event: str, tool_name: str | None) -> None:
-        line: dict[str, Any] = {
-            "session_id": status.session_id,
-            "hook_event_name": event,
-            "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        if status.cwd:
-            line["cwd"] = status.cwd
-        if tool_name:
-            line["tool_name"] = tool_name
-        try:
-            path = default_state_dir() / "claude.jsonl"
-            with path.open("a") as handle:
-                handle.write(json.dumps(line, separators=(",", ":")) + "\n")
-        except OSError as exc:
-            print(f"live-activity: failed to append synthetic event: {exc}")
+        for session_id in holding_now - self._bg_holding:
+            self._moonside_marker(session_id, "working", expect=("idle", None))
+            print(f"live-activity: {session_id[:8]} has background tasks; holding busy")
+        for session_id in self._bg_holding - holding_now:
+            # Finished or resumed; real hook writes win, this only cleans up
+            # a marker still showing our flip.
+            self._moonside_marker(session_id, "idle", expect=("working", "Stop"))
+        self._bg_holding = holding_now
 
     def _moonside_marker(
         self, session_id: str, state: str, expect: tuple[str, str | None]
@@ -552,29 +479,6 @@ class LiveActivityDaemon:
             tmp.replace(marker)
         except OSError:
             tmp.unlink(missing_ok=True)
-
-    def _overlay_background_tasks(self, status: AgentStatus, now: float) -> AgentStatus:
-        """A completed Claude session with running background tasks is not
-        done: show it as a long task so it stays visible and holds back the
-        group Finished alert until those tasks close."""
-        from dataclasses import replace as dataclass_replace
-
-        from .models import AgentMode
-
-        if (
-            status.provider != "claude"
-            or status.session_id is None
-            or status.mode.value not in TERMINAL_MODES
-        ):
-            return status
-        count = self._bg_count(status.session_id, now)
-        if count <= 0:
-            return status
-        return dataclass_replace(
-            status,
-            mode=AgentMode.LONG_TASK_PROGRESS,
-            tool_name=f"{count} background task(s)",
-        )
 
     def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
         current = {status.agent_id: status for status in statuses}
