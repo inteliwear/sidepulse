@@ -107,6 +107,16 @@ final class LiveMonitorManager: ObservableObject {
                 await self.register(kind: "update", token: tokenData, model: model, activityID: activity.id)
             }
         }
+        // A swiped-away (or 8-hour-expired) activity reports .dismissed;
+        // tell the daemon so it can start a fresh one while agents are
+        // active. Programmatic ends (.ended) stay silent — those are the
+        // daemon's own idle-end and the dedup cleanup.
+        Task {
+            for await state in activity.activityStateUpdates where state == .dismissed {
+                await self.sendReset(model: model)
+                break
+            }
+        }
     }
 
     private func register(kind: String, token: Data, model: AppModel, activityID: String? = nil) async {
