@@ -189,11 +189,13 @@ def build_content_state(
     ][:MAX_AGENT_ROWS]
 
     seen_ids = {row["id"] for row in active_rows}
+    seen_names = {row["name"] for row in active_rows}
     finished_rows = []
     for row in sorted(recent_finished or [], key=lambda r: -r.get("finishedAt", 0.0)):
-        if row["id"] in seen_ids:
+        if row["id"] in seen_ids or row["name"] in seen_names:
             continue
         seen_ids.add(row["id"])
+        seen_names.add(row["name"])
         finished_rows.append(row)
         if len(finished_rows) >= MAX_FINISHED_ROWS:
             break
@@ -401,13 +403,13 @@ class SessionSummarizer:
     def _generate(self, message: str, context: str) -> str | None:
         prompt = (
             "Summarize the state or outcome this AI assistant message "
-            "describes, in at most six words, starting with the project or "
-            "app name — like 'sidepulse: TestFlight build deployed' or "
-            "'kleido: waiting for API key decision'. Infer the project from "
-            "the MESSAGE CONTENT first; generic directory names like 'Git' "
-            "are never project names. If there is no project, use a one-word "
-            "topic instead (e.g. 'weather: ...'). Respond with only that "
-            "phrase.\n\n"
+            "describes in at most six words. Make clear what it concerns, "
+            "but weave the project or topic naturally into the phrase and "
+            "abbreviate long names — 'scalper fee cap fixed', 'kleido "
+            "credits bug fixed', 'sidepulse build on TestFlight'. Infer the "
+            "project from the MESSAGE CONTENT; generic directory names like "
+            "'Git' are never project names. No quotes, respond with only "
+            "the phrase.\n\n"
             f"Context: {context[:300]}\n\n"
             f"Message:\n{message[:3000]}"
         )

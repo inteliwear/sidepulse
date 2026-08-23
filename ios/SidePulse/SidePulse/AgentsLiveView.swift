@@ -111,7 +111,7 @@ private struct AgentLiveRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.name)
                     .font(.body)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 4) {
                     if let provider = agent.provider {
                         Text(provider.capitalized)
@@ -126,7 +126,7 @@ private struct AgentLiveRow: View {
                     Text(secondaryLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
             }
             Spacer()

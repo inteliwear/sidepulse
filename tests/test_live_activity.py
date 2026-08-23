@@ -59,6 +59,16 @@ def test_content_state_appends_recent_finished_without_duplicates():
     assert state["agents"][1]["mode"] == "completed"
 
 
+def test_finished_rows_dedupe_by_name_for_reconnected_sessions():
+    running = make_status("codex:session:new", AgentMode.WORKING, name="Kleido: rework")
+    finished = [
+        {"id": "codex:session:old", "name": "Kleido: rework", "mode": "completed",
+         "detail": None, "provider": "codex", "cwd": "Git", "finishedAt": 1000.0},
+    ]
+    state = build_content_state([running], aggregate_mode="working", recent_finished=finished)
+    assert [row["id"] for row in state["agents"]] == ["codex:session:new"]
+
+
 def test_content_state_truncates_long_fields_and_serializes():
     status = make_status("a", AgentMode.TOOL_RUNNING, name="x" * 200, tool="y" * 200)
     state = build_content_state([status], aggregate_mode="tool_running")
