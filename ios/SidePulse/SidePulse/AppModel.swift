@@ -24,6 +24,14 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(sharedSecret, forKey: Defaults.sharedSecret) }
     }
 
+    @Published var liveMonitorEnabled: Bool {
+        didSet { UserDefaults.standard.set(liveMonitorEnabled, forKey: Defaults.liveMonitorEnabled) }
+    }
+
+    @Published var liveMonitorServerURL: String {
+        didSet { UserDefaults.standard.set(liveMonitorServerURL, forKey: Defaults.liveMonitorServerURL) }
+    }
+
     @Published var lastMessage: String = "Ready"
     @Published var eventLog: [String] = []
     @Published var receivedPushes: [ReceivedPush] {
@@ -36,6 +44,8 @@ final class AppModel: ObservableObject {
         static let serverBaseURL = "serverBaseURL"
         static let sharedSecret = "sharedSecret"
         static let receivedPushes = "receivedPushes"
+        static let liveMonitorEnabled = "liveMonitorEnabled"
+        static let liveMonitorServerURL = "liveMonitorServerURL"
     }
 
     private init() {
@@ -47,6 +57,9 @@ final class AppModel: ObservableObject {
         """
         self.serverBaseURL = UserDefaults.standard.string(forKey: Defaults.serverBaseURL) ?? "http://127.0.0.1:8787"
         self.sharedSecret = UserDefaults.standard.string(forKey: Defaults.sharedSecret) ?? ""
+        self.liveMonitorEnabled = UserDefaults.standard.bool(forKey: Defaults.liveMonitorEnabled)
+        self.liveMonitorServerURL = UserDefaults.standard.string(forKey: Defaults.liveMonitorServerURL)
+            ?? "http://macmini8005:8787"
         self.receivedPushes = Self.loadReceivedPushes()
         self.eventLog = EventLog.entries()
         refreshFolderStatus()

@@ -7,6 +7,9 @@ struct SidePulseApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .task {
+                    LiveMonitorManager.shared.startIfEnabled(model: AppModel.shared)
+                }
         }
     }
 }

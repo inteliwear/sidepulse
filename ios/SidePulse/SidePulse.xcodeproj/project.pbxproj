@@ -17,7 +17,39 @@
         9F0000010000000000000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000108 /* Assets.xcassets */; };
         9F0000010000000000000009 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000112 /* EventLog.swift */; };
         9F0000010000000000000010 /* PushPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000113 /* PushPayload.swift */; };
+        9F0000010000000000000011 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
+        9F0000010000000000000012 /* LiveMonitorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000115 /* LiveMonitorManager.swift */; };
+        9F0000010000000000000013 /* SidePulseWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000116 /* SidePulseWidgetsBundle.swift */; };
+        9F0000010000000000000014 /* AgentLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000117 /* AgentLiveActivity.swift */; };
+        9F0000010000000000000015 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000114 /* AgentActivityAttributes.swift */; };
+        9F0000010000000000000017 /* AgentStreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000120 /* AgentStreamClient.swift */; };
+        9F0000010000000000000018 /* AgentsLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000121 /* AgentsLiveView.swift */; };
+        9F0000010000000000000016 /* SidePulseWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9F0000010000000000000119 /* SidePulseWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+        9F0000010000000000000412 /* PBXContainerItemProxy */ = {
+            isa = PBXContainerItemProxy;
+            containerPortal = 9F0000010000000000000701 /* Project object */;
+            proxyType = 1;
+            remoteGlobalIDString = 9F0000010000000000000402;
+            remoteInfo = SidePulseWidgets;
+        };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+        9F0000010000000000000603 /* Embed Foundation Extensions */ = {
+            isa = PBXCopyFilesBuildPhase;
+            buildActionMask = 2147483647;
+            dstPath = "";
+            dstSubfolderSpec = 13;
+            files = (
+                9F0000010000000000000016 /* SidePulseWidgets.appex in Embed Foundation Extensions */,
+            );
+            name = "Embed Foundation Extensions";
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
         9F0000010000000000000101 /* SidePulseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidePulseApp.swift; sourceTree = "<group>"; };
@@ -33,10 +65,25 @@
         9F0000010000000000000111 /* SidePulse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SidePulse.app; sourceTree = BUILT_PRODUCTS_DIR; };
         9F0000010000000000000112 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
         9F0000010000000000000113 /* PushPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushPayload.swift; sourceTree = "<group>"; };
+        9F0000010000000000000114 /* AgentActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityAttributes.swift; sourceTree = "<group>"; };
+        9F0000010000000000000115 /* LiveMonitorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveMonitorManager.swift; sourceTree = "<group>"; };
+        9F0000010000000000000116 /* SidePulseWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidePulseWidgetsBundle.swift; sourceTree = "<group>"; };
+        9F0000010000000000000117 /* AgentLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivity.swift; sourceTree = "<group>"; };
+        9F0000010000000000000118 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+        9F0000010000000000000120 /* AgentStreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStreamClient.swift; sourceTree = "<group>"; };
+        9F0000010000000000000121 /* AgentsLiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsLiveView.swift; sourceTree = "<group>"; };
+        9F0000010000000000000119 /* SidePulseWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SidePulseWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
         9F0000010000000000000201 /* Frameworks */ = {
+            isa = PBXFrameworksBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        9F0000010000000000000202 /* Frameworks */ = {
             isa = PBXFrameworksBuildPhase;
             buildActionMask = 2147483647;
             files = (
@@ -50,6 +97,7 @@
             isa = PBXGroup;
             children = (
                 9F0000010000000000000302 /* SidePulse */,
+                9F0000010000000000000304 /* SidePulseWidgets */,
                 9F0000010000000000000303 /* Products */,
             );
             sourceTree = "<group>";
@@ -66,6 +114,10 @@
                 9F0000010000000000000113 /* PushPayload.swift */,
                 9F0000010000000000000106 /* FolderPicker.swift */,
                 9F0000010000000000000107 /* WriteLEDsIntent.swift */,
+                9F0000010000000000000114 /* AgentActivityAttributes.swift */,
+                9F0000010000000000000115 /* LiveMonitorManager.swift */,
+                9F0000010000000000000120 /* AgentStreamClient.swift */,
+                9F0000010000000000000121 /* AgentsLiveView.swift */,
                 9F0000010000000000000108 /* Assets.xcassets */,
                 9F0000010000000000000109 /* Info.plist */,
                 9F0000010000000000000110 /* SidePulse.entitlements */,
@@ -77,8 +129,19 @@
             isa = PBXGroup;
             children = (
                 9F0000010000000000000111 /* SidePulse.app */,
+                9F0000010000000000000119 /* SidePulseWidgets.appex */,
             );
             name = Products;
+            sourceTree = "<group>";
+        };
+        9F0000010000000000000304 /* SidePulseWidgets */ = {
+            isa = PBXGroup;
+            children = (
+                9F0000010000000000000116 /* SidePulseWidgetsBundle.swift */,
+                9F0000010000000000000117 /* AgentLiveActivity.swift */,
+                9F0000010000000000000118 /* Info.plist */,
+            );
+            path = SidePulseWidgets;
             sourceTree = "<group>";
         };
 /* End PBXGroup section */
@@ -91,15 +154,34 @@
                 9F0000010000000000000501 /* Sources */,
                 9F0000010000000000000201 /* Frameworks */,
                 9F0000010000000000000601 /* Resources */,
+                9F0000010000000000000603 /* Embed Foundation Extensions */,
             );
             buildRules = (
             );
             dependencies = (
+                9F0000010000000000000411 /* PBXTargetDependency */,
             );
             name = SidePulse;
             productName = SidePulse;
             productReference = 9F0000010000000000000111 /* SidePulse.app */;
             productType = "com.apple.product-type.application";
+        };
+        9F0000010000000000000402 /* SidePulseWidgets */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 9F0000010000000000000903 /* Build configuration list for PBXNativeTarget "SidePulseWidgets" */;
+            buildPhases = (
+                9F0000010000000000000502 /* Sources */,
+                9F0000010000000000000202 /* Frameworks */,
+                9F0000010000000000000602 /* Resources */,
+            );
+            buildRules = (
+            );
+            dependencies = (
+            );
+            name = SidePulseWidgets;
+            productName = SidePulseWidgets;
+            productReference = 9F0000010000000000000119 /* SidePulseWidgets.appex */;
+            productType = "com.apple.product-type.app-extension";
         };
 /* End PBXNativeTarget section */
 
@@ -130,6 +212,7 @@
             projectRoot = "";
             targets = (
                 9F0000010000000000000401 /* SidePulse */,
+                9F0000010000000000000402 /* SidePulseWidgets */,
             );
         };
 /* End PBXProject section */
@@ -140,6 +223,13 @@
             buildActionMask = 2147483647;
             files = (
                 9F0000010000000000000008 /* Assets.xcassets in Resources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        9F0000010000000000000602 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
@@ -159,10 +249,32 @@
                 9F0000010000000000000010 /* PushPayload.swift in Sources */,
                 9F0000010000000000000006 /* FolderPicker.swift in Sources */,
                 9F0000010000000000000007 /* WriteLEDsIntent.swift in Sources */,
+                9F0000010000000000000011 /* AgentActivityAttributes.swift in Sources */,
+                9F0000010000000000000012 /* LiveMonitorManager.swift in Sources */,
+                9F0000010000000000000017 /* AgentStreamClient.swift in Sources */,
+                9F0000010000000000000018 /* AgentsLiveView.swift in Sources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+        9F0000010000000000000502 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+                9F0000010000000000000013 /* SidePulseWidgetsBundle.swift in Sources */,
+                9F0000010000000000000014 /* AgentLiveActivity.swift in Sources */,
+                9F0000010000000000000015 /* AgentActivityAttributes.swift in Sources */,
             );
             runOnlyForDeploymentPostprocessing = 0;
         };
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+        9F0000010000000000000411 /* PBXTargetDependency */ = {
+            isa = PBXTargetDependency;
+            target = 9F0000010000000000000402 /* SidePulseWidgets */;
+            targetProxy = 9F0000010000000000000412 /* PBXContainerItemProxy */;
+        };
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
         9F0000010000000000000801 /* Debug */ = {
@@ -218,6 +330,7 @@
                 GCC_WARN_UNUSED_VARIABLE = YES;
                 IPHONEOS_DEPLOYMENT_TARGET = 16.0;
                 MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+                SIDEPULSE_APP_BUNDLE_ID = io.sidepulse.app;
                 MTL_FAST_MATH = YES;
                 ONLY_ACTIVE_ARCH = YES;
                 SDKROOT = iphoneos;
@@ -273,6 +386,7 @@
                 GCC_WARN_UNUSED_VARIABLE = YES;
                 IPHONEOS_DEPLOYMENT_TARGET = 16.0;
                 MTL_ENABLE_DEBUG_INFO = NO;
+                SIDEPULSE_APP_BUNDLE_ID = io.sidepulse.app;
                 MTL_FAST_MATH = YES;
                 SDKROOT = iphoneos;
                 SWIFT_COMPILATION_MODE = wholemodule;
@@ -303,8 +417,9 @@
                     "@executable_path/Frameworks",
                 );
                 MARKETING_VERSION = 1.0;
-                PRODUCT_BUNDLE_IDENTIFIER = io.sidepulse.app;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID)";
                 PRODUCT_NAME = SidePulse;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_APP_PROFILE)";
                 SWIFT_EMIT_LOC_STRINGS = YES;
                 SWIFT_VERSION = 5.0;
                 TARGETED_DEVICE_FAMILY = "1,2";
@@ -334,8 +449,61 @@
                     "@executable_path/Frameworks",
                 );
                 MARKETING_VERSION = 1.0;
-                PRODUCT_BUNDLE_IDENTIFIER = io.sidepulse.app;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID)";
                 PRODUCT_NAME = SidePulse;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_APP_PROFILE)";
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+            };
+            name = Release;
+        };
+        9F0000010000000000000805 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = "";
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = SidePulseWidgets/Info.plist;
+                IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                    "@executable_path/../../Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID).SidePulseWidgets";
+                PRODUCT_NAME = SidePulseWidgets;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_WIDGET_PROFILE)";
+                SKIP_INSTALL = YES;
+                SWIFT_EMIT_LOC_STRINGS = YES;
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+            };
+            name = Debug;
+        };
+        9F0000010000000000000806 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+                CODE_SIGN_STYLE = Automatic;
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_TEAM = "";
+                GENERATE_INFOPLIST_FILE = NO;
+                INFOPLIST_FILE = SidePulseWidgets/Info.plist;
+                IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/Frameworks",
+                    "@executable_path/../../Frameworks",
+                );
+                MARKETING_VERSION = 1.0;
+                PRODUCT_BUNDLE_IDENTIFIER = "$(SIDEPULSE_APP_BUNDLE_ID).SidePulseWidgets";
+                PRODUCT_NAME = SidePulseWidgets;
+                PROVISIONING_PROFILE_SPECIFIER = "$(SIDEPULSE_WIDGET_PROFILE)";
+                SKIP_INSTALL = YES;
                 SWIFT_EMIT_LOC_STRINGS = YES;
                 SWIFT_VERSION = 5.0;
                 TARGETED_DEVICE_FAMILY = "1,2";
@@ -359,6 +527,15 @@
             buildConfigurations = (
                 9F0000010000000000000803 /* Debug */,
                 9F0000010000000000000804 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Release;
+        };
+        9F0000010000000000000903 /* Build configuration list for PBXNativeTarget "SidePulseWidgets" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                9F0000010000000000000805 /* Debug */,
+                9F0000010000000000000806 /* Release */,
             );
             defaultConfigurationIsVisible = 0;
             defaultConfigurationName = Release;

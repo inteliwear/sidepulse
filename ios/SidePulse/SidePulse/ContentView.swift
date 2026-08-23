@@ -31,6 +31,8 @@ struct ContentView: View {
                         activeSheet = .folderSetup
                     }
 
+                    MacAgentsPanel(model: model)
+
                     QuickPatternsPanel { pattern in
                         write(pattern)
                     }
@@ -507,6 +509,10 @@ private struct SettingsView: View {
                 }
             }
 
+            Section("Live Monitor (Mac Agents)") {
+                LiveMonitorSection(model: model)
+            }
+
             Section("Advanced Server") {
                 TextField("Proxy base URL", text: $model.serverBaseURL)
                     .textInputAutocapitalization(.never)
@@ -675,5 +681,73 @@ private extension Color {
             blue: Double(blue) / 255,
             opacity: 1
         )
+    }
+}
+
+private struct LiveMonitorSection: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject private var monitor = LiveMonitorManager.shared
+
+    var body: some View {
+        TextField("Monitor server URL", text: $model.liveMonitorServerURL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.URL)
+
+        Toggle("Live Activity for Mac agents", isOn: $model.liveMonitorEnabled)
+            .onChange(of: model.liveMonitorEnabled) { enabled in
+                if enabled {
+                    LiveMonitorManager.shared.start(model: model)
+                }
+            }
+            .disabled(!monitor.isSupported)
+
+        if !monitor.isSupported {
+            Text("Requires iOS 17.2 or later.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        Text(monitor.statusMessage)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+        Text("Runs `sidepulse live-activity` on the Mac. The Mac starts a Live Activity on this phone whenever agents become active and streams their status to the Lock Screen and Dynamic Island.")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
+}
+
+private struct MacAgentsPanel: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        NavigationLink {
+            AgentsLiveView(model: model)
+        } label: {
+            HStack {
+                Image(systemName: "desktopcomputer")
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Mac Agents")
+                        .font(.headline)
+                    Text("Live view of agents on \(hostLabel)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var hostLabel: String {
+        URL(string: model.liveMonitorServerURL)?.host ?? "the Mac"
     }
 }

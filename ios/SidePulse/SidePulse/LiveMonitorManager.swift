@@ -1,0 +1,112 @@
+import Foundation
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
+
+/// Bridges ActivityKit tokens to the `sidepulse live-activity` daemon.
+///
+/// The daemon owns the activity lifecycle: it starts the Live Activity with a
+/// push-to-start token whenever agents wake up, streams content-state updates,
+/// and ends it when the host goes idle. All this app does is hand the daemon
+/// its tokens.
+@MainActor
+final class LiveMonitorManager: ObservableObject {
+    static let shared = LiveMonitorManager()
+
+    @Published var statusMessage: String = "Off"
+
+    private var observersStarted = false
+
+    var isSupported: Bool {
+        if #available(iOS 17.2, *) { return true }
+        return false
+    }
+
+    func startIfEnabled(model: AppModel) {
+        guard model.liveMonitorEnabled else { return }
+        start(model: model)
+    }
+
+    func start(model: AppModel) {
+        guard #available(iOS 17.2, *) else {
+            statusMessage = "Requires iOS 17.2 or later"
+            return
+        }
+        guard !observersStarted else { return }
+        observersStarted = true
+        statusMessage = "Registering with \(model.liveMonitorServerURL)…"
+
+        Task {
+            for await tokenData in Activity<AgentActivityAttributes>.pushToStartTokenUpdates {
+                await self.register(kind: "push_to_start", token: tokenData, model: model)
+            }
+        }
+
+        Task {
+            for await activity in Activity<AgentActivityAttributes>.activityUpdates {
+                self.observe(activity: activity, model: model)
+            }
+        }
+        // Activities that already exist when the app launches.
+        if #available(iOS 17.2, *) {
+            for activity in Activity<AgentActivityAttributes>.activities {
+                observe(activity: activity, model: model)
+            }
+        }
+    }
+
+    @available(iOS 17.2, *)
+    private func observe(activity: Activity<AgentActivityAttributes>, model: AppModel) {
+        Task {
+            for await tokenData in activity.pushTokenUpdates {
+                await self.register(kind: "update", token: tokenData, model: model, activityID: activity.id)
+            }
+        }
+    }
+
+    private func register(kind: String, token: Data, model: AppModel, activityID: String? = nil) async {
+        let tokenHex = token.map { String(format: "%02x", $0) }.joined()
+        guard let url = URL(string: model.liveMonitorServerURL)?.appendingPathComponent("register") else {
+            statusMessage = "Invalid server URL"
+            return
+        }
+        var payload: [String: Any] = [
+            "kind": kind,
+            "token": tokenHex,
+            "device": await deviceName(),
+        ]
+        if let activityID { payload["activity_id"] = activityID }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        request.timeoutInterval = 10
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (200..<300).contains(code) {
+                statusMessage = kind == "push_to_start"
+                    ? "Registered — the Mac can now start the Live Activity"
+                    : "Live Activity connected"
+            } else {
+                statusMessage = "Server error \(code) registering \(kind) token"
+            }
+        } catch {
+            statusMessage = "Cannot reach server: \(error.localizedDescription)"
+        }
+    }
+
+    private func deviceName() async -> String {
+        #if canImport(UIKit)
+        return await UIDevice.current.name
+        #else
+        return "iPhone"
+        #endif
+    }
+}
+
+#if canImport(UIKit)
+import UIKit
+#endif

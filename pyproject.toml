@@ -44,6 +44,7 @@ Issues = "https://github.com/inteliwear/sidepulse/issues"
 # default now, so this extra is a no-op alias.
 status-bar = []
 reply-classifier = ["mlx-lm>=0.24,<1"]
+live-activity = ["httpx[http2]>=0.27", "cryptography>=42.0"]
 test = [
     "pytest>=7",
     # tests/test_packaging.py reads pyproject.toml; tomllib is 3.11+.

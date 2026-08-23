@@ -143,11 +143,175 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     add_sidepulse_battery_parser(subparsers)
     add_sidepulse_remote_parser(subparsers)
     add_remote_agent_parser(subparsers)
+    add_live_activity_parser(subparsers)
     # Agent configs written by older installs invoke `sidepulse hook-log`
     # directly, and `python -m sidepulse` lands here too, so both CLIs must
     # accept it.
     add_hook_log_parser(subparsers)
     return parser
+
+
+def add_live_activity_parser(subparsers: argparse._SubParsersAction) -> None:
+    live = subparsers.add_parser(
+        "live-activity",
+        help="Mirror agent statuses to an iOS Live Activity and live stream.",
+    )
+    commands = live.add_subparsers(dest="live_activity_command", required=True)
+
+    def add_config_arguments(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--apns-key-path", type=Path, required=True, help="APNs auth key (.p8).")
+        target.add_argument("--apns-key-id", required=True, help="APNs auth key id.")
+        target.add_argument("--apns-team-id", required=True, help="Apple Developer team id.")
+        target.add_argument(
+            "--bundle-id",
+            default="io.sidepulse.app",
+            help="iOS app bundle id (default: io.sidepulse.app).",
+        )
+        target.add_argument(
+            "--apns-env",
+            choices=["production", "sandbox"],
+            default="production",
+            help="APNs environment. TestFlight and App Store builds use production.",
+        )
+        target.add_argument("--host-label", default=None, help="Display name for this Mac.")
+        target.add_argument("--port", type=int, default=8787, help="HTTP port (default 8787).")
+        target.add_argument("--poll-seconds", type=float, default=2.0)
+        target.add_argument("--idle-end-minutes", type=float, default=10.0)
+
+    serve = commands.add_parser("serve", help="Run the live-activity daemon in the foreground.")
+    add_config_arguments(serve)
+    serve.set_defaults(func=cmd_live_activity_serve)
+
+    start = commands.add_parser("start", help="Install and start the live-activity launch agent.")
+    add_config_arguments(start)
+    start.set_defaults(func=cmd_live_activity_start)
+
+    stop = commands.add_parser("stop", help="Stop and remove the live-activity launch agent.")
+    stop.set_defaults(func=cmd_live_activity_stop)
+
+    status = commands.add_parser("status", help="Show daemon health and registered tokens.")
+    status.add_argument("--port", type=int, default=8787)
+    status.set_defaults(func=cmd_live_activity_status)
+
+
+def _live_activity_config_from_args(args: argparse.Namespace):
+    from .live_activity import LiveActivityConfig
+
+    kwargs = {
+        "apns_key_path": args.apns_key_path.expanduser().resolve(),
+        "apns_key_id": args.apns_key_id,
+        "apns_team_id": args.apns_team_id,
+        "bundle_id": args.bundle_id,
+        "apns_environment": args.apns_env,
+        "port": args.port,
+        "poll_seconds": args.poll_seconds,
+        "idle_end_minutes": args.idle_end_minutes,
+    }
+    if args.host_label:
+        kwargs["host_label"] = args.host_label
+    return LiveActivityConfig(**kwargs)
+
+
+def cmd_live_activity_serve(args: argparse.Namespace) -> int:
+    from .live_activity import LiveActivityDaemon
+
+    config = _live_activity_config_from_args(args)
+    if not config.apns_key_path.exists():
+        print(f"APNs key not found: {config.apns_key_path}", file=sys.stderr)
+        return 2
+    daemon = LiveActivityDaemon(config)
+    try:
+        daemon.run()
+    except KeyboardInterrupt:
+        daemon.stop()
+    return 0
+
+
+LIVE_ACTIVITY_LAUNCH_AGENT_LABEL = "io.sidepulse.live-activity"
+
+
+def _live_activity_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{LIVE_ACTIVITY_LAUNCH_AGENT_LABEL}.plist"
+
+
+def cmd_live_activity_start(args: argparse.Namespace) -> int:
+    import plistlib
+    import subprocess
+
+    from .providers import default_state_dir
+
+    config = _live_activity_config_from_args(args)
+    if not config.apns_key_path.exists():
+        print(f"APNs key not found: {config.apns_key_path}", file=sys.stderr)
+        return 2
+
+    program = [
+        sys.executable,
+        "-m",
+        "sidepulse",
+        "live-activity",
+        "serve",
+        "--apns-key-path", str(config.apns_key_path),
+        "--apns-key-id", config.apns_key_id,
+        "--apns-team-id", config.apns_team_id,
+        "--bundle-id", config.bundle_id,
+        "--apns-env", config.apns_environment,
+        "--host-label", config.host_label,
+        "--port", str(config.port),
+        "--poll-seconds", str(config.poll_seconds),
+        "--idle-end-minutes", str(config.idle_end_minutes),
+    ]
+    state_dir = default_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    plist = {
+        "Label": LIVE_ACTIVITY_LAUNCH_AGENT_LABEL,
+        "ProgramArguments": program,
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": 10,
+        "StandardOutPath": str(state_dir / "live-activity.out.log"),
+        "StandardErrorPath": str(state_dir / "live-activity.err.log"),
+        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
+    }
+    target = _live_activity_plist_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(plistlib.dumps(plist, sort_keys=False))
+    domain = f"gui/{os.getuid()}"
+    subprocess.run(["launchctl", "bootout", domain, str(target)], capture_output=True)
+    subprocess.run(["launchctl", "bootstrap", domain, str(target)], check=True)
+    subprocess.run(
+        ["launchctl", "kickstart", "-k", f"{domain}/{LIVE_ACTIVITY_LAUNCH_AGENT_LABEL}"],
+        check=False,
+    )
+    print(f"live-activity launch agent installed ({target}) on port {config.port}.")
+    return 0
+
+
+def cmd_live_activity_stop(args: argparse.Namespace) -> int:
+    import subprocess
+
+    target = _live_activity_plist_path()
+    domain = f"gui/{os.getuid()}"
+    subprocess.run(["launchctl", "bootout", domain, str(target)], capture_output=True)
+    if target.exists():
+        target.unlink()
+        print("live-activity launch agent stopped and removed.")
+    else:
+        print("live-activity launch agent was not installed.")
+    return 0
+
+
+def cmd_live_activity_status(args: argparse.Namespace) -> int:
+    import urllib.request
+
+    url = f"http://127.0.0.1:{args.port}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            print(response.read().decode())
+        return 0
+    except OSError as exc:
+        print(f"daemon not reachable at {url}: {exc}", file=sys.stderr)
+        return 1
 
 
 def add_sidepulse_remote_parser(subparsers: argparse._SubParsersAction) -> None:
