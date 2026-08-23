@@ -45,6 +45,8 @@ PUSH_TO_START_COOLDOWN_SECONDS = 60.0
 SSE_HEARTBEAT_SECONDS = 10.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
 BACKGROUND_TASK_CACHE_SECONDS = 10.0
+BACKGROUND_TASK_REEMIT_SECONDS = 60.0
+SYNTHETIC_TOOL_NAME = "BackgroundTask"
 
 # Modes worth interrupting the user for, and their notification titles.
 ALERT_MODES = {
@@ -386,6 +388,7 @@ class LiveActivityDaemon:
         self._recent_finished: dict[str, dict[str, Any]] = {}
         self._bg_task_counter = claude_background_tasks
         self._bg_task_cache: dict[str, tuple[float, int]] = {}
+        self._bg_injected: dict[str, float] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -417,6 +420,9 @@ class LiveActivityDaemon:
     def _tick(self) -> None:
         snapshot = self.monitor.snapshot(include_stale=False)
         now_ts = time.time()
+        # Publish background-task state at the source so every consumer —
+        # remote status bars, Moonside, this daemon — sees the same thing.
+        self._sync_background_tasks(snapshot.statuses, now_ts)
         statuses = [
             self._overlay_background_tasks(status, now_ts)
             for status in snapshot.statuses
@@ -463,6 +469,90 @@ class LiveActivityDaemon:
             ):
                 self._push_end(content_state, now)
 
+    def _bg_count(self, session_id: str, now: float) -> int:
+        cached = self._bg_task_cache.get(session_id)
+        if cached is None or now - cached[0] > BACKGROUND_TASK_CACHE_SECONDS:
+            count = self._bg_task_counter(session_id)
+            self._bg_task_cache[session_id] = (now, count)
+            return count
+        return cached[1]
+
+    def _sync_background_tasks(self, statuses, now: float) -> None:
+        """Reflect running background tasks into the shared event streams.
+
+        Appends synthetic hook events to the claude log (which the local
+        collector AND every `remote-agent stream` consumer read) and flips
+        the Moonside session marker, so a session whose turn ended but whose
+        run_in_background tasks are still working shows as busy everywhere,
+        and finishes everywhere at once when they close.
+        """
+        for status in statuses:
+            if status.provider != "claude" or not status.session_id:
+                continue
+            session_id = status.session_id
+            synthetic = (
+                status.event_name == "PreToolUse"
+                and status.tool_name == SYNTHETIC_TOOL_NAME
+            )
+            if session_id in self._bg_injected:
+                if not synthetic and status.mode.value not in TERMINAL_MODES:
+                    # Real activity resumed; hand control back to the hooks.
+                    self._bg_injected.pop(session_id, None)
+                    continue
+                if self._bg_count(session_id, now) > 0:
+                    if now - self._bg_injected[session_id] > BACKGROUND_TASK_REEMIT_SECONDS:
+                        self._append_claude_event(status, "PreToolUse", SYNTHETIC_TOOL_NAME)
+                        self._bg_injected[session_id] = now
+                else:
+                    self._append_claude_event(status, "Stop", None)
+                    self._moonside_marker(session_id, "idle", expect=("working", "Stop"))
+                    self._bg_injected.pop(session_id, None)
+            elif status.mode.value in TERMINAL_MODES and self._bg_count(session_id, now) > 0:
+                self._append_claude_event(status, "PreToolUse", SYNTHETIC_TOOL_NAME)
+                self._moonside_marker(session_id, "working", expect=("idle", None))
+                self._bg_injected[session_id] = now
+                print(f"live-activity: {session_id[:8]} has background tasks; holding busy")
+
+    def _append_claude_event(self, status: AgentStatus, event: str, tool_name: str | None) -> None:
+        line: dict[str, Any] = {
+            "session_id": status.session_id,
+            "hook_event_name": event,
+            "logged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        if status.cwd:
+            line["cwd"] = status.cwd
+        if tool_name:
+            line["tool_name"] = tool_name
+        try:
+            path = default_state_dir() / "claude.jsonl"
+            with path.open("a") as handle:
+                handle.write(json.dumps(line, separators=(",", ":")) + "\n")
+        except OSError as exc:
+            print(f"live-activity: failed to append synthetic event: {exc}")
+
+    def _moonside_marker(
+        self, session_id: str, state: str, expect: tuple[str, str | None]
+    ) -> None:
+        """Flip line 1 of the Moonside session marker, only when it still
+        looks the way we left it (or the way Stop left it)."""
+        runtime_dir = Path(os.environ.get("MOONSIDE_RUNTIME_DIR", "/tmp"))
+        marker = runtime_dir / "moonside_sessions" / session_id
+        try:
+            lines = marker.read_text().splitlines()
+        except OSError:
+            return
+        if not lines or lines[0] != expect[0]:
+            return
+        if expect[1] is not None and (len(lines) < 2 or lines[1] != expect[1]):
+            return
+        lines[0] = state
+        tmp = marker.with_name(f".{marker.name}.la")
+        try:
+            tmp.write_text("\n".join(lines) + "\n")
+            tmp.replace(marker)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+
     def _overlay_background_tasks(self, status: AgentStatus, now: float) -> AgentStatus:
         """A completed Claude session with running background tasks is not
         done: show it as a long task so it stays visible and holds back the
@@ -477,12 +567,7 @@ class LiveActivityDaemon:
             or status.mode.value not in TERMINAL_MODES
         ):
             return status
-        cached = self._bg_task_cache.get(status.session_id)
-        if cached is None or now - cached[0] > BACKGROUND_TASK_CACHE_SECONDS:
-            count = self._bg_task_counter(status.session_id)
-            self._bg_task_cache[status.session_id] = (now, count)
-        else:
-            count = cached[1]
+        count = self._bg_count(status.session_id, now)
         if count <= 0:
             return status
         return dataclass_replace(

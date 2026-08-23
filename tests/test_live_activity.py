@@ -205,3 +205,46 @@ def test_background_tasks_keep_session_visible(tmp_path):
 
     quiet = make_status("claude:session:s2", AgentMode.COMPLETED, name="Idle", session_id="s2")
     assert daemon._overlay_background_tasks(quiet, now=100.0).mode == AgentMode.COMPLETED
+
+
+def test_sync_background_tasks_emits_and_restores(tmp_path, monkeypatch):
+    import json as _json
+
+    from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
+
+    # Redirect the claude log and the moonside runtime into the sandbox.
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: state_dir)
+    monkeypatch.setenv("MOONSIDE_RUNTIME_DIR", str(tmp_path))
+    sessions = tmp_path / "moonside_sessions"
+    sessions.mkdir()
+    (sessions / "s1").write_text("idle\nStop\nturn\n/tmp/t.jsonl\n")
+
+    config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
+    daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "tok.json"))
+    counts = {"s1": 1}
+    daemon._bg_task_counter = lambda sid: counts.get(sid, 0)
+
+    done = make_status("claude:session:s1", AgentMode.COMPLETED, name="T", session_id="s1")
+    daemon._sync_background_tasks([done], now=100.0)
+
+    log = (state_dir / "claude.jsonl").read_text().splitlines()
+    assert _json.loads(log[-1])["hook_event_name"] == "PreToolUse"
+    assert _json.loads(log[-1])["tool_name"] == "BackgroundTask"
+    assert (sessions / "s1").read_text().splitlines()[0] == "working"
+
+    # Tasks finish: synthetic Stop + marker restored.
+    counts["s1"] = 0
+    daemon._bg_task_cache.clear()
+    synthetic = make_status(
+        "claude:session:s1", AgentMode.TOOL_RUNNING, name="T",
+        session_id="s1", tool="BackgroundTask",
+    )
+    synthetic = type(synthetic)(**{**synthetic.__dict__, "event_name": "PreToolUse"})
+    daemon._sync_background_tasks([synthetic], now=200.0)
+
+    log = (state_dir / "claude.jsonl").read_text().splitlines()
+    assert _json.loads(log[-1])["hook_event_name"] == "Stop"
+    assert (sessions / "s1").read_text().splitlines()[0] == "idle"
+    assert "s1" not in daemon._bg_injected
