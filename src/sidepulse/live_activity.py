@@ -16,9 +16,13 @@ extra); the HTTP server and SSE stream are stdlib-only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import queue
+import shutil
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -63,6 +67,8 @@ class LiveActivityConfig:
     port: int = 8787
     poll_seconds: float = 2.0
     idle_end_minutes: float = 10.0
+    summaries_enabled: bool = True
+    summary_model: str = "claude-haiku-4-5-20251001"
 
     @property
     def apns_host(self) -> str:
@@ -337,6 +343,88 @@ class APNsLiveActivityClient:
             return 0, str(exc)
 
 
+SUMMARY_MAX_CHARS = 60
+
+
+class SessionSummarizer:
+    """Turns a session's last assistant message into a tiny outcome line
+    ("TestFlight build deployed") via `claude -p` on a fast model.
+
+    Runs the CLI with an isolated cwd whose path contains an ignored
+    directory name and a private MOONSIDE_RUNTIME_DIR, so the summary
+    sessions never appear in any monitor or on the lamp.
+    """
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        self.claude = shutil.which("claude") or "/opt/homebrew/bin/claude"
+        self._results: dict[str, tuple[str, str]] = {}  # session -> (source_hash, summary)
+        self._pending: set[str] = set()
+        self._lock = threading.Lock()
+        self._queue: "queue.Queue[tuple[str, str, str]]" = queue.Queue()
+        base = default_state_dir() / "summarizer"
+        # "memories" is on the ignored-directory list, hiding these runs
+        # from every sidepulse consumer.
+        self.workdir = base / "memories"
+        self.moonside_dir = base / "moonside"
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.moonside_dir.mkdir(parents=True, exist_ok=True)
+        worker = threading.Thread(target=self._worker, daemon=True)
+        worker.start()
+
+    def summary_for(self, session_id: str, message: str | None) -> str | None:
+        if not message:
+            with self._lock:
+                cached = self._results.get(session_id)
+            return cached[1] if cached else None
+        source_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
+        with self._lock:
+            cached = self._results.get(session_id)
+            if cached and cached[0] == source_hash:
+                return cached[1]
+            if session_id not in self._pending:
+                self._pending.add(session_id)
+                self._queue.put((session_id, source_hash, message))
+            return cached[1] if cached else None
+
+    def _worker(self) -> None:
+        while True:
+            session_id, source_hash, message = self._queue.get()
+            summary = self._generate(message)
+            with self._lock:
+                self._pending.discard(session_id)
+                if summary:
+                    self._results[session_id] = (source_hash, summary)
+
+    def _generate(self, message: str) -> str | None:
+        prompt = (
+            "Summarize the state or outcome this AI coding assistant message "
+            "describes, in at most six words, like 'TestFlight build deployed' "
+            "or 'waiting for API key decision'. Respond with only that phrase.\n\n"
+            f"Message:\n{message[:3000]}"
+        )
+        env = dict(os.environ)
+        env["MOONSIDE_RUNTIME_DIR"] = str(self.moonside_dir)
+        try:
+            result = subprocess.run(
+                [self.claude, "-p", prompt, "--model", self.model],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=self.workdir,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"live-activity: summary generation failed: {exc}")
+            return None
+        if result.returncode != 0:
+            print(f"live-activity: claude -p exited {result.returncode}: {result.stderr[:120]}")
+            return None
+        line = result.stdout.strip().splitlines()
+        text = line[0].strip().strip("\"'") if line else ""
+        return _truncate(text, SUMMARY_MAX_CHARS) if text else None
+
+
 class LiveActivityDaemon:
     def __init__(self, config: LiveActivityConfig, token_store: TokenStore | None = None) -> None:
         self.config = config
@@ -356,6 +444,9 @@ class LiveActivityDaemon:
         self._last_rows: dict[str, dict[str, Any]] = {}
         self._recent_finished: dict[str, dict[str, Any]] = {}
         self._bg_holding: set[str] = set()
+        self.summarizer = (
+            SessionSummarizer(config.summary_model) if config.summaries_enabled else None
+        )
 
     # -- snapshot loop -------------------------------------------------
 
@@ -389,6 +480,8 @@ class LiveActivityDaemon:
         now_ts = time.time()
         statuses = list(snapshot.statuses)
         self._sync_background_tasks(statuses, now_ts)
+        if self.summarizer is not None:
+            statuses = [self._apply_summary(status) for status in statuses]
         self._remember_finished(statuses, now_ts)
         content_state = build_content_state(
             statuses,
@@ -479,6 +572,27 @@ class LiveActivityDaemon:
             tmp.replace(marker)
         except OSError:
             tmp.unlink(missing_ok=True)
+
+    def _apply_summary(self, status: AgentStatus) -> AgentStatus:
+        """Once a turn has ended, the display name's prompt text is stale;
+        show what actually happened instead."""
+        from dataclasses import replace as dataclass_replace
+
+        if status.provider != "claude" or not status.session_id:
+            return status
+        settled = status.event_name in {"Stop", "SubagentStop"} and status.mode.value in {
+            "completed",
+            "waiting_for_input",
+            "long_task_progress",
+        }
+        if not settled:
+            return status
+        summary = self.summarizer.summary_for(status.session_id, status.message)
+        if not summary:
+            return status
+        prefix = Path(status.cwd).name if status.cwd else None
+        display = f"{prefix}: {summary}" if prefix else summary
+        return dataclass_replace(status, display_name=display)
 
     def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
         current = {status.agent_id: status for status in statuses}

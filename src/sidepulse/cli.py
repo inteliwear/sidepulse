@@ -177,6 +177,16 @@ def add_live_activity_parser(subparsers: argparse._SubParsersAction) -> None:
         target.add_argument("--port", type=int, default=8787, help="HTTP port (default 8787).")
         target.add_argument("--poll-seconds", type=float, default=2.0)
         target.add_argument("--idle-end-minutes", type=float, default=10.0)
+        target.add_argument(
+            "--summary-model",
+            default="claude-haiku-4-5-20251001",
+            help="Model for `claude -p` session-state summaries.",
+        )
+        target.add_argument(
+            "--no-summaries",
+            action="store_true",
+            help="Disable AI session-state summaries.",
+        )
 
     serve = commands.add_parser("serve", help="Run the live-activity daemon in the foreground.")
     add_config_arguments(serve)
@@ -206,6 +216,8 @@ def _live_activity_config_from_args(args: argparse.Namespace):
         "port": args.port,
         "poll_seconds": args.poll_seconds,
         "idle_end_minutes": args.idle_end_minutes,
+        "summary_model": args.summary_model,
+        "summaries_enabled": not args.no_summaries,
     }
     if args.host_label:
         kwargs["host_label"] = args.host_label
@@ -260,7 +272,8 @@ def cmd_live_activity_start(args: argparse.Namespace) -> int:
         "--port", str(config.port),
         "--poll-seconds", str(config.poll_seconds),
         "--idle-end-minutes", str(config.idle_end_minutes),
-    ]
+        "--summary-model", config.summary_model,
+    ] + ([] if config.summaries_enabled else ["--no-summaries"])
     state_dir = default_state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     plist = {

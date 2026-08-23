@@ -237,3 +237,35 @@ def test_stop_with_running_background_tasks_is_long_task():
     assert mode_for_event(stop(running)) == AgentMode.LONG_TASK_PROGRESS
     assert mode_for_event(stop([])) == AgentMode.COMPLETED
     assert mode_for_event(stop([{"id": "b1", "status": "completed"}])) == AgentMode.COMPLETED
+
+
+def test_summarizer_replaces_display_name(tmp_path, monkeypatch):
+    import time as _time
+
+    from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
+
+    monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: tmp_path)
+    fake = tmp_path / "claude"
+    fake.write_text("#!/bin/sh\necho 'TestFlight build deployed'\n")
+    fake.chmod(0o755)
+
+    config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
+    daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "tok.json"))
+    daemon.summarizer.claude = str(fake)
+
+    done = make_status("claude:session:s1", AgentMode.COMPLETED, name="old prompt", session_id="s1")
+    done = type(done)(**{**done.__dict__, "event_name": "Stop",
+                         "message": "The build is on TestFlight.", "cwd": "/Users/x/Git/sidepulse"})
+
+    # First pass queues generation; poll until the worker finishes.
+    daemon._apply_summary(done)
+    for _ in range(50):
+        result = daemon._apply_summary(done)
+        if result.display_name != "old prompt":
+            break
+        _time.sleep(0.1)
+    assert result.display_name == "sidepulse: TestFlight build deployed"
+
+    # Working sessions keep their prompt-based name.
+    busy = make_status("claude:session:s2", AgentMode.WORKING, name="prompt", session_id="s2")
+    assert daemon._apply_summary(busy).display_name == "prompt"
