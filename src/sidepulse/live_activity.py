@@ -370,7 +370,7 @@ class PromptTracker:
                 size = path.stat().st_size
             except OSError:
                 continue
-            offset = self._offsets.get(name, max(0, size - 262144))
+            offset = self._offsets.get(name, max(0, size - 8_388_608))
             if size < offset:
                 offset = 0  # rotated/truncated
             if size == offset:
@@ -695,13 +695,16 @@ class LiveActivityDaemon:
 
         if status.provider not in {"claude", "codex"} or not status.session_id:
             return status
-        context = f"working directory: {status.cwd or 'unknown'}; session title: {status.display_name}"
         settled = status.event_name in {"Stop", "SubagentStop", "SessionEnd"} and status.mode.value in {
             "completed",
             "waiting_for_input",
             "long_task_progress",
         }
         if settled:
+            context = (
+                f"working directory: {status.cwd or 'unknown'}; "
+                f"session title: {status.display_name}"
+            )
             summary = self.summarizer.summary_for(status.session_id, status.message, context)
         elif status.mode.value in {"working", "tool_running", "long_task_progress"}:
             # While working, summarize the CURRENT prompt (tracked from the
@@ -711,7 +714,10 @@ class LiveActivityDaemon:
             prompt = self._prompt_tracker.prompt_for(status.session_id)
             if prompt:
                 summary = self.summarizer.summary_for(
-                    status.session_id, prompt, context, style="task"
+                    status.session_id,
+                    prompt,
+                    f"working directory: {status.cwd or 'unknown'}",
+                    style="task",
                 )
             else:
                 summary = self.summarizer.summary_for(status.session_id, None, style="outcome")
