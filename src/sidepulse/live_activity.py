@@ -737,8 +737,10 @@ class LiveActivityDaemon:
                 self._idle_since = now
             elif (
                 self._activity_live
+                and not self._recent_finished
                 and now - self._idle_since >= self.config.idle_end_minutes * 60
             ):
+                # Nothing active and nothing recently finished — safe to end.
                 self._push_end(content_state, now)
 
     def _sync_background_tasks(self, statuses, now: float) -> None:
@@ -875,7 +877,19 @@ class LiveActivityDaemon:
                 # Reactivated: it is no longer "recently finished".
                 self._recent_finished.pop(status.agent_id, None)
 
+        # Always retain the newest MAX_FINISHED_ROWS finished sessions so the
+        # list still shows "the last 3 are done" after everything wraps up
+        # (e.g. overnight); expire only older ones past the window.
+        keep = {
+            agent_id
+            for agent_id, _ in sorted(
+                self._recent_finished.items(),
+                key=lambda kv: -kv[1].get("finishedAt", 0.0),
+            )[:MAX_FINISHED_ROWS]
+        }
         for agent_id in list(self._recent_finished):
+            if agent_id in keep:
+                continue
             if now - self._recent_finished[agent_id].get("finishedAt", 0.0) > RECENT_FINISHED_SECONDS:
                 del self._recent_finished[agent_id]
 
@@ -983,8 +997,12 @@ class LiveActivityDaemon:
             # Now Playing) is active, iOS gives SidePulse the attached,
             # left-of-camera minimal slot rather than the detached circle.
             "relevance-score": 100,
-            # Go stale (dimmed) if the daemon stops refreshing.
-            "stale-date": int(now + STALE_AFTER_SECONDS),
+            # While work is live, dim quickly if the daemon stops pushing;
+            # once everything's settled the last state should stay crisp
+            # (e.g. the overnight "all done" view), so widen the window.
+            "stale-date": int(
+                now + (STALE_AFTER_SECONDS if content_state.get("activeCount", 0) else 8 * 3600)
+            ),
         }
         # Apple: priority 10 for updates people would notice (state changes,
         # alerts); 5 only for the silent heartbeat.

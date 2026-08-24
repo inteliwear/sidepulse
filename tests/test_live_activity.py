@@ -279,3 +279,28 @@ def test_summarizer_replaces_display_name(tmp_path, monkeypatch):
     # Working sessions keep their prompt-based name.
     busy = make_status("claude:session:s2", AgentMode.WORKING, name="prompt", session_id="s2")
     assert daemon._apply_summary(busy).display_name == "prompt"
+
+
+def test_recent_finished_keeps_newest_three_beyond_window(tmp_path):
+    from sidepulse.live_activity import (
+        LiveActivityConfig,
+        LiveActivityDaemon,
+        RECENT_FINISHED_SECONDS,
+        TokenStore,
+    )
+
+    config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
+    daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "t.json"))
+
+    now = 100000.0
+    # Five finished sessions, all older than the expiry window.
+    for i in range(5):
+        daemon._recent_finished[f"s{i}"] = {
+            "id": f"s{i}", "name": f"S{i}", "mode": "completed",
+            "finishedAt": now - RECENT_FINISHED_SECONDS - 1000 + i,
+        }
+    daemon._remember_finished([], now)
+
+    # The three newest survive despite being past the window; older ones drop.
+    survivors = set(daemon._recent_finished)
+    assert survivors == {"s2", "s3", "s4"}
