@@ -201,6 +201,7 @@ def test_ignored_display_name_prefix():
 def test_moonside_marker_follows_background_tasks(tmp_path, monkeypatch):
     from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
 
+    monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: tmp_path)
     monkeypatch.setenv("MOONSIDE_RUNTIME_DIR", str(tmp_path))
     sessions = tmp_path / "moonside_sessions"
     sessions.mkdir()
@@ -281,7 +282,7 @@ def test_summarizer_replaces_display_name(tmp_path, monkeypatch):
     assert daemon._apply_summary(busy).display_name == "prompt"
 
 
-def test_recent_finished_keeps_newest_three_beyond_window(tmp_path):
+def test_recent_finished_keeps_newest_three_beyond_window(tmp_path, monkeypatch):
     from sidepulse.live_activity import (
         LiveActivityConfig,
         LiveActivityDaemon,
@@ -289,6 +290,7 @@ def test_recent_finished_keeps_newest_three_beyond_window(tmp_path):
         TokenStore,
     )
 
+    monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: tmp_path)
     config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
     daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "t.json"))
 
