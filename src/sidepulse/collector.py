@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -20,7 +20,7 @@ from .models import (
     provider_label,
 )
 from .origin import origin_label_from_payload
-from .providers import detect_log_path, parse_log_line
+from .providers import detect_log_path, parse_log_line, SUMMARY_EVENT_NAME
 from .settings import AgentMonitorSettings, load_settings
 
 
@@ -49,6 +49,7 @@ class StatusMetadata:
     cwd: str | None = None
     title: str | None = None
     origin: str | None = None
+    summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ class AgentMonitor:
                 metadata_by_session,
                 metadata_by_status,
             )
+            apply_summary_record(record, statuses_by_key)
             status = status_from_event(record, metadata)
             if status is not None:
                 track_pending_permissions(record, pending_permissions_by_key)
@@ -416,6 +418,8 @@ class LiveAgentMonitor:
                 self.metadata_by_session,
                 self.metadata_by_status,
             )
+            if apply_summary_record(record, self.statuses_by_key):
+                self.write_latest_state()
             status = status_from_event(record, metadata)
             if status is None:
                 return
@@ -984,6 +988,7 @@ def metadata_for_record(
         cwd=status_metadata.cwd or session_metadata.cwd,
         title=status_metadata.title or session_metadata.title,
         origin=status_metadata.origin or session_metadata.origin,
+        summary=status_metadata.summary or session_metadata.summary,
     )
 
 
@@ -994,6 +999,11 @@ def update_metadata(metadata: StatusMetadata, record: HookEvent) -> None:
     title = title_from_event(record)
     if title and (metadata.title is None or is_provider_session_title(record, title)):
         metadata.title = title
+
+    if record.event_name == SUMMARY_EVENT_NAME:
+        summary = _string_or_none(record.raw.get("summary"))
+        if summary:
+            metadata.summary = summary
 
     origin = record.origin or origin_label_from_payload(record.provider, record.raw)
     if origin:
@@ -1367,6 +1377,33 @@ def status_counts_active(status: AgentStatus) -> bool:
     return status.mode not in {AgentMode.COMPLETED, AgentMode.IDLE_READY}
 
 
+def apply_summary_record(
+    record: HookEvent,
+    statuses_by_key: dict[str, AgentStatus],
+) -> bool:
+    """Retitle an existing session row with the daemon's summary.
+
+    Summary records never create statuses; they only rename the session's
+    current row, leaving its mode and freshness untouched.
+    """
+    if record.event_name != SUMMARY_EVENT_NAME or not record.session_id:
+        return False
+    summary = _string_or_none(record.raw.get("summary"))
+    if not summary:
+        return False
+    key = f"{record.provider}:session:{record.session_id}"
+    existing = statuses_by_key.get(key)
+    if existing is None:
+        return False
+    display_name = display_name_from_parts(
+        None, summary, record.session_id[:8], existing.display_name
+    )
+    if display_name == existing.display_name:
+        return False
+    statuses_by_key[key] = replace(existing, display_name=display_name)
+    return True
+
+
 def complete_subagents_for_ended_session(
     record: HookEvent,
     statuses_by_key: dict[str, AgentStatus],
@@ -1663,6 +1700,11 @@ def display_name_for_record(
     short_id: str,
     fallback: str,
 ) -> str:
+    # The daemon's AI summary already weaves the project name in, so it
+    # replaces both the project prefix and the prompt-derived title.
+    if metadata.summary:
+        return display_name_from_parts(None, metadata.summary, short_id, fallback)
+
     project = project_name(metadata.cwd or record.cwd)
     title = metadata.title
 

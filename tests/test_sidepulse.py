@@ -174,6 +174,71 @@ class FakeProcess:
 
 
 class AgentMonitorTests(unittest.TestCase):
+    def test_summary_record_titles_the_session(self) -> None:
+        # The live-activity daemon appends SidepulseSummary records to the
+        # hook log; they retitle the session row (also retroactively) without
+        # touching its mode or freshness, and persist across later events.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            claude = base / "claude.jsonl"
+            events = [
+                {
+                    "logged_at": "2026-06-20T06:00:00Z",
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "claude-session",
+                    "cwd": "/tmp/proj",
+                    "prompt": "Fix the parser",
+                },
+                {
+                    "logged_at": "2026-06-20T06:05:00Z",
+                    "hook_event_name": "Stop",
+                    "session_id": "claude-session",
+                },
+                {
+                    "logged_at": "2026-06-20T06:05:30Z",
+                    "hook_event_name": "SidepulseSummary",
+                    "session_id": "claude-session",
+                    "summary": "proj: parser fixed",
+                },
+            ]
+            claude.write_text("".join(json.dumps(event) + "\n" for event in events))
+
+            monitor = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=-1,
+            )
+            snapshot = monitor.snapshot()
+            self.assertEqual(len(snapshot.statuses), 1)
+            status = snapshot.statuses[0]
+            self.assertEqual(status.mode, AgentMode.COMPLETED)
+            self.assertTrue(
+                status.display_name.startswith("proj: parser fixed"),
+                status.display_name,
+            )
+
+            # A later real event keeps the summary title via metadata.
+            events.append(
+                {
+                    "logged_at": "2026-06-20T06:06:00Z",
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "claude-session",
+                    "tool_name": "Bash",
+                }
+            )
+            claude.write_text("".join(json.dumps(event) + "\n" for event in events))
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=-1,
+            ).snapshot()
+            self.assertTrue(
+                snapshot.statuses[0].display_name.startswith("proj: parser fixed"),
+                snapshot.statuses[0].display_name,
+            )
+
     def test_orphaned_subagent_does_not_keep_aggregate_working(self) -> None:
         # A subagent whose Stop event was lost stays active forever; it must
         # not drive the aggregate. While the parent's COMPLETED row is visible

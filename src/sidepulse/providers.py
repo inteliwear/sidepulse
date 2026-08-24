@@ -62,7 +62,13 @@ GROK_EVENTS = (
 )
 
 HOOK_PROVIDERS = ("codex", "claude", "grok")
-KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
+# Synthetic record written by the live-activity daemon: carries the AI
+# summary of a session so every consumer can title the session with it.
+SUMMARY_EVENT_NAME = "SidepulseSummary"
+
+KNOWN_EVENTS = tuple(
+    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + (SUMMARY_EVENT_NAME,))
+)
 
 
 @dataclass(frozen=True)

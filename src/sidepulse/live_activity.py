@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from .collector import AgentMonitor
+from .hook import write_hook_line
+from .providers import SUMMARY_EVENT_NAME
 from .models import MODE_PRIORITY, AgentStatus
 from .providers import default_state_dir
 
@@ -659,6 +661,7 @@ class LiveActivityDaemon:
         _DEEP_LINKS = DeepLinkResolver()
         self._deferred_alerts: list[dict[str, Any]] = []
         self._task_sources: dict[str, tuple[str, float]] = {}
+        self._published_summaries: dict[str, str] = {}
 
     # -- snapshot loop -------------------------------------------------
 
@@ -847,7 +850,38 @@ class LiveActivityDaemon:
             return status
         if not summary:
             return status
+        self._publish_summary(status, summary)
         return dataclass_replace(status, display_name=summary)
+
+    def _publish_summary(self, status: AgentStatus, summary: str) -> None:
+        """Write the summary into the provider's hook log so every consumer
+        — the local status bar and remote clients via the stream — titles
+        the session with it."""
+        if self._published_summaries.get(status.session_id) == summary:
+            return
+        path = next(
+            (s.path for s in self.monitor.sources if s.provider == status.provider),
+            None,
+        )
+        if path is None:
+            return
+        payload: dict[str, Any] = {
+            "hook_event_name": SUMMARY_EVENT_NAME,
+            "session_id": status.session_id,
+            "summary": summary,
+        }
+        if status.cwd:
+            payload["cwd"] = status.cwd
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if status.provider == "codex":
+            line: dict[str, Any] = {"logged_at": timestamp, "event": payload}
+        else:
+            line = {"logged_at": timestamp, **payload}
+        try:
+            write_hook_line(path, line)
+        except OSError:
+            return
+        self._published_summaries[status.session_id] = summary
 
     def _remember_finished(self, statuses: list[AgentStatus], now: float) -> None:
         current = {status.agent_id: status for status in statuses}

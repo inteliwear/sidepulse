@@ -198,6 +198,47 @@ def test_ignored_display_name_prefix():
     assert not is_ignored_display_name("sidepulse: Merge main")
 
 
+def test_publish_summary_writes_hook_records(tmp_path, monkeypatch):
+    from sidepulse.collector import SourceSpec
+    from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
+    from sidepulse.providers import parse_log_line
+
+    monkeypatch.setattr("sidepulse.live_activity.default_state_dir", lambda: tmp_path)
+    config = LiveActivityConfig(apns_key_path=tmp_path / "k.p8", apns_key_id="X", apns_team_id="Y")
+    daemon = LiveActivityDaemon(config, token_store=TokenStore(tmp_path / "tok.json"))
+    claude_log = tmp_path / "claude.jsonl"
+    codex_log = tmp_path / "codex.jsonl"
+    daemon.monitor.sources = (
+        SourceSpec("claude", claude_log),
+        SourceSpec("codex", codex_log),
+    )
+
+    status = make_status("claude:session:s1", AgentMode.COMPLETED, session_id="s1")
+    daemon._publish_summary(status, "proj: parser fixed")
+    daemon._publish_summary(status, "proj: parser fixed")  # dedup: no second line
+
+    lines = claude_log.read_text().splitlines()
+    assert len(lines) == 1
+    record = parse_log_line("claude", lines[0])
+    assert record is not None
+    assert record.event_name == "SidepulseSummary"
+    assert record.session_id == "s1"
+    assert record.raw.get("summary") == "proj: parser fixed"
+
+    # A changed summary publishes again.
+    daemon._publish_summary(status, "proj: tests added")
+    assert len(claude_log.read_text().splitlines()) == 2
+
+    # Codex records use the enveloped log format.
+    codex_status = type(status)(**{**status.__dict__, "provider": "codex", "session_id": "c1"})
+    daemon._publish_summary(codex_status, "kleido: import flow reworked")
+    codex_record = parse_log_line("codex", codex_log.read_text().splitlines()[0])
+    assert codex_record is not None
+    assert codex_record.event_name == "SidepulseSummary"
+    assert codex_record.session_id == "c1"
+    assert codex_record.raw.get("summary") == "kleido: import flow reworked"
+
+
 def test_moonside_marker_follows_background_tasks(tmp_path, monkeypatch):
     from sidepulse.live_activity import LiveActivityConfig, LiveActivityDaemon, TokenStore
 
