@@ -22,6 +22,12 @@ def session_deep_link(status: AgentStatus) -> str | None:
     if provider == "codex" and session_id:
         return f"codex://threads/{quote(session_id, safe='')}"
     if provider == "claude":
+        # A remote session's transcript lives on the host, so claude://resume
+        # fails on the client with "transcript may have been removed"; just
+        # open the desktop app (the user navigates via Remote Control there).
+        # Local sessions resume directly.
+        if remote_session_parts(status.session_id):
+            return "claude://"
         if session_id:
             params = {"session": session_id}
             if status.cwd:

@@ -6803,10 +6803,9 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
             origin="Claude on macmini",
         )
-        self.assertEqual(
-            session_deep_link(remote_status),
-            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
-        )
+        # Remote sessions open the desktop app (the transcript is on the
+        # host, so a resume deep link would fail); local sessions resume.
+        self.assertEqual(session_deep_link(remote_status), "claude://")
         self.assertEqual(
             session_vscode_link(remote_status),
             "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
