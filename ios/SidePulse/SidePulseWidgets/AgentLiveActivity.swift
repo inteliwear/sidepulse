@@ -178,13 +178,13 @@ private struct WatchAgentRowView: View {
                 .frame(width: 6, height: 6)
             Text(agent.name)
                 .font(.system(size: 11))
-                .foregroundStyle(agent.mode == "completed" ? .secondary : .primary)
+                .foregroundStyle(agent.mode == "completed" ? Color.white.opacity(0.7) : .white)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.white.opacity(0.5))
                 } else {
                     Text(agent.detail ?? AgentModeStyle.label(agent.mode))
                         .fontWeight(.medium)
@@ -213,14 +213,14 @@ private struct AgentRowView: View {
                 Text(provider.capitalized)
                     .font(.system(size: 9, weight: .semibold))
                     .lineLimit(1)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.75))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .background(.white.opacity(0.12), in: Capsule())
             }
             Text(agent.name)
                 .font(.caption)
-                .foregroundStyle(isDone ? .secondary : .primary)
+                .foregroundStyle(isDone ? Color.white.opacity(0.7) : .white)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             // layoutPriority (not fixedSize) gives the trailing text its
@@ -228,7 +228,7 @@ private struct AgentRowView: View {
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.white.opacity(0.5))
                 } else {
                     Text(agent.detail ?? AgentModeStyle.label(agent.mode))
                         .fontWeight(.medium)
