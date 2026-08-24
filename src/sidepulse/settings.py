@@ -148,6 +148,7 @@ class AgentMonitorSettings:
     )
     battery_full_charge_watts: float | None = None
     battery_show_on_power_change: bool = True
+    kitt_mode_enabled: bool = False
     battery_power_change_preview_seconds: float = DEFAULT_POWER_CHANGE_PREVIEW_SECONDS
     session_open_preferences: dict[str, str] = field(default_factory=dict)
     grok_session_open_action: str = SESSION_OPEN_TERMINAL
@@ -424,6 +425,9 @@ class AgentMonitorSettings:
             return replace(self, lid_open_animation=animation)
         raise ValueError(f"Unknown lid animation: {kind}")
 
+    def with_kitt_mode(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, kitt_mode_enabled=bool(enabled))
+
     def with_setup_screen_completed(self, completed: bool = True) -> "AgentMonitorSettings":
         return replace(self, setup_screen_completed=bool(completed))
 
@@ -491,6 +495,7 @@ class AgentMonitorSettings:
             "history": {
                 "timeframe_seconds": self.history_timeframe_seconds,
             },
+            "kitt_mode_enabled": self.kitt_mode_enabled,
             "setup_screen_completed": self.setup_screen_completed,
         }
 
@@ -621,6 +626,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
                 data.get("history_timeframe_seconds", DEFAULT_HISTORY_TIMEFRAME_SECONDS),
             )
         ),
+        kitt_mode_enabled=_bool_setting(data.get("kitt_mode_enabled"), False),
         setup_screen_completed=_bool_setting(data.get("setup_screen_completed"), False),
     )
 

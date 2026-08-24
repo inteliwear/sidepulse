@@ -70,6 +70,7 @@ def program_for_display_state(
     *,
     led_count: int = 8,
     brightness: int | float = 255,
+    kitt_mode: bool = False,
 ) -> str:
     if state == LedDisplayState.IDLE:
         return "off"
@@ -87,7 +88,12 @@ def program_for_display_state(
     if state == LedDisplayState.DONE:
         return apply_brightness(DONE_GREEN, brightness)
     if state == LedDisplayState.WORKING:
-        return apply_brightness(rolling_program(WORKING_CYAN, led_count=led_count), brightness)
+        program = (
+            kitt_scanner_program(WORKING_CYAN, led_count=led_count)
+            if kitt_mode
+            else rolling_program(WORKING_CYAN, led_count=led_count)
+        )
+        return apply_brightness(program, brightness)
     raise ValueError(f"Unknown LED display state: {state}")
 
 
@@ -108,6 +114,28 @@ def rolling_program(color: str, *, led_count: int = 8) -> str:
     )
 
 
+def kitt_scanner_program(color: str, *, led_count: int = 8) -> str:
+    """Build a compact KITT-style pulse that scans out and back."""
+    count = max(2, min(8, int(led_count)))
+    delay_ms = 240 if count == 2 else 85
+    duration_ms = 320
+    directions = (range(count), range(count - 2, -1, -1))
+    scan_lines = [
+        "; ".join(
+            f"{index}:{color} {duration_ms}ms pulse {step * delay_ms}ms"
+            for step, index in enumerate(indexes)
+        )
+        for indexes in directions
+    ]
+    return "\n".join(
+        [
+            "off 80ms cosine",
+            *scan_lines,
+            "repeat",
+        ]
+    )
+
+
 def write_mode_to_leds(
     mode: AgentMode,
     *,
@@ -115,6 +143,7 @@ def write_mode_to_leds(
     file_name: str = DEFAULT_FILE_NAME,
     dry_run: bool = False,
     brightness: int | float = 255,
+    kitt_mode: bool = False,
 ) -> LedStatusWrite:
     target = resolve_target_path(device_path=device_path, file_name=file_name)
     state = display_state_for_mode(mode)
@@ -122,6 +151,7 @@ def write_mode_to_leds(
         state,
         led_count=led_count_for_target(target),
         brightness=brightness,
+        kitt_mode=kitt_mode,
     )
     written_target = write_led_program(
         program,
@@ -183,6 +213,7 @@ class AgentLedController:
         self.brightness = normalize_brightness(brightness)
         self.last_state: LedDisplayState | None = None
         self.last_brightness: int | None = None
+        self.last_kitt_mode: bool | None = None
         self.last_error: str | None = None
         self.last_target: Path | None = None
         self.last_attempt_monotonic = 0.0
@@ -190,15 +221,22 @@ class AgentLedController:
     def reset(self) -> None:
         self.last_state = None
         self.last_brightness = None
+        self.last_kitt_mode = None
         self.last_error = None
         self.last_target = None
         self.last_attempt_monotonic = 0.0
 
-    def sync_mode(self, mode: AgentMode) -> LedStatusWrite:
+    def sync_mode(self, mode: AgentMode, *, kitt_mode: bool = False) -> LedStatusWrite:
         state = display_state_for_mode(mode)
         brightness = normalize_brightness(self.brightness)
+        kitt_mode = bool(kitt_mode)
         now = time.monotonic()
-        if state == self.last_state and brightness == self.last_brightness and self.last_error is None:
+        if (
+            state == self.last_state
+            and brightness == self.last_brightness
+            and kitt_mode == self.last_kitt_mode
+            and self.last_error is None
+        ):
             return LedStatusWrite(
                 state=state,
                 target=self.last_target,
@@ -208,6 +246,7 @@ class AgentLedController:
         if (
             state == self.last_state
             and brightness == self.last_brightness
+            and kitt_mode == self.last_kitt_mode
             and self.last_error is not None
             and now - self.last_attempt_monotonic < self.error_retry_seconds
         ):
@@ -227,10 +266,12 @@ class AgentLedController:
                 file_name=self.file_name,
                 dry_run=self.dry_run,
                 brightness=brightness,
+                kitt_mode=kitt_mode,
             )
         except (DeviceWriteError, OSError) as exc:
             self.last_state = state
             self.last_brightness = brightness
+            self.last_kitt_mode = kitt_mode
             self.last_error = str(exc)
             return LedStatusWrite(
                 state=state,
@@ -242,6 +283,7 @@ class AgentLedController:
 
         self.last_state = state
         self.last_brightness = brightness
+        self.last_kitt_mode = kitt_mode
         self.last_error = None
         self.last_target = result.target
         return result

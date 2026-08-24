@@ -94,16 +94,25 @@ Agent status modes:
 | Mode | Meaning | LED pattern |
 | --- | --- | --- |
 | Idle / Ready | The agent is available and not currently running a task. | Off. |
-| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation. |
-| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation. |
+| Working | The agent is thinking, generating, or otherwise actively processing. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
+| Tool Running | A shell command, API call, or external tool is in progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
-| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation. |
+| Long Task Progress | A longer job has measurable progress. | Cyan rolling animation, or a bidirectional KITT scanner when enabled. |
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
 | Completed | The agent finished successfully. | Solid green. |
 
 When multiple states are active, SidePulse should show the most actionable
 mode first: Blocked / Error, Waiting for Input, Tool Running, Long Task
 Progress, Working, then Idle / Ready.
+
+### KITT scanner
+
+Enable **KITT scanner while working** from the menu-bar dropdown or from
+**Settings... → Devices & LEDs**. Working, Tool Running, and Long Task Progress
+then sweep back and forth like KITT while keeping the normal working-state color
+and each device's configured brightness. Ask, Done, Idle, battery, and custom
+displays are unchanged. The animation adapts to both the eight-LED SidePulse Pro
+and two-LED SidePulse Dot.
 
 For multiple agents, SidePulse aggregates their statuses into one global
 display state. Each agent reports its own mode, and SidePulse renders the
