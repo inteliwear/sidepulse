@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest import mock
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6764,14 +6763,7 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             remote_claude,
             session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
         )
-        # The remote transcript lives on the host, so resume runs over SSH
-        # there; the local claude:// app link cannot resolve it.
-        with mock.patch(
-            "sidepulse.session_actions._remote_ssh_target", return_value="mini"
-        ):
-            self.assertEqual(
-                default_session_open_action(remote_claude), SESSION_OPEN_TERMINAL
-            )
+        self.assertEqual(default_session_open_action(remote_claude), SESSION_OPEN_APP)
 
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
@@ -6811,18 +6803,10 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
             origin="Claude on macmini",
         )
-        # No local app link for a remote session (its transcript is on the
-        # host, so claude:// would fail with "transcript may have been removed").
-        self.assertIsNone(session_deep_link(remote_status))
-        with mock.patch(
-            "sidepulse.session_actions._remote_ssh_target", return_value="mini"
-        ):
-            self.assertEqual(
-                session_resume_command(remote_status),
-                "ssh -t mini "
-                "'cd /Users/pero/pgit/sdstatus_bitbang && "
-                "claude --resume 1ca4348e-2aec-4147-9e81-d7d56364d257'",
-            )
+        self.assertEqual(
+            session_deep_link(remote_status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
         self.assertEqual(
             session_vscode_link(remote_status),
             "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
