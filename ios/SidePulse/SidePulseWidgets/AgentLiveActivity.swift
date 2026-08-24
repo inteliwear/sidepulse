@@ -96,29 +96,27 @@ struct AgentLiveActivity: Widget {
                     .widgetURL(URL(string: "sidepulse://agents"))
                 }
             } compactLeading: {
-                let symbol = groups.symbol
-                HStack(spacing: 3) {
-                    Image(systemName: symbol.name)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(symbol.color)
-                    Text("\(context.state.activeCount)")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(symbol.color)
-                }
-                .widgetURL(URL(string: "sidepulse://agents"))
+                // Single-activity compact: state icon on the leading side.
+                Image(systemName: groups.symbol.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(groups.symbol.color)
+                    .widgetURL(URL(string: "sidepulse://agents"))
             } compactTrailing: {
                 Text("\(context.state.activeCount)")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(groups.symbol.color)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
-                let symbol = groups.symbol
+                // With a second Live Activity (e.g. Now Playing) present iOS
+                // renders every activity as `minimal`, so the count lives
+                // here — a colored number is more useful than an icon.
                 ZStack {
                     Circle()
-                        .fill(symbol.color.opacity(0.22))
-                    Image(systemName: symbol.name)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(symbol.color)
+                        .fill(groups.symbol.color.opacity(0.22))
+                    Text("\(context.state.activeCount)")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(groups.symbol.color)
+                        .minimumScaleFactor(0.6)
                 }
                 .widgetURL(URL(string: "sidepulse://agents"))
             }
