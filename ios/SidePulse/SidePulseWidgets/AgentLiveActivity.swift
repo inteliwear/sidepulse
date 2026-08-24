@@ -147,17 +147,24 @@ private struct CompactCounts: View {
     }
 }
 
-/// Colored count chips, only for the groups that are present.
+/// Colored count chips, only for the most urgent groups that are present.
 private struct StatusChips: View {
     let groups: ModeGroups
 
     var body: some View {
+        let parts: [(Int, Color)] = [
+            (groups.blocked, .statusBlocked),
+            (groups.waiting, .statusWaiting),
+            (groups.working, .statusWorking),
+            (groups.done, .statusDone),
+        ]
+
         HStack(spacing: 5) {
-            chip(groups.blocked, .statusBlocked)
-            chip(groups.waiting, .statusWaiting)
-            chip(groups.working, .statusWorking)
-            chip(groups.done, .statusDone)
+            ForEach(Array(parts.prefix(3).enumerated()), id: \.offset) { _, part in
+                chip(part.0, part.1)
+            }
         }
+        .frame(maxWidth: 140)
     }
 
     @ViewBuilder
@@ -191,8 +198,7 @@ private struct WatchAgentRowView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(agent.mode == "completed" ? .secondary : .primary)
                 .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
@@ -205,7 +211,9 @@ private struct WatchAgentRowView: View {
             }
             .font(.system(size: 9))
             .lineLimit(1)
-            .frame(maxWidth: 42, alignment: .trailing)
+            .minimumScaleFactor(0.7)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 44, alignment: .trailing)
         }
     }
 }
@@ -237,8 +245,8 @@ private struct AgentRowView: View {
                 .font(.caption)
                 .foregroundStyle(isDone ? .secondary : .primary)
                 .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // Reserved trailing column: the name never squeezes it.
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
@@ -251,8 +259,9 @@ private struct AgentRowView: View {
             }
             .font(.caption2)
             .lineLimit(1)
+            .minimumScaleFactor(0.7)
             .multilineTextAlignment(.trailing)
-            .frame(maxWidth: 64, alignment: .trailing)
+            .frame(width: 66, alignment: .trailing)
         }
     }
 }
