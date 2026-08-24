@@ -85,11 +85,11 @@ struct AgentLiveActivity: Widget {
                     // The expanded island has a limited height; three compact
                     // rows fit without clipping.
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(context.state.agents.prefix(3)) { agent in
+                        ForEach(context.state.agents.prefix(2)) { agent in
                             AgentRowView(agent: agent)
                         }
-                        if context.state.agents.count > 3 {
-                            Text("+\(context.state.agents.count - 3) more")
+                        if context.state.agents.count > 2 {
+                            Text("+\(context.state.agents.count - 2) more")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.5))
                         }
@@ -207,28 +207,36 @@ private struct AgentRowView: View {
     private var isDone: Bool { agent.mode == "completed" }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(alignment: .top, spacing: 8) {
             Image(systemName: AgentModeStyle.symbol(agent.mode))
-                .font(.system(size: 11))
+                .font(.system(size: 13))
                 .foregroundStyle(Color.forMode(agent.mode))
-                .frame(width: 14)
-            if let provider = agent.provider {
-                Text(provider.capitalized)
-                    .font(.system(size: 9, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(.white.opacity(0.12), in: Capsule())
+                .frame(width: 16)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.name)
+                    .font(.caption)
+                    .foregroundStyle(isDone ? Color.white.opacity(0.7) : .white)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    if let provider = agent.provider {
+                        Text(provider.capitalized)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(.white.opacity(0.12), in: Capsule())
+                    }
+                    if let cwd = agent.cwd {
+                        Text(cwd)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(1)
+                    }
+                }
             }
-            Text(agent.name)
-                .font(.caption)
-                .foregroundStyle(isDone ? Color.white.opacity(0.7) : .white)
-                .lineLimit(1)
-                .layoutPriority(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // layoutPriority (not fixedSize) gives the trailing text its
-            // natural width without the measurement that blanked the card.
+            .frame(maxWidth: .infinity, alignment: .leading)
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
@@ -242,6 +250,7 @@ private struct AgentRowView: View {
             .font(.caption2)
             .lineLimit(1)
             .frame(maxWidth: 82, alignment: .trailing)
+            .padding(.top, 1)
         }
     }
 }
@@ -304,11 +313,11 @@ private struct LockScreenView: View {
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 5) {
-                    ForEach(context.state.agents.prefix(5)) { agent in
+                    ForEach(context.state.agents.prefix(4)) { agent in
                         AgentRowView(agent: agent)
                     }
-                    if context.state.agents.count > 5 {
-                        Text("+\(context.state.agents.count - 5) more")
+                    if context.state.agents.count > 4 {
+                        Text("+\(context.state.agents.count - 4) more")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
