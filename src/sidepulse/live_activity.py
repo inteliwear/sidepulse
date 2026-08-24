@@ -168,35 +168,16 @@ class DeepLinkResolver:
     def __init__(self) -> None:
         self._cache: dict[str, str | None] = {}
         self._roots = [Path.home() / ".claude" / "projects"]
-        self._env_url = self._environment_url()
-
-    def _environment_url(self) -> str | None:
-        # Remote Control hosts all of this machine's sessions in one
-        # environment; its picker URL is the fallback when a session has no
-        # own cloud URL.
-        import glob as _glob
-
-        for pointer in _glob.glob(
-            str(Path.home() / ".claude" / "projects" / "**" / "bridge-pointer.json"),
-            recursive=True,
-        ):
-            try:
-                data = json.loads(Path(pointer).read_text())
-            except (OSError, ValueError):
-                continue
-            env = data.get("environmentId")
-            if isinstance(env, str) and env:
-                return f"https://claude.ai/code?environment={env}"
-        return None
 
     def link_for(self, provider: str, session_id: str | None) -> str | None:
         if provider != "claude" or not session_id:
             return None
         if session_id in self._cache:
             return self._cache[session_id]
-        # An exact per-session cloud URL wins; otherwise the environment
-        # picker lands on this machine's Remote Control session list.
-        url = self._scan(session_id) or self._env_url
+        # Only a session's own cloud URL is safe to deep-link; the
+        # environment URL spawns a NEW session when at capacity, so sessions
+        # without their own URL fall back to opening the app.
+        url = self._scan(session_id)
         self._cache[session_id] = url
         return url
 
