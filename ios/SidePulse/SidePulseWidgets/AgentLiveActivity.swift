@@ -102,8 +102,15 @@ struct AgentLiveActivity: Widget {
                     .foregroundStyle(symbol.color)
                     .widgetURL(URL(string: "sidepulse://agents"))
             } compactTrailing: {
-                CompactCounts(groups: groups)
-                    .widgetURL(URL(string: "sidepulse://agents"))
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(groups.symbol.color)
+                        .frame(width: 7, height: 7)
+                    Text("\(context.state.activeCount)")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(groups.symbol.color)
+                }
+                .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
                 let symbol = groups.symbol
                 ZStack {
@@ -125,28 +132,6 @@ struct AgentLiveActivity: Widget {
 /// Per-state counts as colored digits, most urgent first: a red digit
 /// appearing means blocked, orange waiting, cyan working, green finished —
 /// so transitions are visible right in the compact island.
-private struct CompactCounts: View {
-    let groups: ModeGroups
-
-    var body: some View {
-        let parts: [(Int, Color)] = [
-            (groups.blocked, .statusBlocked),
-            (groups.waiting, .statusWaiting),
-            (groups.working, .statusWorking),
-            (groups.done, .statusDone),
-        ].filter { $0.0 > 0 }
-
-        HStack(spacing: 3) {
-            ForEach(Array(parts.prefix(3).enumerated()), id: \.offset) { _, part in
-                Text("\(part.0)")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(part.1)
-                    .contentTransition(.numericText())
-            }
-        }
-    }
-}
-
 /// Colored count chips, only for the most urgent groups that are present.
 private struct StatusChips: View {
     let groups: ModeGroups
