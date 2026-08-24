@@ -207,37 +207,39 @@ private struct AgentRowView: View {
     private var isDone: Bool { agent.mode == "completed" }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: AgentModeStyle.symbol(agent.mode))
-                .font(.system(size: 13))
-                .foregroundStyle(Color.forMode(agent.mode))
-                .frame(width: 16)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
+            // Line 1: the name spans the whole width so long summaries fill
+            // the row instead of wrapping early against a reserved column.
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: AgentModeStyle.symbol(agent.mode))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.forMode(agent.mode))
+                    .frame(width: 16)
+                    .padding(.top, 1)
                 Text(agent.name)
                     .font(.caption)
                     .foregroundStyle(isDone ? Color.white.opacity(0.7) : .white)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 5) {
-                    if let provider = agent.provider {
-                        Text(provider.capitalized)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.white.opacity(0.12), in: Capsule())
-                    }
-                    if let cwd = agent.cwd {
-                        Text(cwd)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.5))
-                            .lineLimit(1)
-                    }
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Group {
+            // Line 2: provider + directory on the left, live status/time on
+            // the right — the status moved off line 1 so nothing narrows it.
+            HStack(spacing: 5) {
+                if let provider = agent.provider {
+                    Text(provider.capitalized)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.white.opacity(0.12), in: Capsule())
+                }
+                if let cwd = agent.cwd {
+                    Text(cwd)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
                         .foregroundStyle(.white.opacity(0.5))
@@ -249,8 +251,7 @@ private struct AgentRowView: View {
             }
             .font(.caption2)
             .lineLimit(1)
-            .frame(maxWidth: 82, alignment: .trailing)
-            .padding(.top, 1)
+            .padding(.leading, 24)
         }
     }
 }
