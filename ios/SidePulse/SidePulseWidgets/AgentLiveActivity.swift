@@ -97,20 +97,20 @@ struct AgentLiveActivity: Widget {
                 }
             } compactLeading: {
                 let symbol = groups.symbol
-                Image(systemName: symbol.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(symbol.color)
-                    .widgetURL(URL(string: "sidepulse://agents"))
-            } compactTrailing: {
                 HStack(spacing: 3) {
-                    Circle()
-                        .fill(groups.symbol.color)
-                        .frame(width: 7, height: 7)
+                    Image(systemName: symbol.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(symbol.color)
                     Text("\(context.state.activeCount)")
                         .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(groups.symbol.color)
+                        .foregroundStyle(symbol.color)
                 }
                 .widgetURL(URL(string: "sidepulse://agents"))
+            } compactTrailing: {
+                Text("\(context.state.activeCount)")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(groups.symbol.color)
+                    .widgetURL(URL(string: "sidepulse://agents"))
             } minimal: {
                 let symbol = groups.symbol
                 ZStack {
