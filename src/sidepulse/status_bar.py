@@ -436,6 +436,15 @@ class StatusBarController(NSObject):
         button.setToolTip_("SidePulse Agent Monitor: Idle")
         log_status_bar("status item created")
 
+        # One persistent menu whose contents are rebuilt on demand: AppKit
+        # calls menuNeedsUpdate_ right before the menu is drawn, so what the
+        # user sees is always built from a fresh snapshot rather than the
+        # last periodic tick (which could be up to STATUS_BAR_REFRESH_SECONDS
+        # stale, and which AppKit ignores entirely while the menu is open).
+        self.menu = NSMenu.alloc().init()
+        self.menu.setDelegate_(self)
+        self.status_item.setMenu_(self.menu)
+
         self.refresh_(None)
         self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             STATUS_BAR_REFRESH_SECONDS,
@@ -481,7 +490,6 @@ class StatusBarController(NSObject):
                 mac_sleep_snapshot,
             )
             self.sync_leds(AgentMode.BLOCKED_ERROR, battery_snapshot, LED_DISPLAY_AGENT)
-            self.status_item.setMenu_(build_error_menu(exc))
             return
 
         self.last_snapshot = snapshot
@@ -502,11 +510,32 @@ class StatusBarController(NSObject):
             battery_snapshot,
             self.active_led_display_kind(battery_snapshot),
         )
-        self.status_item.setMenu_(build_menu(snapshot, state, self))
 
     @objc.IBAction
     def forceRefresh_(self, _sender):
         self.refresh_(None)
+
+    def _fill_menu_from(self, source) -> None:
+        # Move the freshly built items into the live, delegate-owned menu.
+        # NSMenuItems can only belong to one menu, so detach then re-add.
+        self.menu.removeAllItems()
+        for item in list(source.itemArray()):
+            source.removeItem_(item)
+            self.menu.addItem_(item)
+
+    def rebuild_status_menu(self) -> None:
+        try:
+            snapshot = self.monitor.snapshot(include_stale=False)
+        except Exception as exc:
+            log_status_bar(f"menu rebuild error: {exc}")
+            self._fill_menu_from(build_error_menu(exc))
+            return
+        self.last_snapshot = snapshot
+        state = state_for_mode(snapshot.aggregate.mode)
+        self._fill_menu_from(build_menu(snapshot, state, self))
+
+    def menuNeedsUpdate_(self, menu) -> None:
+        self.rebuild_status_menu()
 
     @objc.IBAction
     def openDeepLink_(self, sender):
