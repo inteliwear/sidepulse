@@ -648,6 +648,8 @@ class LiveActivityDaemon:
         self._last_alerts: dict[tuple[str, str], float] = {}
         self._last_rows: dict[str, dict[str, Any]] = {}
         self._recent_finished: dict[str, dict[str, Any]] = {}
+        self._recent_finished_path = default_state_dir() / "recent_finished.json"
+        self._load_recent_finished()
         self._bg_holding: set[str] = set()
         self.summarizer = (
             SessionSummarizer(config.summary_model) if config.summaries_enabled else None
@@ -894,6 +896,26 @@ class LiveActivityDaemon:
                 del self._recent_finished[agent_id]
 
         self._last_rows = {status.agent_id: status_row(status) for status in current.values()}
+        self._save_recent_finished()
+
+    def _load_recent_finished(self) -> None:
+        # The last-3-finished ring must survive daemon restarts so the
+        # morning-after "all done" view is there even after a reboot.
+        try:
+            raw = json.loads(self._recent_finished_path.read_text())
+            if isinstance(raw, dict):
+                self._recent_finished = {
+                    str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)
+                }
+        except (OSError, ValueError):
+            pass
+
+    def _save_recent_finished(self) -> None:
+        try:
+            self._recent_finished_path.parent.mkdir(parents=True, exist_ok=True)
+            self._recent_finished_path.write_text(json.dumps(self._recent_finished))
+        except OSError:
+            pass
 
     def _meaningfully_changed(self, content_state: dict[str, Any]) -> bool:
         if self._latest is None:
