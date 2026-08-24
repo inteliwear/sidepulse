@@ -82,17 +82,18 @@ struct AgentLiveActivity: Widget {
                         .padding(.trailing, 2)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(context.state.agents.prefix(4)) { agent in
+                    // The expanded island has a limited height; three compact
+                    // rows fit without clipping.
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(context.state.agents.prefix(3)) { agent in
                             AgentRowView(agent: agent)
                         }
-                        if context.state.agents.count > 4 {
-                            Text("+\(context.state.agents.count - 4) more")
+                        if context.state.agents.count > 3 {
+                            Text("+\(context.state.agents.count - 3) more")
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.white.opacity(0.5))
                         }
                     }
-                    .padding(.top, 2)
                     .widgetURL(URL(string: "sidepulse://agents"))
                 }
             } compactLeading: {
