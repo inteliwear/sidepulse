@@ -949,6 +949,7 @@ class LiveActivityDaemon:
                 "timestamp": int(now),
                 "event": "start",
                 "content-state": content_state,
+                "relevance-score": 100,
                 "attributes-type": ATTRIBUTES_TYPE,
                 "attributes": {"hostLabel": self.config.host_label},
                 "alert": {
@@ -972,6 +973,10 @@ class LiveActivityDaemon:
             "timestamp": int(now),
             "event": "update",
             "content-state": content_state,
+            # Highest relevance so that when a second Live Activity (e.g.
+            # Now Playing) is active, iOS gives SidePulse the attached,
+            # left-of-camera minimal slot rather than the detached circle.
+            "relevance-score": 100,
         }
         if alert:
             print(f"live-activity: alerting update -> {alert['title']}")
