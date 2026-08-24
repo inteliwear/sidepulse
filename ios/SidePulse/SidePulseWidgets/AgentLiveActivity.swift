@@ -164,7 +164,6 @@ private struct StatusChips: View {
                 chip(part.0, part.1)
             }
         }
-        .fixedSize()
     }
 
     @ViewBuilder
@@ -211,7 +210,7 @@ private struct WatchAgentRowView: View {
             }
             .font(.system(size: 9))
             .lineLimit(1)
-            .fixedSize()
+            .layoutPriority(1)
         }
     }
 }
@@ -231,20 +230,18 @@ private struct AgentRowView: View {
                 Text(provider.capitalized)
                     .font(.system(size: 9, weight: .semibold))
                     .lineLimit(1)
-                    .fixedSize()
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .background(.white.opacity(0.12), in: Capsule())
             }
-            // The auto-updating relative time reserves greedy width;
-            // priority here hands the free space to the name instead.
             Text(agent.name)
                 .font(.caption)
                 .foregroundStyle(isDone ? .secondary : .primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            // Reserved trailing column: the name never squeezes it.
+            // layoutPriority (not fixedSize) gives the trailing text its
+            // natural width without the measurement that blanked the card.
             Group {
                 if let finishedAt = agent.finishedAt {
                     Text(Date(timeIntervalSince1970: finishedAt), style: .relative)
@@ -257,7 +254,7 @@ private struct AgentRowView: View {
             }
             .font(.caption2)
             .lineLimit(1)
-            .fixedSize()
+            .layoutPriority(1)
         }
     }
 }
