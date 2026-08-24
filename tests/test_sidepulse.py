@@ -171,6 +171,78 @@ class FakeProcess:
 
 
 class AgentMonitorTests(unittest.TestCase):
+    def test_stop_with_running_background_tasks_is_long_task(self) -> None:
+        from sidepulse.collector import mode_for_event
+        from sidepulse.models import HookEvent
+
+        def stop(background):
+            return HookEvent(
+                provider="claude",
+                logged_at=datetime.now(timezone.utc),
+                event_name="Stop",
+                raw={"background_tasks": background},
+                session_id="s1",
+            )
+
+        running = [{"id": "b1", "type": "shell", "status": "running"}]
+        self.assertEqual(mode_for_event(stop(running)), AgentMode.LONG_TASK_PROGRESS)
+        self.assertEqual(mode_for_event(stop([])), AgentMode.COMPLETED)
+        self.assertEqual(
+            mode_for_event(stop([{"id": "b1", "status": "completed"}])),
+            AgentMode.COMPLETED,
+        )
+
+    def test_orphaned_subagent_does_not_keep_aggregate_working(self) -> None:
+        # A subagent whose Stop event was lost stays active forever; it must
+        # not drive the aggregate. While the parent's COMPLETED row is visible
+        # the aggregate is completed; once it ages out the aggregate goes
+        # idle rather than resurrecting the orphaned subagent as "working".
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            claude = base / "claude.jsonl"
+            claude.write_text(
+                json.dumps(
+                    {
+                        "logged_at": "2026-06-20T06:00:00Z",
+                        "hook_event_name": "SubagentStart",
+                        "session_id": "claude-session",
+                        "agent_id": "orphan-agent",
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "logged_at": "2026-06-20T06:05:00Z",
+                        "hook_event_name": "Stop",
+                        "session_id": "claude-session",
+                    }
+                )
+                + "\n"
+            )
+
+            visible = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=-1,
+            ).snapshot()
+            self.assertEqual(visible.aggregate.mode, AgentMode.COMPLETED)
+            session_rows = [
+                status
+                for status in visible.statuses
+                if ":agent:" not in status.agent_id
+            ]
+            self.assertEqual(len(session_rows), 1)
+            self.assertEqual(session_rows[0].mode, AgentMode.COMPLETED)
+
+            aged = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=60,
+            ).snapshot()
+            self.assertEqual(aged.aggregate.mode, AgentMode.IDLE_READY)
+
     def test_aggregates_highest_priority_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -605,6 +677,44 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
+
+    def test_live_sidepulse_session_end_completes_lingering_subagents(self) -> None:
+        monitor = LiveAgentMonitor(stale_after_seconds=3600)
+        session_id = "03a6ef62-1ae1-49cc-b1fd-f9ebe272a677"
+        now = datetime.now(timezone.utc)
+
+        def ingest(event: dict[str, object]) -> None:
+            line = {
+                "logged_at": now.isoformat(),
+                "session_id": session_id,
+                "cwd": "/tmp/project",
+                **event,
+            }
+            record = parse_log_line("claude", json.dumps(line))
+            self.assertIsNotNone(record)
+            monitor.ingest_record(record)
+
+        ingest({"hook_event_name": "Stop", "last_assistant_message": "Done."})
+        ingest(
+            {
+                "hook_event_name": "SubagentStop",
+                "agent_id": "af896bde23bba0adc",
+                "last_assistant_message": "what about next week?",
+            }
+        )
+
+        modes = {s.agent_id: s.mode for s in monitor.snapshot().statuses}
+        self.assertEqual(
+            modes["claude:agent:af896bde23bba0adc"], AgentMode.WAITING_FOR_INPUT
+        )
+
+        ingest({"hook_event_name": "SessionEnd", "reason": "other"})
+
+        snapshot = monitor.snapshot(include_stale=True)
+        modes = {s.agent_id: s.mode for s in snapshot.statuses + snapshot.stale_statuses}
+        self.assertEqual(modes[f"claude:session:{session_id}"], AgentMode.COMPLETED)
+        self.assertEqual(modes["claude:agent:af896bde23bba0adc"], AgentMode.COMPLETED)
+        self.assertNotEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
 
     def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
         try:

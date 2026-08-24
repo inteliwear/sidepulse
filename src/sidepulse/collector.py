@@ -162,7 +162,14 @@ class AgentMonitor:
             else:
                 fresh.append(current)
 
-        if any(status_counts_active(status) for status in fresh):
+        # Only session-level rows may demote completed sessions to stale: an
+        # orphaned subagent row (its parent already done, its Stop event lost)
+        # would otherwise hide the parent's COMPLETED row from the aggregate
+        # and keep the overall state "working" forever.
+        if any(
+            status_counts_active(status) and ":agent:" not in status.agent_id
+            for status in fresh
+        ):
             inactive = [status for status in fresh if not status_counts_active(status)]
             fresh = [status for status in fresh if status_counts_active(status)]
             stale.extend(_replace_stale(status, True) for status in inactive)
@@ -217,6 +224,7 @@ class AgentMonitor:
                 ):
                     continue
                 statuses_by_key[status.agent_id] = status
+                complete_subagents_for_ended_session(record, statuses_by_key)
 
         self._latest_status_signature = signature
         self._latest_statuses_by_key = dict(statuses_by_key)
@@ -420,6 +428,7 @@ class LiveAgentMonitor:
             ):
                 return
             self.statuses_by_key[status.agent_id] = status
+            complete_subagents_for_ended_session(record, self.statuses_by_key)
             self.write_latest_state()
 
     def snapshot(self, include_stale: bool = False) -> MonitorSnapshot:
@@ -1062,6 +1071,16 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"Stop", "SubagentStop"}:
         if _assistant_message_asks_question(raw.get("last_assistant_message")):
             return AgentMode.WAITING_FOR_INPUT
+        # The turn ended, but the harness reports background tasks still
+        # running (run_in_background shells, monitors) — the session is not
+        # done until they close, at which point the harness re-invokes the
+        # session and fresh events flow.
+        background_tasks = raw.get("background_tasks")
+        if isinstance(background_tasks, list) and any(
+            isinstance(task, dict) and task.get("status") == "running"
+            for task in background_tasks
+        ):
+            return AgentMode.LONG_TASK_PROGRESS
         return AgentMode.COMPLETED
     if event in {"SessionEnd"}:
         return AgentMode.COMPLETED
@@ -1171,7 +1190,11 @@ def aggregate_status(
     statuses: tuple[AgentStatus, ...],
     stale_statuses: tuple[AgentStatus, ...] = (),
 ) -> AggregateStatus:
-    if not statuses:
+    # A subagent's activity is subsumed by its parent session, and an
+    # orphaned subagent (parent already done) must not keep the overall
+    # state "working"; drive the aggregate from session-level rows.
+    effective = tuple(s for s in statuses if ":agent:" not in s.agent_id)
+    if not effective:
         return AggregateStatus(
             mode=AgentMode.IDLE_READY,
             active_count=0,
@@ -1180,7 +1203,7 @@ def aggregate_status(
         )
 
     representative = min(
-        statuses,
+        effective,
         key=lambda status: (
             MODE_PRIORITY.get(status.mode, MODE_PRIORITY[AgentMode.UNKNOWN]),
             -status.updated_at.timestamp(),
@@ -1189,7 +1212,7 @@ def aggregate_status(
 
     return AggregateStatus(
         mode=representative.mode,
-        active_count=sum(1 for status in statuses if status_counts_active(status)),
+        active_count=sum(1 for status in effective if status_counts_active(status)),
         stale_count=len(stale_statuses),
         representative=representative,
     )
@@ -1229,7 +1252,13 @@ def snapshot_from_statuses(
         else:
             fresh.append(current)
 
-    if any(status_counts_active(status) for status in fresh):
+    # Only session-level rows may demote completed sessions to stale (see the
+    # matching check in AgentMonitor.snapshot): an orphaned subagent row must
+    # not hide the parent's COMPLETED row from the aggregate.
+    if any(
+        status_counts_active(status) and ":agent:" not in status.agent_id
+        for status in fresh
+    ):
         inactive = [status for status in fresh if not status_counts_active(status)]
         fresh = [status for status in fresh if status_counts_active(status)]
         stale.extend(_replace_stale(status, True) for status in inactive)
@@ -1329,6 +1358,27 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
 
 def status_counts_active(status: AgentStatus) -> bool:
     return status.mode not in {AgentMode.COMPLETED, AgentMode.IDLE_READY}
+
+
+def complete_subagents_for_ended_session(
+    record: HookEvent,
+    statuses_by_key: dict[str, AgentStatus],
+) -> None:
+    """Mark a session's subagent rows completed when the session itself ends.
+
+    SubagentStop rows are keyed by agent id, so a later SessionEnd for the parent
+    session would otherwise leave them visible until the generic stale timeout.
+    """
+    if record.event_name != "SessionEnd" or record.agent_id or not record.session_id:
+        return
+    for key, status in statuses_by_key.items():
+        if (
+            key != record.status_key
+            and status.provider == record.provider
+            and status.session_id == record.session_id
+            and status_counts_active(status)
+        ):
+            statuses_by_key[key] = _replace_mode(status, AgentMode.COMPLETED)
 
 
 def track_pending_permissions(
