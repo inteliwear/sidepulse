@@ -171,6 +171,27 @@ class FakeProcess:
 
 
 class AgentMonitorTests(unittest.TestCase):
+    def test_stop_with_running_background_tasks_is_long_task(self) -> None:
+        from sidepulse.collector import mode_for_event
+        from sidepulse.models import HookEvent
+
+        def stop(background):
+            return HookEvent(
+                provider="claude",
+                logged_at=datetime.now(timezone.utc),
+                event_name="Stop",
+                raw={"background_tasks": background},
+                session_id="s1",
+            )
+
+        running = [{"id": "b1", "type": "shell", "status": "running"}]
+        self.assertEqual(mode_for_event(stop(running)), AgentMode.LONG_TASK_PROGRESS)
+        self.assertEqual(mode_for_event(stop([])), AgentMode.COMPLETED)
+        self.assertEqual(
+            mode_for_event(stop([{"id": "b1", "status": "completed"}])),
+            AgentMode.COMPLETED,
+        )
+
     def test_aggregates_highest_priority_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
