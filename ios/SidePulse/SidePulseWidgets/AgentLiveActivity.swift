@@ -180,6 +180,7 @@ private struct WatchAgentRowView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(agent.mode == "completed" ? Color.white.opacity(0.7) : .white)
                 .lineLimit(1)
+                .layoutPriority(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Group {
                 if let finishedAt = agent.finishedAt {
@@ -193,7 +194,7 @@ private struct WatchAgentRowView: View {
             }
             .font(.system(size: 9))
             .lineLimit(1)
-            .layoutPriority(1)
+            .frame(maxWidth: 58, alignment: .trailing)
         }
     }
 }
@@ -222,6 +223,7 @@ private struct AgentRowView: View {
                 .font(.caption)
                 .foregroundStyle(isDone ? Color.white.opacity(0.7) : .white)
                 .lineLimit(1)
+                .layoutPriority(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             // layoutPriority (not fixedSize) gives the trailing text its
             // natural width without the measurement that blanked the card.
@@ -237,7 +239,7 @@ private struct AgentRowView: View {
             }
             .font(.caption2)
             .lineLimit(1)
-            .layoutPriority(1)
+            .frame(maxWidth: 82, alignment: .trailing)
         }
     }
 }
