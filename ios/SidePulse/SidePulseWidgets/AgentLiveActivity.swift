@@ -174,9 +174,10 @@ private struct WatchAgentRowView: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle()
-                .fill(Color.forMode(agent.mode))
-                .frame(width: 6, height: 6)
+            Image(systemName: AgentModeStyle.symbol(agent.mode))
+                .font(.system(size: 10))
+                .foregroundStyle(Color.forMode(agent.mode))
+                .frame(width: 12)
             Text(agent.name)
                 .font(.system(size: 11))
                 .foregroundStyle(agent.mode == "completed" ? Color.white.opacity(0.7) : .white)
@@ -207,10 +208,10 @@ private struct AgentRowView: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(Color.forMode(agent.mode))
-                .frame(width: 7, height: 7)
-                .shadow(color: Color.forMode(agent.mode).opacity(isDone ? 0 : 0.8), radius: 3)
+            Image(systemName: AgentModeStyle.symbol(agent.mode))
+                .font(.system(size: 11))
+                .foregroundStyle(Color.forMode(agent.mode))
+                .frame(width: 14)
             if let provider = agent.provider {
                 Text(provider.capitalized)
                     .font(.system(size: 9, weight: .semibold))

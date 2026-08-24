@@ -48,6 +48,20 @@ enum AgentModeStyle {
         }
     }
 
+    /// SF Symbol per state — a glyph reads faster than a colored dot.
+    static func symbol(_ mode: String) -> String {
+        switch mode {
+        case "completed": return "checkmark.circle.fill"
+        case "working": return "bolt.fill"
+        case "tool_running": return "wrench.and.screwdriver.fill"
+        case "waiting_for_input": return "questionmark.circle.fill"
+        case "long_task_progress": return "hourglass"
+        case "blocked_error": return "exclamationmark.triangle.fill"
+        case "idle_ready": return "moon.fill"
+        default: return "circle.fill"
+        }
+    }
+
     /// (red, green, blue) 0-1, matching the LED palette used on the Dot.
     static func rgb(_ mode: String) -> (Double, Double, Double) {
         switch mode {

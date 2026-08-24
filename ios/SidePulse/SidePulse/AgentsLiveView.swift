@@ -111,10 +111,11 @@ private struct AgentLiveRow: View {
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 10) {
-                Circle()
-                    .fill(color(agent.mode))
-                    .frame(width: 10, height: 10)
-                    .padding(.top, 5)
+                Image(systemName: AgentModeStyle.symbol(agent.mode))
+                    .font(.system(size: 13))
+                    .foregroundStyle(color(agent.mode))
+                    .frame(width: 16)
+                    .padding(.top, 3)
                 Text(agent.name)
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
