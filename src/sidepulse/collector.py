@@ -162,7 +162,14 @@ class AgentMonitor:
             else:
                 fresh.append(current)
 
-        if any(status_counts_active(status) for status in fresh):
+        # Only session-level rows may demote completed sessions to stale: an
+        # orphaned subagent row (its parent already done, its Stop event lost)
+        # would otherwise hide the parent's COMPLETED row from the aggregate
+        # and keep the overall state "working" forever.
+        if any(
+            status_counts_active(status) and ":agent:" not in status.agent_id
+            for status in fresh
+        ):
             inactive = [status for status in fresh if not status_counts_active(status)]
             fresh = [status for status in fresh if status_counts_active(status)]
             stale.extend(_replace_stale(status, True) for status in inactive)
@@ -1186,7 +1193,7 @@ def aggregate_status(
     # A subagent's activity is subsumed by its parent session, and an
     # orphaned subagent (parent already done) must not keep the overall
     # state "working"; drive the aggregate from session-level rows.
-    effective = tuple(s for s in statuses if ":agent:" not in s.agent_id) or statuses
+    effective = tuple(s for s in statuses if ":agent:" not in s.agent_id)
     if not effective:
         return AggregateStatus(
             mode=AgentMode.IDLE_READY,
@@ -1245,7 +1252,13 @@ def snapshot_from_statuses(
         else:
             fresh.append(current)
 
-    if any(status_counts_active(status) for status in fresh):
+    # Only session-level rows may demote completed sessions to stale (see the
+    # matching check in AgentMonitor.snapshot): an orphaned subagent row must
+    # not hide the parent's COMPLETED row from the aggregate.
+    if any(
+        status_counts_active(status) and ":agent:" not in status.agent_id
+        for status in fresh
+    ):
         inactive = [status for status in fresh if not status_counts_active(status)]
         fresh = [status for status in fresh if status_counts_active(status)]
         stale.extend(_replace_stale(status, True) for status in inactive)

@@ -192,6 +192,57 @@ class AgentMonitorTests(unittest.TestCase):
             AgentMode.COMPLETED,
         )
 
+    def test_orphaned_subagent_does_not_keep_aggregate_working(self) -> None:
+        # A subagent whose Stop event was lost stays active forever; it must
+        # not drive the aggregate. While the parent's COMPLETED row is visible
+        # the aggregate is completed; once it ages out the aggregate goes
+        # idle rather than resurrecting the orphaned subagent as "working".
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            claude = base / "claude.jsonl"
+            claude.write_text(
+                json.dumps(
+                    {
+                        "logged_at": "2026-06-20T06:00:00Z",
+                        "hook_event_name": "SubagentStart",
+                        "session_id": "claude-session",
+                        "agent_id": "orphan-agent",
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "logged_at": "2026-06-20T06:05:00Z",
+                        "hook_event_name": "Stop",
+                        "session_id": "claude-session",
+                    }
+                )
+                + "\n"
+            )
+
+            visible = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=-1,
+            ).snapshot()
+            self.assertEqual(visible.aggregate.mode, AgentMode.COMPLETED)
+            session_rows = [
+                status
+                for status in visible.statuses
+                if ":agent:" not in status.agent_id
+            ]
+            self.assertEqual(len(session_rows), 1)
+            self.assertEqual(session_rows[0].mode, AgentMode.COMPLETED)
+
+            aged = AgentMonitor(
+                sources=(SourceSpec("claude", claude),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+                completed_visible_seconds=60,
+            ).snapshot()
+            self.assertEqual(aged.aggregate.mode, AgentMode.IDLE_READY)
+
     def test_aggregates_highest_priority_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
