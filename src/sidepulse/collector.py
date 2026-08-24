@@ -1190,7 +1190,11 @@ def aggregate_status(
     statuses: tuple[AgentStatus, ...],
     stale_statuses: tuple[AgentStatus, ...] = (),
 ) -> AggregateStatus:
-    if not statuses:
+    # A subagent's activity is subsumed by its parent session, and an
+    # orphaned subagent (parent already done) must not keep the overall
+    # state "working"; drive the aggregate from session-level rows.
+    effective = tuple(s for s in statuses if ":agent:" not in s.agent_id) or statuses
+    if not effective:
         return AggregateStatus(
             mode=AgentMode.IDLE_READY,
             active_count=0,
@@ -1199,7 +1203,7 @@ def aggregate_status(
         )
 
     representative = min(
-        statuses,
+        effective,
         key=lambda status: (
             MODE_PRIORITY.get(status.mode, MODE_PRIORITY[AgentMode.UNKNOWN]),
             -status.updated_at.timestamp(),
@@ -1208,7 +1212,7 @@ def aggregate_status(
 
     return AggregateStatus(
         mode=representative.mode,
-        active_count=sum(1 for status in statuses if status_counts_active(status)),
+        active_count=sum(1 for status in effective if status_counts_active(status)),
         stale_count=len(stale_statuses),
         representative=representative,
     )
