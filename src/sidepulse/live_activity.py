@@ -720,11 +720,13 @@ class LiveActivityDaemon:
             # Alerting Live Activity update: buzzes and highlights the
             # activity without posting a separate notification banner.
             self._push_update(content_state, now, alert=ready_alerts[0])
-        elif self.tokens.tokens("update") and (
-            (changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS)
-            or (active and now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS)
-        ):
-            self._push_update(content_state, now)
+        elif self.tokens.tokens("update"):
+            if changed and now - self._last_push_at >= PUSH_MIN_INTERVAL_SECONDS:
+                # A visible change (mode, count, agent) — deliver immediately.
+                self._push_update(content_state, now, important=True)
+            elif active and now - self._last_push_at >= PUSH_HEARTBEAT_SECONDS:
+                # Silent keep-alive against the stale-date; low priority.
+                self._push_update(content_state, now, important=False)
 
         if active:
             self._idle_since = None
@@ -970,6 +972,7 @@ class LiveActivityDaemon:
         content_state: dict[str, Any],
         now: float,
         alert: dict[str, str] | None = None,
+        important: bool = True,
     ) -> None:
         self._last_push_at = now
         aps: dict[str, Any] = {
@@ -983,9 +986,9 @@ class LiveActivityDaemon:
             # Go stale (dimmed) if the daemon stops refreshing.
             "stale-date": int(now + STALE_AFTER_SECONDS),
         }
-        # Apple: priority 5 for frequent, non-critical updates; 10 only for
-        # updates the user should be alerted to.
-        priority = 10 if alert else 5
+        # Apple: priority 10 for updates people would notice (state changes,
+        # alerts); 5 only for the silent heartbeat.
+        priority = 10 if (alert or important) else 5
         if alert:
             print(f"live-activity: alerting update -> {alert['title']}")
             aps["alert"] = {
