@@ -5,6 +5,7 @@ import os
 import plistlib
 import subprocess
 import sys
+from dataclasses import replace
 import tempfile
 import time
 import unittest
@@ -6505,6 +6506,13 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             SESSION_OPEN_APP,
         )
 
+        remote_claude = status_for("claude", "Claude on macmini")
+        remote_claude = replace(
+            remote_claude,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+        )
+        self.assertEqual(default_session_open_action(remote_claude), SESSION_OPEN_APP)
+
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
             provider="claude",
@@ -6517,7 +6525,10 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             cwd="/Users/pero/pgit/sdstatus_bitbang",
         )
 
-        self.assertEqual(session_deep_link(status), "claude://")
+        self.assertEqual(
+            session_deep_link(status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
         self.assertEqual(
             session_resume_command(status),
             "cd /Users/pero/pgit/sdstatus_bitbang && claude --resume 1ca4348e-2aec-4147-9e81-d7d56364d257",
@@ -6533,6 +6544,19 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "url",
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
+        )
+
+        remote_status = replace(
+            status,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+            origin="Claude on macmini",
+        )
+        # Remote sessions open the desktop app (the transcript is on the
+        # host, so a resume deep link would fail); local sessions resume.
+        self.assertEqual(session_deep_link(remote_status), "claude://")
+        self.assertEqual(
+            session_vscode_link(remote_status),
+            "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
         )
 
 

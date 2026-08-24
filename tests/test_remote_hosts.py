@@ -77,6 +77,7 @@ def test_qualify_remote_codex_line_namespaces_ids_and_origin() -> None:
             "session_id": "session-1",
             "turnId": "turn-1",
             "agent_id": "agent-1",
+            "agent_origin": "Codex UI",
         },
     }
 
@@ -87,6 +88,8 @@ def test_qualify_remote_codex_line_namespaces_ids_and_origin() -> None:
     assert event["turnId"] == "remote:macmini:turn-1"
     assert event["agent_id"] == "remote:macmini:agent-1"
     assert event["agent_origin"] == "Codex on macmini"
+    assert event["sidepulse_remote_origin"] == "Codex UI"
+    assert event["sidepulse_remote_session_id"] == "session-1"
     assert event["sidepulse_remote_host"] == "macmini"
     assert line["event"]["session_id"] == "session-1"
     record = parse_log_line("codex", json.dumps(result))
@@ -102,6 +105,7 @@ def test_qualify_remote_claude_line_is_idempotent() -> None:
         "hook_event_name": "Stop",
         "session_id": "remote:macmini:session-1",
         "last_assistant_message": "Finished.",
+        "agent_origin": "Claude Code CLI",
     }
 
     result = qualify_remote_line("claude", line, "macmini")
@@ -109,6 +113,7 @@ def test_qualify_remote_claude_line_is_idempotent() -> None:
 
     assert result["session_id"] == "remote:macmini:session-1"
     assert result["agent_origin"] == "Claude on macmini"
+    assert result["sidepulse_remote_origin"] == "Claude Code CLI"
 
 
 def test_ssh_stream_command_uses_outbound_keepalive_and_login_shell() -> None:

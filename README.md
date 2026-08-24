@@ -496,7 +496,10 @@ The status-bar item shows one of four collapsed states:
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
-provider app, Terminal resume, or Claude Code in VS Code.
+provider app, Terminal resume, or Claude Code in VS Code. Remote Claude sessions
+open the Claude app itself: their transcripts live on the host, so a local
+resume deep link cannot find them. SidePulse keeps its host-qualified internal
+ID separate from the original session UUID used for local deep links.
 
 The dropdown also includes a checked `Connect to Device` item. A checkmark means
 the status-bar app is actively connected to a mounted SidePulse Pro/SidePulse Dot target.
