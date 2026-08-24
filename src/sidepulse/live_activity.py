@@ -704,7 +704,10 @@ class LiveActivityDaemon:
     def _tick(self) -> None:
         snapshot = self.monitor.snapshot(include_stale=False)
         now_ts = time.time()
-        statuses = list(snapshot.statuses)
+        # Subagents (Task tool) surface as their own :agent: rows; they are
+        # sub-work of a session and often orphan in long-task state, so they
+        # duplicate the session row. Monitor sessions only.
+        statuses = [s for s in snapshot.statuses if ":agent:" not in s.agent_id]
         self._sync_background_tasks(statuses, now_ts)
         if self.summarizer is not None:
             self._prompt_tracker.poll()
