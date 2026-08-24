@@ -45,6 +45,9 @@ PUSH_MIN_INTERVAL_SECONDS = 3.0
 PUSH_HEARTBEAT_SECONDS = 300.0
 PUSH_TO_START_COOLDOWN_SECONDS = 60.0
 SSE_HEARTBEAT_SECONDS = 10.0
+# A live daemon refreshes within PUSH_HEARTBEAT; a longer stale window
+# lets iOS dim the activity if the mini stops pushing.
+STALE_AFTER_SECONDS = 360.0
 ATTRIBUTES_TYPE = "AgentActivityAttributes"
 
 # Modes worth interrupting the user for, and their notification titles.
@@ -977,7 +980,12 @@ class LiveActivityDaemon:
             # Now Playing) is active, iOS gives SidePulse the attached,
             # left-of-camera minimal slot rather than the detached circle.
             "relevance-score": 100,
+            # Go stale (dimmed) if the daemon stops refreshing.
+            "stale-date": int(now + STALE_AFTER_SECONDS),
         }
+        # Apple: priority 5 for frequent, non-critical updates; 10 only for
+        # updates the user should be alerted to.
+        priority = 10 if alert else 5
         if alert:
             print(f"live-activity: alerting update -> {alert['title']}")
             aps["alert"] = {
@@ -985,7 +993,7 @@ class LiveActivityDaemon:
                 "body": alert["body"],
                 "sound": "default",
             }
-        self._apns_fanout("update", {"aps": aps})
+        self._apns_fanout("update", {"aps": aps}, priority=priority)
         self._activity_live = True
 
     def _end_stale_activity(self, reason: str) -> None:
@@ -1019,6 +1027,7 @@ class LiveActivityDaemon:
                 "timestamp": int(now),
                 "event": "end",
                 "content-state": content_state,
+                "dismissal-date": int(now),
             }
         }
         print("live-activity: ending activity (idle)")
