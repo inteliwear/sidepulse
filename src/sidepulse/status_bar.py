@@ -4831,7 +4831,10 @@ def recent_statuses(
 
 
 def menu_statuses(snapshot, settings=None) -> tuple[AgentStatus, ...]:
-    statuses = list(snapshot.statuses)
+    # Subagents (Task tool) surface as their own :agent: rows and often
+    # orphan in a running state when their parent session is still alive,
+    # duplicating the session; show session-level rows only.
+    statuses = [status for status in snapshot.statuses if ":agent:" not in status.agent_id]
     now = snapshot.collected_at
     retention_seconds = (
         settings.recent_session_retention_seconds
@@ -4842,6 +4845,7 @@ def menu_statuses(snapshot, settings=None) -> tuple[AgentStatus, ...]:
         status
         for status in getattr(snapshot, "stale_statuses", ())
         if status.mode == AgentMode.COMPLETED
+        and ":agent:" not in status.agent_id
         and status.age_seconds(now) <= retention_seconds
     )
     return tuple(statuses)
