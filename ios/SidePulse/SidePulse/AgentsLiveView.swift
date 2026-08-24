@@ -79,8 +79,13 @@ private struct AgentLiveRow: View {
         .buttonStyle(.plain)
     }
 
-    /// claude sessions open the Claude app, codex sessions the ChatGPT app.
+    /// A Remote-Control session deep-links to the exact conversation;
+    /// otherwise fall back to opening the provider app.
     private func openProviderApp() {
+        if let link = agent.deepLink, let url = URL(string: link) {
+            open(candidates: [url])
+            return
+        }
         let provider = agent.provider ?? String(agent.id.split(separator: ":").first ?? "")
         let candidates: [URL]
         switch provider {

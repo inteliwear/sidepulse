@@ -157,8 +157,66 @@ def _truncate(value: str, limit: int) -> str:
     return value[: limit - 1] + "…"
 
 
+class DeepLinkResolver:
+    """Finds a Claude session's Remote Control URL from its transcript.
+
+    Each ~/.claude/projects/**/<session_id>.jsonl carries a `url` field like
+    https://claude.ai/code/session_… that opens the exact session on the
+    phone. Codex has no equivalent, so those rows get no link.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, str | None] = {}
+        self._roots = [Path.home() / ".claude" / "projects"]
+
+    def link_for(self, provider: str, session_id: str | None) -> str | None:
+        if provider != "claude" or not session_id:
+            return None
+        if session_id in self._cache:
+            return self._cache[session_id]
+        url = self._scan(session_id)
+        self._cache[session_id] = url
+        return url
+
+    def _scan(self, session_id: str) -> str | None:
+        import glob as _glob
+
+        for root in self._roots:
+            matches = _glob.glob(str(root / "**" / f"{session_id}.jsonl"), recursive=True)
+            for path in matches:
+                url = self._extract(Path(path))
+                if url:
+                    return url
+        return None
+
+    def _extract(self, path: Path) -> str | None:
+        # The url rides a top-level `url` field on an early `system` record;
+        # only the top-level key is trusted, so git output that happens to
+        # quote such a URL in a tool result is ignored.
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for lineno, raw in enumerate(handle):
+                    if lineno > 5000:
+                        break
+                    if '"url"' not in raw or "claude.ai/code/session_" not in raw:
+                        continue
+                    try:
+                        record = json.loads(raw)
+                    except ValueError:
+                        continue
+                    url = record.get("url")
+                    if isinstance(url, str) and "claude.ai/code/session_" in url:
+                        return url
+        except OSError:
+            return None
+        return None
+
+
+_DEEP_LINKS: DeepLinkResolver | None = None
+
+
 def status_row(status: AgentStatus) -> dict[str, Any]:
-    return {
+    row = {
         "id": status.agent_id,
         "name": _truncate(status.display_name, MAX_NAME_CHARS),
         "mode": status.mode.value,
@@ -166,6 +224,11 @@ def status_row(status: AgentStatus) -> dict[str, Any]:
         "provider": status.provider,
         "cwd": _truncate(Path(status.cwd).name, MAX_DETAIL_CHARS) if status.cwd else None,
     }
+    if _DEEP_LINKS is not None:
+        link = _DEEP_LINKS.link_for(status.provider, status.session_id)
+        if link:
+            row["deepLink"] = link
+    return row
 
 
 def build_content_state(
@@ -584,6 +647,8 @@ class LiveActivityDaemon:
             SessionSummarizer(config.summary_model) if config.summaries_enabled else None
         )
         self._prompt_tracker = PromptTracker()
+        global _DEEP_LINKS
+        _DEEP_LINKS = DeepLinkResolver()
         self._deferred_alerts: list[dict[str, Any]] = []
         self._task_sources: dict[str, tuple[str, float]] = {}
 

@@ -164,7 +164,7 @@ private struct StatusChips: View {
                 chip(part.0, part.1)
             }
         }
-        .frame(maxWidth: 140)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -211,9 +211,7 @@ private struct WatchAgentRowView: View {
             }
             .font(.system(size: 9))
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .multilineTextAlignment(.trailing)
-            .frame(width: 44, alignment: .trailing)
+            .fixedSize()
         }
     }
 }
@@ -259,9 +257,7 @@ private struct AgentRowView: View {
             }
             .font(.caption2)
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .multilineTextAlignment(.trailing)
-            .frame(width: 66, alignment: .trailing)
+            .fixedSize()
         }
     }
 }
