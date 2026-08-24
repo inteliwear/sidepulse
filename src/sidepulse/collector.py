@@ -1431,7 +1431,7 @@ def should_ignore_status_transition(
 # writers, the aura-server agent loop) and never worth surfacing on LEDs,
 # in the status bar, or on the phone. Extend with SIDEPULSE_IGNORE_DIRS
 # (comma-separated directory names).
-DEFAULT_IGNORED_CWD_NAMES = ("memories", "aura-server")
+DEFAULT_IGNORED_CWD_NAMES = ("memories", "aura-server", "aura")
 
 
 def ignored_cwd_names() -> frozenset[str]:
