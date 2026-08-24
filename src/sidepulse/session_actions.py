@@ -22,6 +22,11 @@ def session_deep_link(status: AgentStatus) -> str | None:
     if provider == "codex" and session_id:
         return f"codex://threads/{quote(session_id, safe='')}"
     if provider == "claude":
+        # A remote session's transcript is on the host, not this Mac, so the
+        # local claude:// resume would fail with "transcript may have been
+        # removed"; offer no app link for remote sessions.
+        if remote_session_parts(status.session_id):
+            return None
         if session_id:
             params = {"session": session_id}
             if status.cwd:
@@ -41,21 +46,42 @@ def session_vscode_link(status: AgentStatus) -> str | None:
     )
 
 
+def _remote_ssh_target(host_name: str) -> str | None:
+    from .remote_hosts import load_remote_hosts
+
+    for host in load_remote_hosts():
+        if host.name == host_name:
+            return host.ssh_target
+    return None
+
+
 def session_resume_command(status: AgentStatus) -> str | None:
     if not status.session_id:
         return None
 
     provider = status.provider.lower()
+    remote = remote_session_parts(status.session_id)
+    real_id = remote[1] if remote else status.session_id
     cwd = shlex.quote(status.cwd or str(Path.home()))
-    session_id = shlex.quote(status.session_id)
+    session_id = shlex.quote(real_id)
 
     if provider == "codex":
-        return f"cd {cwd} && codex resume {session_id}"
-    if provider == "claude":
-        return f"cd {cwd} && claude --resume {session_id}"
-    if provider == "grok":
-        return f"cd {cwd} && grok --resume {session_id}"
-    return None
+        inner = f"cd {cwd} && codex resume {session_id}"
+    elif provider == "claude":
+        inner = f"cd {cwd} && claude --resume {session_id}"
+    elif provider == "grok":
+        inner = f"cd {cwd} && grok --resume {session_id}"
+    else:
+        return None
+
+    if remote:
+        # The transcript and CLI live on the remote host; resume over SSH
+        # there instead of locally (where the transcript does not exist).
+        target = _remote_ssh_target(remote[0])
+        if not target:
+            return None
+        return f"ssh -t {shlex.quote(target)} {shlex.quote(inner)}"
+    return inner
 
 
 def default_session_open_action(status: AgentStatus) -> str:
@@ -67,7 +93,7 @@ def default_session_open_action(status: AgentStatus) -> str:
 
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     if status.provider.lower() == "claude" and remote_session_parts(status.session_id):
-        return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
+        return (SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE, SESSION_OPEN_APP)
 
     origin = normalized_origin(status.origin)
     if origin:
