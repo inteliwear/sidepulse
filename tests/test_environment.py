@@ -26,6 +26,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 import tempfile
 import textwrap
@@ -351,8 +352,15 @@ class CleanInstallTests(unittest.TestCase):
             env=self.env(), cwd=str(self.home),
         )
         self.assertEqual(0, run.returncode, run.stderr)
+        # The hook is detached, so it returns before the child has logged.
+        # Poll rather than asserting immediately -- the guarantee is that the
+        # write lands, not that it has landed by the time the agent resumes.
+        log_path = self.home / "installed-hook.jsonl"
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not log_path.exists():
+            time.sleep(0.05)
         self.assertTrue(
-            (self.home / "installed-hook.jsonl").exists(),
+            log_path.exists(),
             f"the command written into agent configs logged nothing: {command}",
         )
 

@@ -4647,8 +4647,10 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             command,
+            'P=$(cat); ( printf %s "$P" | '
             f"{sys.executable} agent-monitor hook-log --provider codex "
-            "--log '/tmp/codex events.jsonl' ; true",
+            "--log '/tmp/codex events.jsonl'"
+            ' >/dev/null 2>&1 & ) ; true',
         )
 
     def test_hook_command_is_fail_open(self) -> None:

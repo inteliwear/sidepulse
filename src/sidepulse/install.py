@@ -314,7 +314,20 @@ def hook_command(
 
 
 def fail_open_command(command: str) -> str:
-    return f"{command} ; true"
+    # Run the hook off the agent's critical path.
+    #
+    # Drain stdin in the foreground shell first: the detached child cannot read
+    # it, because the agent closes the pipe as soon as this command returns.
+    #
+    # The child's stdio MUST be redirected to /dev/null. A bare "&" is not
+    # enough -- the child inherits the stdout pipe, and the agent blocks
+    # reading that pipe until EOF, which only arrives when the child exits.
+    # Backgrounding without closing stdio measures identical to running
+    # synchronously.
+    #
+    # printf, never echo: hook payloads are JSON, and sh's builtin echo
+    # mangles the backslash escapes in tool_input/tool_response.
+    return f'P=$(cat); ( printf %s "$P" | {command} >/dev/null 2>&1 & ) ; true'
 
 
 def grok_legacy_hook_config_paths(config: Path) -> tuple[Path, ...]:

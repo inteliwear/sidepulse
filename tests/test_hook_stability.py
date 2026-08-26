@@ -20,6 +20,7 @@ import io
 import json
 import os
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
@@ -495,6 +496,10 @@ class InstalledCommandTests(unittest.TestCase):
             env={**os.environ, "SIDEPULSE_DISABLE_EVENT_SOCKET": "1"},
         )
         self.assertEqual(0, result.returncode, result.stderr)
+        # Detached hook: the command returns before the child logs, so poll.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not log_path.exists():
+            time.sleep(0.05)
         self.assertTrue(log_path.exists(), "installed hook command wrote nothing")
 
     def test_fail_open_wrapper_neutralizes_failure(self):
