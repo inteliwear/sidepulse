@@ -231,6 +231,11 @@ STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
 )
 STATUS_BAR_REFRESH_SECONDS = 15.0
 STATUS_BAR_DEVICE_POLL_SECONDS = 2.0
+# Minimum spacing between LED writes. Writes to a mounted SidePulse go to
+# SD/USB storage and are wildly variable -- measured 3ms best case, 2.7s
+# worst. Without a floor, every hook event triggers another write.
+LED_MIN_WRITE_INTERVAL_SECONDS = 1.0
+LED_DRAIN_POLL_SECONDS = 0.25
 STATUS_BAR_SESSION_HISTORY_LIMIT = 10
 SCREEN_BAR_FEATURE_ENABLED = True
 STATUS_BAR_MAX_LINES_PER_SOURCE = 500
@@ -395,6 +400,9 @@ class StatusBarController(NSObject):
         self.device_errors = {}
         self.leds_enabled = True
         self.led_sync_in_flight = False
+        self.led_last_sync_monotonic = 0.0
+        self.led_pending_sync = None
+        self.led_drain_timer = None
         self.last_led_error = None
         self.last_led_display_kind = LED_DISPLAY_AGENT
         self.last_connected_device_signature = None
@@ -455,6 +463,13 @@ class StatusBarController(NSObject):
             STATUS_BAR_DEVICE_POLL_SECONDS,
             self,
             "pollDevices:",
+            None,
+            True,
+        )
+        self.led_drain_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            LED_DRAIN_POLL_SECONDS,
+            self,
+            "drainLedQueue:",
             None,
             True,
         )
@@ -1850,8 +1865,19 @@ class StatusBarController(NSObject):
         if time.monotonic() < self.led_animation_until_monotonic:
             return
 
+        # Coalesce: keep only the most recent state. Order of arrival does not
+        # matter because this samples current state rather than replaying a
+        # sequence -- which is what makes detached (async) hooks safe here.
         if self.led_sync_in_flight:
+            self.led_pending_sync = (mode, battery_snapshot, display_kind)
             return
+        if time.monotonic() - self.led_last_sync_monotonic < LED_MIN_WRITE_INTERVAL_SECONDS:
+            # Too soon. Stash it; the drain timer applies it on the trailing
+            # edge, so the final state of a burst is never dropped.
+            self.led_pending_sync = (mode, battery_snapshot, display_kind)
+            return
+
+        self.led_pending_sync = None
         self.led_sync_in_flight = True
         thread = threading.Thread(
             target=self.sync_leds_worker,
@@ -1859,6 +1885,15 @@ class StatusBarController(NSObject):
             daemon=True,
         )
         thread.start()
+
+    @objc.IBAction
+    def drainLedQueue_(self, _sender):
+        pending = self.led_pending_sync
+        if pending is None or self.led_sync_in_flight:
+            return
+        if time.monotonic() - self.led_last_sync_monotonic < LED_MIN_WRITE_INTERVAL_SECONDS:
+            return
+        self.sync_leds(*pending)
 
     def sync_virtual_status_device(
         self,
@@ -1909,6 +1944,7 @@ class StatusBarController(NSObject):
         try:
             self.sync_leds_now(mode, battery_snapshot, display_kind)
         finally:
+            self.led_last_sync_monotonic = time.monotonic()
             self.led_sync_in_flight = False
 
     def sync_leds_now(
