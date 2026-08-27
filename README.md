@@ -283,11 +283,29 @@ sidepulse agent-monitor install
 sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
+sidepulse agent-monitor install cursor
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
 the event to the monitor log and then makes a short best-effort local socket
 delivery to the status-bar app.
+
+The `cursor` provider is different: it is **status-only**. Codex, Claude, and
+Grok hooks write agent session content (prompts, assistant messages, tool
+inputs) to the local monitor log. The Cursor integration deliberately does not.
+`sidepulse agent-monitor install cursor` writes `~/.cursor/hooks.json` so
+Cursor's `beforeSubmitPrompt` and `stop` events invoke `sidepulse
+agent-monitor publish-status working|done`, which publishes an explicit status
+transition over the status-bar socket and never stores message content — there
+is nothing to clear in more than one place.
+
+```sh
+sidepulse agent-monitor install cursor
+sidepulse agent-monitor uninstall cursor
+# Publish a status transition directly (no message content is stored):
+sidepulse agent-monitor publish-status working
+sidepulse agent-monitor publish-status done
+```
 
 Show current aggregated status:
 
@@ -384,6 +402,7 @@ sidepulse agent-monitor uninstall
 sidepulse agent-monitor uninstall codex
 sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
+sidepulse agent-monitor uninstall cursor
 ```
 
 Install and start the macOS status-bar app:

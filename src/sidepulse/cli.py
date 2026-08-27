@@ -17,12 +17,15 @@ from .battery import (
     render_battery_snapshot,
 )
 from .collector import AgentMonitor, SourceSpec, default_sources
+from .cursor_status import publish_status
 from .device_writer import DEFAULT_FILE_NAME, DeviceWriteError, write_led_program
 from .hook import hook_log_main
 from .install import (
+    install_cursor_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_grok_hooks,
+    uninstall_cursor_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_grok_hooks,
@@ -658,6 +661,20 @@ def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
 
     add_hook_log_parser(subparsers)
 
+    publish = subparsers.add_parser(
+        "publish-status",
+        help="Publish a status-only transition to the status-bar (no message content stored).",
+    )
+    publish.add_argument(
+        "status",
+        choices=("working", "done", "ask", "blocked", "idle"),
+        help="Status token to publish.",
+    )
+    publish.add_argument("--provider", default="cursor", help="Agent provider key (default: cursor).")
+    publish.add_argument("--session-id", default=None, help="Session id for the status row.")
+    publish.add_argument("--cwd", default=None, help="Working directory for the status row.")
+    publish.set_defaults(func=cmd_publish_status)
+
     return parser
 
 
@@ -697,7 +714,7 @@ def add_status_args(parser: argparse.ArgumentParser, include_json: bool = True) 
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    configs = [detect_codex_config(), detect_claude_config(), detect_grok_config()]
+    configs = detect_provider_configs()
     payload = {"providers": [config.to_dict() for config in configs]}
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -811,6 +828,9 @@ def install_hook_results(args: argparse.Namespace):
     providers = selected_hook_providers(args.provider)
     results = []
     for provider in providers:
+        if provider == "cursor":
+            results.append(install_cursor_hooks(dry_run=args.dry_run))
+            continue
         log_path = install_log_path(provider, args)
         if provider == "codex":
             results.append(install_codex_hooks(log_path=log_path, dry_run=args.dry_run))
@@ -837,6 +857,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     providers = selected_hook_providers(args.provider)
     results = []
     for provider in providers:
+        if provider == "cursor":
+            results.append(uninstall_cursor_hooks(dry_run=args.dry_run))
+            continue
         log_path = uninstall_log_path(provider, args)
         if provider == "codex":
             results.append(uninstall_codex_hooks(log_path=log_path, dry_run=args.dry_run))
@@ -859,6 +882,16 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 def cmd_hook_log(args: argparse.Namespace) -> int:
     return hook_log_main(args.provider, args.log)
+
+
+def cmd_publish_status(args: argparse.Namespace) -> int:
+    publish_status(
+        args.status,
+        provider=args.provider,
+        session_id=args.session_id,
+        cwd=args.cwd,
+    )
+    return 0
 
 
 def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:
