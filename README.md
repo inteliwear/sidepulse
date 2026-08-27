@@ -16,6 +16,10 @@ https://github.com/user-attachments/assets/9de119ac-7b55-467f-8517-6c5f1570c1af
 
 The device mounts as a disk drive. You can control the LEDs by writing to `LEDS.LED`.
 
+LED brightness can follow the macOS Control Center slider (`system_brightness_ratio()`
+via DisplayServices). Do not use AppleARMBacklight's 16-bit `brightness` key — on
+current Macs it sits at 50% even when the slider is much lower.
+
 The LED control DSL is described in [`LEDS_FORMAT.md`](LEDS_FORMAT.md).
 
 ### TLDR
