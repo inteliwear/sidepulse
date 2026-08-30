@@ -1,0 +1,18 @@
+{
+  "animations": {
+    "blocked_error": "amber-pulse",
+    "completed": "cyan-complete",
+    "idle_ready": "idle-pulse",
+    "lid_closed": "lid-closed",
+    "lid_open": "lid-open",
+    "long_task_progress": "cyan-roll",
+    "tool_running": "cyan-roll",
+    "unknown": "idle-pulse",
+    "waiting_for_input": "amber-pulse",
+    "working": "cyan-roll"
+  },
+  "custom_animations": {},
+  "format": "sidepulse-animation-profile",
+  "name": "Cyan",
+  "version": 1
+}

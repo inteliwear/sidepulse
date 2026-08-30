@@ -13,6 +13,7 @@ MOUNT_ROOT = Path("/Volumes")
 DEVICE_NAME_HINTS = (
     "sidepulsepro",
     "sidepulsedot",
+    "pulsedot",
 )
 
 

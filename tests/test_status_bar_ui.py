@@ -57,8 +57,13 @@ def tearDownModule():
 from AppKit import (  # noqa: E402
     NSApplication,
     NSControl,
+    NSEvent,
+    NSEventModifierFlagCommand,
+    NSEventTypeKeyDown,
     NSImage,
     NSMenu,
+    NSPasteboard,
+    NSPasteboardTypeString,
     NSView,
     NSWindow,
 )
@@ -210,6 +215,8 @@ class SelectorWiringTests(StatusBarTestCase):
         unresolved = []
         for path in sources:
             for selector in sorted(self.selector_literals(path)):
+                if selector in {item[1] for item in sb.STANDARD_EDIT_MENU_ITEMS}:
+                    continue
                 if not any(c.instancesRespondToSelector_(selector) for c in classes):
                     unresolved.append(f"{path.relative_to(REPO_ROOT)}: {selector}")
         self.assertEqual(
@@ -361,11 +368,259 @@ class WindowBuildTests(StatusBarTestCase):
         window = sb.build_settings_window(self.controller)
         self.assertIsNotNone(window)
         self.assertTrue(window.title())
+        self.assertEqual(window.contentView().frame().size.height, 560)
         self.assert_controls_are_wired(window)
+
+    def test_settings_window_resizes_for_compact_animations_tab(self):
+        window = sb.build_settings_window(self.controller)
+        self.controller.settings_window = window
+        tab_view = next(
+            view
+            for view in window.contentView().subviews()
+            if hasattr(view, "numberOfTabViewItems")
+        )
+        items = {
+            str(tab_view.tabViewItemAtIndex_(index).identifier()):
+            tab_view.tabViewItemAtIndex_(index)
+            for index in range(tab_view.numberOfTabViewItems())
+        }
+
+        tab_view.selectTabViewItem_(items["animations"])
+        self.assertEqual(
+            window.contentView().frame().size.height,
+            sb.SETTINGS_ANIMATIONS_WINDOW_HEIGHT,
+        )
+        self.assertEqual(
+            window.contentView().frame().size.width,
+            sb.SETTINGS_ANIMATIONS_WINDOW_WIDTH,
+        )
+        agent_animations = items["animations"].view()
+        profile_label = next(
+            view
+            for view in agent_animations.subviews()
+            if hasattr(view, "stringValue") and str(view.stringValue()) == "Profile"
+        )
+        profile_popup = self.controller.settings_fields["agent_animation_profile"]
+        self.assertEqual(
+            profile_label.frame().origin.y,
+            profile_popup.frame().origin.y,
+        )
+        for view in agent_animations.subviews():
+            frame = view.frame()
+            self.assertGreaterEqual(frame.origin.x, 0)
+            self.assertGreaterEqual(frame.origin.y, 0)
+            self.assertLessEqual(
+                frame.origin.x + frame.size.width,
+                agent_animations.frame().size.width,
+            )
+            self.assertLessEqual(
+                frame.origin.y + frame.size.height,
+                agent_animations.frame().size.height,
+            )
+
+        tab_view.selectTabViewItem_(items["agents"])
+        self.assertEqual(
+            window.contentView().frame().size.height,
+            sb.SETTINGS_WINDOW_HEIGHT,
+        )
+        self.assertEqual(
+            window.contentView().frame().size.width,
+            sb.SETTINGS_WINDOW_WIDTH,
+        )
 
     def test_setup_window_builds(self):
         window = sb.build_setup_window(self.controller)
         self.assertIsNotNone(window)
+        self.assert_controls_are_wired(window)
+
+    def test_custom_agent_animation_editor_builds(self):
+        window = sb.build_agent_animation_editor_window(self.controller)
+        self.assertIsNotNone(window)
+        self.assertTrue(window.title())
+        self.assertIsNotNone(self.controller.agent_animation_editor_name)
+        self.assertIsNotNone(self.controller.agent_animation_editor_program)
+        self.assertIsInstance(
+            self.controller.agent_animation_editor_preview,
+            vd.VirtualLedView,
+        )
+        self.assertTrue(self.controller.agent_animation_editor_preview.compact_preview)
+        self.assertIs(
+            self.controller.agent_animation_editor_program.delegate(),
+            self.controller,
+        )
+        self.assertIn(
+            "Show on Device",
+            {
+                str(view.title())
+                for view in window.contentView().subviews()
+                if hasattr(view, "title")
+            },
+        )
+        self.assert_controls_are_wired(window)
+
+    def test_custom_animation_editor_installs_native_edit_shortcuts(self):
+        window = sb.build_agent_animation_editor_window(self.controller)
+        edit_menu = sb.install_standard_edit_menu(self.app)
+        self.assertIsNotNone(edit_menu)
+        shortcuts = {
+            str(edit_menu.itemAtIndex_(index).action()): str(
+                edit_menu.itemAtIndex_(index).keyEquivalent()
+            )
+            for index in range(edit_menu.numberOfItems())
+        }
+        self.assertEqual(
+            shortcuts,
+            {
+                "cut:": "x",
+                "copy:": "c",
+                "paste:": "v",
+                "selectAll:": "a",
+            },
+        )
+        count = self.app.mainMenu().numberOfItems()
+        self.assertIs(sb.install_standard_edit_menu(self.app), edit_menu)
+        self.assertEqual(self.app.mainMenu().numberOfItems(), count)
+        self.assertIsNotNone(window)
+
+    def test_custom_animation_editor_command_c_copies_selected_program(self):
+        window = sb.build_agent_animation_editor_window(self.controller)
+        program = self.controller.agent_animation_editor_program
+        program.setString_("off 2s\ncopy me")
+        program.setSelectedRange_((0, 6))
+        window.makeFirstResponder_(program)
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        event = NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
+            NSEventTypeKeyDown,
+            (0, 0),
+            NSEventModifierFlagCommand,
+            0.0,
+            window.windowNumber(),
+            None,
+            "c",
+            "c",
+            False,
+            8,
+        )
+
+        self.assertTrue(program.performKeyEquivalent_(event))
+        self.assertEqual(
+            pasteboard.stringForType_(NSPasteboardTypeString),
+            "off 2s",
+        )
+
+    def test_custom_agent_animation_editor_preview_updates_and_reports_errors(self):
+        sb.build_agent_animation_editor_window(self.controller)
+        sb.set_text_control_value(
+            self.controller.agent_animation_editor_program,
+            "#FF0000 1s pulse\nrepeat",
+        )
+        self.controller.refresh_agent_animation_editor_preview()
+        preview = self.controller.agent_animation_editor_preview
+        self.assertEqual(preview.current_program, "#FF0000 1s pulse\nrepeat")
+        self.assertIsNone(preview.wasm_error)
+        self.assertEqual(
+            str(self.controller.agent_animation_editor_preview_status.stringValue()),
+            "Updates as you type",
+        )
+
+        sb.set_text_control_value(self.controller.agent_animation_editor_program, "")
+        self.controller.refresh_agent_animation_editor_preview()
+        self.assertEqual(preview.current_program, "off")
+        self.assertNotEqual(
+            str(self.controller.agent_animation_editor_preview_status.stringValue()),
+            "Updates as you type",
+        )
+
+    def test_edit_animation_clones_builtins_and_edits_custom_in_place(self):
+        original_settings = self.controller.settings
+        try:
+            self.controller.settings = original_settings.with_agent_animation(
+                AgentMode.WORKING,
+                sb.AGENT_ANIMATION_KITT_RED,
+            )
+            self.controller.show_agent_animation_editor(
+                AgentMode.WORKING.value,
+                edit_selected=True,
+            )
+            self.assertEqual(
+                str(self.controller.agent_animation_editor_window.title()),
+                "Clone Built-in Animation",
+            )
+            self.assertIsNone(self.controller.agent_animation_editor_existing_id)
+            self.assertEqual(
+                str(self.controller.agent_animation_editor_name.stringValue()),
+                "KITT Scanner Red Copy",
+            )
+
+            custom_id = "custom:purple-sweep"
+            self.controller.settings = (
+                original_settings.with_custom_agent_animation(
+                    custom_id,
+                    name="Purple Sweep",
+                    program="#AA44FF 700ms pulse\nrepeat",
+                ).with_agent_animation(AgentMode.WORKING, custom_id)
+            )
+            self.controller.show_agent_animation_editor(
+                AgentMode.WORKING.value,
+                edit_selected=True,
+            )
+            self.assertEqual(
+                str(self.controller.agent_animation_editor_window.title()),
+                "Edit Custom Animation",
+            )
+            self.assertEqual(
+                self.controller.agent_animation_editor_existing_id,
+                custom_id,
+            )
+            self.assertEqual(
+                sb.text_control_value(self.controller.agent_animation_editor_program),
+                "#AA44FF 700ms pulse\nrepeat",
+            )
+        finally:
+            if self.controller.agent_animation_editor_window is not None:
+                self.controller.agent_animation_editor_window.orderOut_(None)
+            self.controller.settings = original_settings
+
+    def test_custom_editor_device_preview_applies_device_brightness(self):
+        device = sb.StatusBarDevice(
+            device_id="sidepulse",
+            name="SidePulse",
+            root=Path("/Volumes/SidePulse"),
+            target=Path("/Volumes/SidePulse/LEDS.LED"),
+            connected=True,
+            display=sb.LED_DISPLAY_AGENT,
+            brightness=128,
+            reason="test",
+        )
+        program = "brightness 200\n#FF0000 1s pulse\nrepeat"
+        with (
+            patch.object(sb, "write_led_program") as write_program,
+            patch.object(sb.time, "sleep") as sleep,
+            patch.object(
+                self.controller,
+                "performSelectorOnMainThread_withObject_waitUntilDone_",
+            ),
+        ):
+            self.controller.show_animation_program_on_device_worker(
+                program,
+                [device],
+                12,
+            )
+
+        write_program.assert_called_once_with(
+            sb.apply_brightness(program, 128),
+            device_path=device.target,
+        )
+        sleep.assert_called_once_with(
+            sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS
+        )
+        self.assertEqual(sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS, 10.0)
+
+    def test_agent_animation_profile_editor_builds(self):
+        window = sb.build_agent_animation_profile_editor_window(self.controller)
+        self.assertIsNotNone(window)
+        self.assertIsNotNone(self.controller.agent_animation_profile_editor_name)
         self.assert_controls_are_wired(window)
 
     def test_settings_window_registers_its_fields(self):
@@ -376,10 +631,173 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.settings_fields,
             "settings window built no addressable fields; saving would be a no-op",
         )
+        for mode in sb.ANIMATION_UI_STATES:
+            preview = self.controller.settings_fields[
+                f"agent_animation_preview_{mode}"
+            ]
+            self.assertIsInstance(preview, vd.VirtualLedView)
+        profile_popup = self.controller.settings_fields["agent_animation_profile"]
+        self.assertEqual(str(profile_popup.titleOfSelectedItem()), "Cyan")
+        self.assertEqual(
+            [
+                str(profile_popup.itemAtIndex_(index).title())
+                for index in range(profile_popup.numberOfItems())
+            ],
+            ["Current", "Cyan", "Ember", "Purple"],
+        )
+        self.assertFalse(
+            self.controller.settings_buttons[
+                "delete_agent_animation_profile"
+            ].isEnabled()
+        )
+
+    def test_settings_window_has_profile_json_controls(self):
+        window = sb.build_settings_window(self.controller)
+        tab_view = next(
+            view
+            for view in window.contentView().subviews()
+            if hasattr(view, "numberOfTabViewItems")
+        )
+        animations = next(
+            tab_view.tabViewItemAtIndex_(index).view()
+            for index in range(tab_view.numberOfTabViewItems())
+            if str(tab_view.tabViewItemAtIndex_(index).identifier()) == "animations"
+        )
+        titles = {
+            str(view.title())
+            for view in walk_views(animations)
+            if hasattr(view, "title")
+        }
+        self.assertIn("Export JSON", titles)
+        self.assertIn("Import JSON", titles)
+
+    def test_settings_animation_previews_use_wasm_programs(self):
+        window = sb.build_settings_window(self.controller)
+        self.controller.settings_window = window
+        self.controller.refresh_settings_window()
+
+        for mode in sb.ANIMATION_UI_STATES:
+            with self.subTest(mode=mode):
+                preview = self.controller.settings_fields[
+                    f"agent_animation_preview_{mode}"
+                ]
+                self.assertTrue(preview.compact_preview)
+                self.assertIsNotNone(preview.current_program)
+                self.assertIsNotNone(preview.wasm_controller)
+                self.assertIsNone(preview.wasm_error)
+
+        for state in (sb.ANIMATION_STATE_LID_OPEN, sb.ANIMATION_STATE_LID_CLOSED):
+            preview = self.controller.settings_fields[
+                f"agent_animation_preview_{state}"
+            ]
+            self.assertNotIn("repeat", preview.current_program)
+            self.assertEqual(preview.rendered_program.splitlines()[-1], "repeat")
+
+        lid_closed_preview = self.controller.settings_fields[
+            f"agent_animation_preview_{sb.ANIMATION_STATE_LID_CLOSED}"
+        ]
+        self.assertTrue(lid_closed_preview.current_program.startswith("0:#000000"))
+        self.assertTrue(lid_closed_preview.rendered_program.startswith("#00E5FF\n"))
+
+    def test_every_state_popup_uses_the_same_animation_catalog(self):
+        original_settings = self.controller.settings
+        try:
+            animation_id = "custom:purple-sweep"
+            self.controller.settings = original_settings.with_custom_agent_animation(
+                animation_id,
+                name="Purple Sweep",
+                program="#AA44FF 700ms pulse\nrepeat",
+            )
+            sb.build_settings_window(self.controller)
+            catalogs = []
+            for mode in sb.ANIMATION_UI_STATES:
+                popup = self.controller.settings_fields[
+                    f"agent_animation_{mode}"
+                ]
+                catalogs.append(
+                    [
+                        item.representedObject()["animation_id"]
+                        for item in (
+                            popup.itemAtIndex_(index)
+                            for index in range(popup.numberOfItems())
+                        )
+                        if isinstance(item.representedObject(), dict)
+                    ]
+                )
+            self.assertTrue(catalogs)
+            self.assertTrue(all(catalog == catalogs[0] for catalog in catalogs))
+            self.assertIn("kitt", catalogs[0])
+            self.assertIn(animation_id, catalogs[0])
+            self.assertEqual(catalogs[0][-1], "add-custom")
+            working_popup = self.controller.settings_fields[
+                f"agent_animation_{AgentMode.WORKING.value}"
+            ]
+            self.assertEqual(
+                [
+                    str(working_popup.itemAtIndex_(index).title())
+                    for index in range(working_popup.numberOfItems())
+                    if isinstance(
+                        working_popup.itemAtIndex_(index).representedObject(),
+                        dict,
+                    )
+                ],
+                [
+                    "Idle Pulse",
+                    "Cyan Roll",
+                    "Cyan Complete",
+                    "Amber Pulse",
+                    "Solid Green",
+                    "KITT Scanner",
+                    "KITT Scanner Red",
+                    "Ember Idle",
+                    "Ember Tide",
+                    "Ember Attention",
+                    "Ember Complete",
+                    "Ember Lid Open",
+                    "Purple Idle",
+                    "Purple Tide",
+                    "Purple Attention",
+                    "Purple Complete",
+                    "Purple Lid Open",
+                    "Night Rider",
+                    "Lid Open Sweep",
+                    "Lid Closed Sweep",
+                    "Purple Sweep",
+                    "Add Custom…",
+                ],
+            )
+            animated_rows = [
+                working_popup.itemAtIndex_(index).view()
+                for index in range(working_popup.numberOfItems())
+                if isinstance(
+                    working_popup.itemAtIndex_(index).representedObject(),
+                    dict,
+                )
+                and working_popup.itemAtIndex_(index).representedObject()[
+                    "animation_id"
+                ]
+                != "add-custom"
+            ]
+            self.assertTrue(animated_rows)
+            for row in animated_rows:
+                self.assertIsInstance(row, sb.AgentAnimationMenuItemView)
+                self.assertIsNotNone(row.animation_preview.wasm_controller)
+                self.assertIsNone(row.animation_preview.wasm_error)
+        finally:
+            self.controller.settings = original_settings
 
     def test_settings_window_is_not_visible(self):
         window = sb.build_settings_window(self.controller)
         self.assertFalse(window.isVisible(), "building a window must not show it")
+
+    def test_show_settings_window_brings_it_forward_and_starts_previews(self):
+        self.controller.show_settings_window()
+        try:
+            self.assertTrue(self.controller.settings_window.isVisible())
+            self.assertIsNotNone(self.controller.agent_animation_preview_timer)
+        finally:
+            self.controller.stop_agent_animation_preview_timer()
+            self.controller.settings_window.orderOut_(None)
 
 
 class IconTests(StatusBarTestCase):

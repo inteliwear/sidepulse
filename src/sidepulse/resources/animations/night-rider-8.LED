@@ -1,0 +1,4 @@
+off
+0:#FF1200 360ms pulse;1:#FF1200 360ms pulse 90ms;2:#FF1200 360ms pulse 180ms;3:#FF1200 360ms pulse 270ms;4:#FF1200 360ms pulse 360ms;5:#FF1200 360ms pulse 450ms;6:#FF1200 360ms pulse 540ms;7:#FF1200 360ms pulse 630ms
+6:#FF1200 360ms pulse;5:#FF1200 360ms pulse 90ms;4:#FF1200 360ms pulse 180ms;3:#FF1200 360ms pulse 270ms;2:#FF1200 360ms pulse 360ms;1:#FF1200 360ms pulse 450ms
+repeat

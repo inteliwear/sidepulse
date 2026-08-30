@@ -1,0 +1,18 @@
+{
+  "animations": {
+    "blocked_error": "ember-attention",
+    "completed": "ember-complete",
+    "idle_ready": "ember-idle",
+    "lid_closed": "lid-closed",
+    "lid_open": "ember-lid-open",
+    "long_task_progress": "ember-tide",
+    "tool_running": "ember-tide",
+    "unknown": "ember-idle",
+    "waiting_for_input": "ember-attention",
+    "working": "ember-tide"
+  },
+  "custom_animations": {},
+  "format": "sidepulse-animation-profile",
+  "name": "Ember",
+  "version": 1
+}

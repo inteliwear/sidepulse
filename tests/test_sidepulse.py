@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -63,8 +64,12 @@ from sidepulse.keep_awake import KeepAwakeController, status_file_for_target
 from sidepulse.led_status import (
     AgentLedController,
     LedDisplayState,
+    apply_brightness,
+    builtin_animation_file_name,
+    builtin_animation_program,
     display_state_for_mode,
     led_count_for_target,
+    program_for_agent_mode,
     program_for_display_state,
     write_mode_to_leds,
 )
@@ -115,6 +120,35 @@ from sidepulse.session_actions import (
     session_vscode_link,
 )
 from sidepulse.settings import (
+    ANIMATION_STATE_LID_CLOSED,
+    ANIMATION_STATE_LID_OPEN,
+    ANIMATION_STATES,
+    AGENT_ANIMATION_AMBER_PULSE,
+    AGENT_ANIMATION_CYAN_COMPLETE,
+    AGENT_ANIMATION_CYAN_ROLL,
+    AGENT_ANIMATION_CUSTOM,
+    AGENT_ANIMATION_DEFAULT,
+    AGENT_ANIMATION_EMBER_ATTENTION,
+    AGENT_ANIMATION_EMBER_COMPLETE,
+    AGENT_ANIMATION_EMBER_IDLE,
+    AGENT_ANIMATION_EMBER_LID_OPEN,
+    AGENT_ANIMATION_EMBER_TIDE,
+    AGENT_ANIMATION_IDLE_PULSE,
+    AGENT_ANIMATION_KITT,
+    AGENT_ANIMATION_KITT_RED,
+    AGENT_ANIMATION_LID_CLOSED,
+    AGENT_ANIMATION_LID_OPEN,
+    AGENT_ANIMATION_NIGHT_RIDER,
+    AGENT_ANIMATION_PROFILE_CYAN,
+    AGENT_ANIMATION_PROFILE_EMBER,
+    AGENT_ANIMATION_PROFILE_PURPLE,
+    AGENT_ANIMATION_PURPLE_ATTENTION,
+    AGENT_ANIMATION_PURPLE_COMPLETE,
+    AGENT_ANIMATION_PURPLE_IDLE,
+    AGENT_ANIMATION_PURPLE_LID_OPEN,
+    AGENT_ANIMATION_PURPLE_TIDE,
+    AGENT_ANIMATION_SOLID_GREEN,
+    AGENT_ANIMATION_WORKING_MODES,
     CLOSED_LID_AWAKE_AGENTS,
     CLOSED_LID_AWAKE_ALWAYS,
     CLOSED_LID_AWAKE_NEVER,
@@ -139,11 +173,17 @@ from sidepulse.settings import (
     TERMINAL_APP_WEZTERM,
     AgentMonitorSettings,
     DeviceDisplaySetting,
+    agent_animation_profile_document,
+    agent_animation_profile_id,
+    builtin_agent_animation_profiles,
+    custom_agent_animation_id,
+    default_agent_animation_id,
     default_config_dir,
     default_lid_animation,
     default_settings_path,
     load_settings,
     save_settings,
+    with_imported_agent_animation_profile,
 )
 from sidepulse.status_bar_launch import (
     LAUNCH_AGENT_LABEL,
@@ -789,6 +829,29 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(virtual_device.FRAME_RATE, 60.0)
         self.assertAlmostEqual(virtual_device.FRAME_INTERVAL, 1.0 / 60.0)
 
+    def test_compact_preview_loops_one_shot_program_without_changing_loops(self) -> None:
+        try:
+            from sidepulse import virtual_device
+        except (ImportError, SystemExit) as exc:
+            self.skipTest(str(exc))
+
+        one_shot = "off 90ms\n#00E5FF 180ms ease\noff 320ms"
+        self.assertEqual(
+            virtual_device.compact_preview_program(one_shot),
+            f"{one_shot}\nrepeat",
+        )
+        looping = "#00E5FF 180ms ease\nrepeat"
+        self.assertEqual(virtual_device.compact_preview_program(looping), looping)
+
+        shutdown = (
+            "0:#000000 75ms ease; 7:#000000 75ms ease\n"
+            "1:#000000 75ms ease; 6:#000000 75ms ease"
+        )
+        shutdown_preview = virtual_device.compact_preview_program(shutdown)
+        self.assertTrue(shutdown_preview.startswith("#00E5FF\n"))
+        self.assertTrue(shutdown_preview.endswith("\nrepeat"))
+        self.assertNotIn("#00E5FF", shutdown)
+
     def test_led_wasm_controller_uses_packaged_firmware_engine(self) -> None:
         try:
             from sidepulse.led_wasm import LedWasmUnavailableError, SdLedWasmController
@@ -820,6 +883,44 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(controller.step(0), [(255, 0, 0), (0, 255, 0)])
+
+    def test_core_animation_programs_transition_from_current_pixels(self) -> None:
+        try:
+            from sidepulse.led_wasm import LedWasmUnavailableError, SdLedWasmController
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        try:
+            controller = SdLedWasmController(led_count=8)
+        except LedWasmUnavailableError as exc:
+            self.skipTest(str(exc))
+
+        controller.parse(builtin_animation_program("cyan-roll", 8), 0)
+        working_pixels = controller.step(700)
+        controller.parse(builtin_animation_program("solid-green", 8), 700)
+        self.assertEqual(controller.step(700), working_pixels)
+        transition_pixels = controller.step(860)
+        self.assertNotEqual(transition_pixels, working_pixels)
+        self.assertNotEqual(transition_pixels, [(0, 255, 102)] * 8)
+        self.assertEqual(controller.step(1020), [(0, 255, 102)] * 8)
+
+        controller.parse(builtin_animation_program("lid-closed", 8), 1020)
+        green = (0, 255, 102)
+        black = (0, 0, 0)
+        self.assertEqual(controller.step(1020), [green] * 8)
+        self.assertEqual(
+            controller.step(1095),
+            [black, green, green, green, green, green, green, black],
+        )
+        self.assertEqual(
+            controller.step(1170),
+            [black, black, green, green, green, green, black, black],
+        )
+        self.assertEqual(
+            controller.step(1245),
+            [black, black, black, green, green, black, black, black],
+        )
+        self.assertEqual(controller.step(1320), [black] * 8)
 
     def test_virtual_screen_bar_led_blend_spans_three_leds(self) -> None:
         try:
@@ -1705,6 +1806,63 @@ class AgentMonitorTests(unittest.TestCase):
         ]
         self.assertEqual(len(tab_views), 1)
         self.assertEqual(tab_views[0].numberOfTabViewItems(), 6)
+        animations_tab = next(
+            tab_views[0].tabViewItemAtIndex_(index)
+            for index in range(tab_views[0].numberOfTabViewItems())
+            if str(tab_views[0].tabViewItemAtIndex_(index).identifier()) == "animations"
+        )
+        agent_animations = animations_tab.view()
+        self.assertFalse(
+            any(
+                hasattr(view, "numberOfTabViewItems")
+                for view in agent_animations.subviews()
+            )
+        )
+        previews = [
+            view
+            for view in agent_animations.subviews()
+            if isinstance(view, status_bar.VirtualLedView)
+        ]
+        self.assertEqual(len(previews), len(status_bar.ANIMATION_UI_STATES))
+        show_buttons = [
+            view
+            for view in agent_animations.subviews()
+            if hasattr(view, "title") and str(view.title()) == "Show"
+        ]
+        self.assertEqual(len(show_buttons), len(status_bar.ANIMATION_UI_STATES))
+        self.assertEqual(
+            {str(button.representedObject()) for button in show_buttons},
+            set(status_bar.ANIMATION_UI_STATES),
+        )
+        edit_buttons = [
+            view
+            for view in agent_animations.subviews()
+            if hasattr(view, "title") and str(view.title()) == "Edit"
+        ]
+        self.assertEqual(len(edit_buttons), len(status_bar.ANIMATION_UI_STATES))
+        self.assertEqual(
+            {str(button.representedObject()) for button in edit_buttons},
+            set(status_bar.ANIMATION_UI_STATES),
+        )
+        labels = {
+            str(view.stringValue())
+            for view in agent_animations.subviews()
+            if hasattr(view, "stringValue")
+        }
+        self.assertIn("Lid Open", labels)
+        self.assertIn("Lid Closed", labels)
+        self.assertIn("Working / Tool / Long Task", labels)
+        self.assertNotIn("Tool Running", labels)
+        self.assertNotIn("Long Task Progress", labels)
+        self.assertNotIn("agent_animation_tool_running", target.settings_fields)
+        self.assertNotIn("agent_animation_long_task_progress", target.settings_fields)
+        self.assertNotIn(
+            "lid",
+            {
+                str(tab_views[0].tabViewItemAtIndex_(index).identifier())
+                for index in range(tab_views[0].numberOfTabViewItems())
+            },
+        )
         self.assertIn("debug_log_status", target.settings_fields)
         self.assertIn("status_history_status", target.settings_fields)
         self.assertIn("status_history_chart", target.settings_fields)
@@ -1714,11 +1872,106 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("idle_timeout_minutes", target.settings_fields)
         self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
         self.assertIn("status_history_timeframe", target.settings_fields)
-        self.assertIn("closed_animation_program", target.settings_fields)
-        self.assertIn("closed_animation_duration", target.settings_fields)
-        self.assertIn("open_animation_program", target.settings_fields)
-        self.assertIn("open_animation_duration", target.settings_fields)
+        self.assertIn("agent_animation_lid_closed", target.settings_fields)
+        self.assertIn("agent_animation_lid_open", target.settings_fields)
+        for mode in status_bar.ANIMATION_UI_STATES:
+            self.assertIn(f"agent_animation_{mode}", target.settings_fields)
+            self.assertIn(
+                f"agent_animation_preview_{mode}", target.settings_fields
+            )
         self.assertNotIn("closed_lid_system_override", target.settings_buttons)
+
+    def test_status_bar_validates_custom_agent_animation_program(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        status_bar.validate_agent_animation_program("off\n#FF0000 pulse\nrepeat")
+        with self.assertRaises(DeviceWriteError):
+            status_bar.validate_agent_animation_program("x" * 513)
+
+    def test_animation_preview_timer_runs_while_menu_tracks_input(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        timer = object()
+        modes = []
+        run_loop = SimpleNamespace(
+            addTimer_forMode_=lambda added_timer, mode: modes.append(
+                (added_timer, mode)
+            )
+        )
+        fake = SimpleNamespace(agent_animation_preview_timer=None)
+        with (
+            patch(
+                "sidepulse.status_bar.NSTimer",
+                SimpleNamespace(
+                    timerWithTimeInterval_target_selector_userInfo_repeats_=(
+                        lambda *args: timer
+                    )
+                ),
+            ),
+            patch(
+                "sidepulse.status_bar.NSRunLoop",
+                SimpleNamespace(mainRunLoop=lambda: run_loop),
+            ),
+        ):
+            status_bar.StatusBarController.start_agent_animation_preview_timer(fake)
+
+        self.assertEqual(fake.agent_animation_preview_timer, timer)
+        self.assertEqual(
+            modes,
+            [
+                (timer, status_bar.NSRunLoopCommonModes),
+                (timer, status_bar.NSEventTrackingRunLoopMode),
+            ],
+        )
+
+    def test_status_bar_show_agent_animation_on_device_writes_and_restores(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SidePulsePro"
+            root.mkdir()
+            device = status_bar.StatusBarDevice(
+                device_id=str(root),
+                name="SidePulse Pro",
+                root=root,
+                target=root / "LEDS.LED",
+                connected=True,
+                display="agent",
+            )
+            restore_calls = []
+            fake = SimpleNamespace(
+                performSelectorOnMainThread_withObject_waitUntilDone_=(
+                    lambda selector, value, wait: restore_calls.append(
+                        (selector, value, wait)
+                    )
+                )
+            )
+
+            with patch("sidepulse.status_bar.time.sleep"):
+                status_bar.StatusBarController.show_agent_animation_on_device_worker(
+                    fake,
+                    AgentMode.WORKING,
+                    AGENT_ANIMATION_KITT,
+                    "",
+                    [device],
+                    17,
+                )
+
+            program = (root / "LEDS.LED").read_text()
+            self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
+            self.assertEqual(
+                restore_calls,
+                [("restoreLedDisplay:", "17", False)],
+            )
 
     def test_status_history_status_text_is_compact(self) -> None:
         try:
@@ -3499,14 +3752,17 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
-            "off\n#020204 6s pulse\nrepeat",
+            "off 2s\n3:#006060 4:#006060 2s ease\nrepeat",
         )
-        self.assertEqual(program_for_display_state(LedDisplayState.DONE), "#00FF66")
+        self.assertEqual(
+            program_for_display_state(LedDisplayState.DONE),
+            "#00FF66 320ms cosine",
+        )
         self.assertIn("#FF3A00 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
         self.assertEqual(
             program_for_display_state(LedDisplayState.WORKING, led_count=2).splitlines(),
             [
-                "off 160ms cosine",
+                "off 320ms cosine",
                 "0:#00E5FF 760ms pulse 0ms; 1:#00E5FF 760ms pulse 260ms",
                 "repeat",
             ],
@@ -3515,9 +3771,234 @@ class AgentMonitorTests(unittest.TestCase):
             len(program_for_display_state(LedDisplayState.WORKING, led_count=8).splitlines()),
             3,
         )
+        kitt_program = program_for_agent_mode(
+            AgentMode.WORKING,
+            led_count=8,
+            brightness=128,
+            animation_style=AGENT_ANIMATION_KITT,
+        )
+        validate_led_text(kitt_program)
+        self.assertLessEqual(len(kitt_program.encode("utf-8")), 512)
+        self.assertIn("7:#00E5FF 320ms pulse 595ms", kitt_program)
+        self.assertIn("6:#00E5FF 320ms pulse 0ms", kitt_program)
+        red_kitt_program = program_for_agent_mode(
+            AgentMode.WORKING,
+            led_count=8,
+            animation_style=AGENT_ANIMATION_KITT_RED,
+        )
+        validate_led_text(red_kitt_program)
+        self.assertIn("7:#FF1800 320ms pulse 595ms", red_kitt_program)
+        for mode in AgentMode:
+            with self.subTest(kitt_mode=mode.value):
+                validate_led_text(
+                    program_for_agent_mode(
+                        mode,
+                        animation_style=AGENT_ANIMATION_KITT,
+                    )
+                )
+        custom_program = program_for_agent_mode(
+            AgentMode.COMPLETED,
+            brightness=64,
+            animation_style=AGENT_ANIMATION_CUSTOM,
+            custom_program="off\\n#FF0000 pulse\\nrepeat",
+        )
+        self.assertEqual(
+            custom_program,
+            "brightness 64\noff\n#FF0000 pulse\nrepeat",
+        )
         self.assertEqual(
             program_for_display_state(LedDisplayState.DONE, brightness=128),
-            "brightness 128\n#00FF66",
+            "brightness 128\n#00FF66 320ms cosine",
+        )
+
+    def test_builtin_animation_programs_are_loaded_from_led_files(self) -> None:
+        self.assertEqual(builtin_animation_file_name("idle-pulse", 2), "idle-pulse-2.LED")
+        self.assertEqual(builtin_animation_file_name("idle-pulse", 8), "idle-pulse-8.LED")
+        self.assertEqual(
+            builtin_animation_program("idle-pulse", 8),
+            "off 2s\n3:#006060 4:#006060 2s ease\nrepeat",
+        )
+        self.assertEqual(
+            builtin_animation_program("idle-pulse", 2),
+            "off 2s\n0:#006060 1:#006060 2s ease\nrepeat",
+        )
+        self.assertEqual(builtin_animation_file_name("cyan-roll", 2), "cyan-roll-2.LED")
+        self.assertEqual(builtin_animation_file_name("cyan-roll", 8), "cyan-roll-8.LED")
+        self.assertEqual(builtin_animation_file_name("cyan-roll", 5), "cyan-roll-8.LED")
+        self.assertIn("1:#00E5FF", builtin_animation_program("cyan-roll", 2))
+        self.assertNotIn("2:#00E5FF", builtin_animation_program("cyan-roll", 2))
+        self.assertIn("7:#FF1800", builtin_animation_program("kitt-red", 8))
+        self.assertEqual(
+            builtin_animation_file_name("ember-tide", 2),
+            "ember-tide-2.LED",
+        )
+        self.assertIn(
+            "1:#F23819 760ms pulse 260ms",
+            builtin_animation_program("ember-tide", 2),
+        )
+        self.assertIn(
+            "7:#F23819 760ms pulse 665ms",
+            builtin_animation_program("ember-tide", 8),
+        )
+        self.assertIn(
+            "7:#FF1200 360ms pulse 630ms",
+            builtin_animation_program("night-rider", 8),
+        )
+        self.assertEqual(
+            builtin_animation_file_name(AGENT_ANIMATION_PURPLE_IDLE, 2),
+            "purple-idle-2.LED",
+        )
+        self.assertIn(
+            "3:#FF00FF 4:#FF00FF 2s ease",
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 8),
+        )
+        self.assertIn(
+            "1:#FF00FF 760ms pulse 260ms",
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_TIDE, 2),
+        )
+        self.assertIn(
+            "#FF00FF 1.6s pulse",
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_ATTENTION, 8),
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_COMPLETE, 8),
+            "#FF00FF 320ms cosine",
+        )
+        self.assertIn(
+            "#FF00FF 220ms ease",
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_LID_OPEN, 8),
+        )
+
+    def test_color_profiles_use_the_exact_cyan_animation_shapes(self) -> None:
+        def without_colors(program: str) -> str:
+            return re.sub(r"#[0-9A-Fa-f]{6}", "#COLOR", program)
+
+        corresponding_animations = (
+            (
+                AGENT_ANIMATION_IDLE_PULSE,
+                AGENT_ANIMATION_EMBER_IDLE,
+                AGENT_ANIMATION_PURPLE_IDLE,
+            ),
+            (
+                AGENT_ANIMATION_CYAN_ROLL,
+                AGENT_ANIMATION_EMBER_TIDE,
+                AGENT_ANIMATION_PURPLE_TIDE,
+            ),
+            (
+                AGENT_ANIMATION_AMBER_PULSE,
+                AGENT_ANIMATION_EMBER_ATTENTION,
+                AGENT_ANIMATION_PURPLE_ATTENTION,
+            ),
+            (
+                AGENT_ANIMATION_CYAN_COMPLETE,
+                AGENT_ANIMATION_EMBER_COMPLETE,
+                AGENT_ANIMATION_PURPLE_COMPLETE,
+            ),
+            (
+                AGENT_ANIMATION_LID_OPEN,
+                AGENT_ANIMATION_EMBER_LID_OPEN,
+                AGENT_ANIMATION_PURPLE_LID_OPEN,
+            ),
+        )
+        for led_count in (2, 8):
+            for cyan_id, ember_id, purple_id in corresponding_animations:
+                cyan_shape = without_colors(
+                    builtin_animation_program(cyan_id, led_count)
+                )
+                with self.subTest(profile="Ember", animation=cyan_id, leds=led_count):
+                    self.assertEqual(
+                        without_colors(
+                            builtin_animation_program(ember_id, led_count)
+                        ),
+                        cyan_shape,
+                    )
+                with self.subTest(profile="Purple", animation=cyan_id, leds=led_count):
+                    self.assertEqual(
+                        without_colors(
+                            builtin_animation_program(purple_id, led_count)
+                        ),
+                        cyan_shape,
+                    )
+
+    def test_purple_profile_uses_ff00ff_for_every_colored_animation(self) -> None:
+        purple_animations = (
+            AGENT_ANIMATION_PURPLE_IDLE,
+            AGENT_ANIMATION_PURPLE_TIDE,
+            AGENT_ANIMATION_PURPLE_ATTENTION,
+            AGENT_ANIMATION_PURPLE_COMPLETE,
+            AGENT_ANIMATION_PURPLE_LID_OPEN,
+        )
+        for led_count in (2, 8):
+            for animation_id in purple_animations:
+                with self.subTest(animation=animation_id, leds=led_count):
+                    self.assertEqual(
+                        set(
+                            re.findall(
+                                r"#[0-9A-Fa-f]{6}",
+                                builtin_animation_program(animation_id, led_count),
+                            )
+                        ),
+                        {"#FF00FF"},
+                    )
+
+    def test_ember_profile_uses_f23819_for_every_colored_animation(self) -> None:
+        ember_animations = (
+            AGENT_ANIMATION_EMBER_IDLE,
+            AGENT_ANIMATION_EMBER_TIDE,
+            AGENT_ANIMATION_EMBER_ATTENTION,
+            AGENT_ANIMATION_EMBER_COMPLETE,
+            AGENT_ANIMATION_EMBER_LID_OPEN,
+        )
+        for led_count in (2, 8):
+            for animation_id in ember_animations:
+                with self.subTest(animation=animation_id, leds=led_count):
+                    self.assertEqual(
+                        set(
+                            re.findall(
+                                r"#[0-9A-Fa-f]{6}",
+                                builtin_animation_program(animation_id, led_count),
+                            )
+                        ),
+                        {"#F23819"},
+                    )
+
+    def test_core_state_transitions_and_lid_close_outside_in_program(self) -> None:
+        completed = builtin_animation_program("solid-green", 8)
+        working = builtin_animation_program("cyan-roll", 8)
+        lid_closed = builtin_animation_program("lid-closed", 8)
+
+        self.assertEqual(completed, "#00FF66 320ms cosine")
+        self.assertTrue(working.startswith("off 320ms cosine\n"))
+        self.assertEqual(
+            lid_closed.splitlines(),
+            [
+                "0:#000000 75ms ease; 7:#000000 75ms ease",
+                "1:#000000 75ms ease; 6:#000000 75ms ease",
+                "2:#000000 75ms ease; 5:#000000 75ms ease",
+                "3:#000000 75ms ease; 4:#000000 75ms ease",
+                "#000000 1s",
+            ],
+        )
+        self.assertEqual(
+            builtin_animation_program("lid-closed", 2),
+            "0:#000000 300ms ease; 1:#000000 300ms ease\n#000000 1s",
+        )
+        self.assertEqual(
+            default_lid_animation(LID_ANIMATION_CLOSED).duration_seconds,
+            1.3,
+        )
+
+    def test_device_brightness_multiplies_authored_file_brightness(self) -> None:
+        self.assertEqual(
+            apply_brightness("brightness 128\n#FF0000", 128),
+            "brightness 64\n#FF0000",
+        )
+        self.assertEqual(
+            apply_brightness(
+                "brightness 200\n#FF0000\nbrightness 100\n#00FF00",
+                64,
+            ),
+            "brightness 50\n#FF0000\nbrightness 25\n#00FF00",
         )
 
     def test_write_mode_to_leds_uses_device_specific_program(self) -> None:
@@ -3531,7 +4012,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(result.target, device / "LEDS.LED")
             self.assertEqual(
                 (device / "LEDS.LED").read_text(),
-                "off 160ms cosine\n"
+                "off 320ms cosine\n"
                 "0:#00E5FF 760ms pulse 0ms; 1:#00E5FF 760ms pulse 260ms\n"
                 "repeat",
             )
@@ -3540,15 +4021,19 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(
                 (device / "LEDS.LED").read_text(),
-                "off\n#020204 6s pulse\nrepeat",
+                "off 2s\n0:#006060 1:#006060 2s ease\nrepeat",
             )
 
             write_mode_to_leds(AgentMode.COMPLETED, device_path=device, brightness=64)
 
-            self.assertEqual((device / "LEDS.LED").read_text(), "brightness 64\n#00FF66")
+            self.assertEqual(
+                (device / "LEDS.LED").read_text(),
+                "brightness 64\n#00FF66 320ms cosine",
+            )
 
     def test_led_count_uses_product_name(self) -> None:
         self.assertEqual(led_count_for_target(Path("/Volumes/SidePulseDot/LEDS.LED")), 2)
+        self.assertEqual(led_count_for_target(Path("/Volumes/PulseDot/LEDS.LED")), 2)
         self.assertEqual(led_count_for_target(Path("/Volumes/SidePulsePro/LEDS.LED")), 8)
 
     def test_sidepulse_working_program_uses_eight_leds(self) -> None:
@@ -3560,7 +4045,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             lines = (device / "LEDS.LED").read_text().splitlines()
             self.assertEqual(len(lines), 3)
-            self.assertEqual(lines[0], "off 160ms cosine")
+            self.assertEqual(lines[0], "off 320ms cosine")
             self.assertIn("0:#00E5FF 760ms pulse 0ms", lines[1])
             self.assertIn("5:#00E5FF 760ms pulse 475ms", lines[1])
             self.assertIn("7:#00E5FF 760ms pulse 665ms", lines[1])
@@ -3580,6 +4065,36 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
             self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
+
+    def test_agent_led_controller_tracks_mode_and_animation_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+
+            default = controller.sync_mode(AgentMode.WORKING)
+            same_default = controller.sync_mode(AgentMode.TOOL_RUNNING)
+            kitt = controller.sync_mode(
+                AgentMode.WORKING,
+                animation_style=AGENT_ANIMATION_KITT,
+            )
+            custom_tool = controller.sync_mode(
+                AgentMode.TOOL_RUNNING,
+                animation_style=AGENT_ANIMATION_CUSTOM,
+                custom_program="#123456",
+            )
+            unchanged = controller.sync_mode(
+                AgentMode.TOOL_RUNNING,
+                animation_style=AGENT_ANIMATION_CUSTOM,
+                custom_program="#123456",
+            )
+
+            self.assertTrue(default.changed)
+            self.assertFalse(same_default.changed)
+            self.assertTrue(kitt.changed)
+            self.assertTrue(custom_tool.changed)
+            self.assertFalse(unchanged.changed)
+            self.assertEqual((device / "LEDS.LED").read_text(), "#123456")
 
     def test_battery_parser_uses_adapter_watts_and_raw_capacity(self) -> None:
         payload = plistlib.dumps(
@@ -3814,6 +4329,209 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertTrue(
             closed_lid_awake_should_hold(CLOSED_LID_AWAKE_ALWAYS, agents_active=False)
         )
+
+    def test_lid_close_holds_final_led_state_only_when_sleep_is_allowed(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        self.assertTrue(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=False,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=True,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=False,
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=False,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
+                agents_active=False,
+            )
+        )
+        self.assertTrue(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
+                agents_active=False,
+                battery_safeguard_active=True,
+            )
+        )
+        self.assertTrue(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
+                agents_active=True,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_closed_led_state_should_hold(
+                lid_closed=True,
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=None,
+            )
+        )
+
+    def test_lid_close_animation_runs_only_when_sleep_prevention_is_inactive(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        self.assertFalse(
+            status_bar.lid_close_animation_should_run(
+                sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
+                agents_active=False,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_close_animation_should_run(
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=True,
+            )
+        )
+        self.assertFalse(
+            status_bar.lid_close_animation_should_run(
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=None,
+            )
+        )
+        self.assertTrue(
+            status_bar.lid_close_animation_should_run(
+                sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+                agents_active=False,
+            )
+        )
+        self.assertTrue(
+            status_bar.lid_close_animation_should_run(
+                sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
+                agents_active=True,
+            )
+        )
+
+    def test_lid_poll_enables_hold_on_close_and_clears_it_on_open(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        animations = []
+        controller = status_bar.StatusBarController.alloc().init()
+        controller.lid_poll_in_flight = True
+        controller.pending_lid_error = None
+        controller.pending_lid_closed = True
+        controller.last_lid_error = None
+        controller.lid_poll_backoff_until_monotonic = 0.0
+        controller.last_lid_closed = False
+        controller.lid_closed_led_hold_active = False
+
+        with (
+            patch("sidepulse.status_bar.log_status_bar"),
+            patch.object(
+                status_bar.StatusBarController,
+                "should_run_lid_close_animation",
+                return_value=True,
+            ),
+            patch.object(
+                status_bar.StatusBarController,
+                "should_hold_lid_closed_led_state",
+                return_value=True,
+            ),
+            patch.object(
+                status_bar.StatusBarController,
+                "play_lid_animation",
+                side_effect=lambda kind: animations.append(kind),
+            ),
+        ):
+            controller.handleLidPollResult_(None)
+            self.assertTrue(controller.lid_closed_led_hold_active)
+            self.assertEqual(animations, [LID_ANIMATION_CLOSED])
+
+            controller.pending_lid_closed = False
+            controller.handleLidPollResult_(None)
+
+        self.assertFalse(controller.lid_closed_led_hold_active)
+        self.assertEqual(animations, [LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN])
+
+    def test_lid_poll_skips_close_animation_while_sleep_prevention_is_active(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        controller = status_bar.StatusBarController.alloc().init()
+        controller.lid_poll_in_flight = True
+        controller.pending_lid_error = None
+        controller.pending_lid_closed = True
+        controller.last_lid_error = None
+        controller.lid_poll_backoff_until_monotonic = 0.0
+        controller.last_lid_closed = False
+        controller.lid_closed_led_hold_active = True
+
+        with (
+            patch("sidepulse.status_bar.log_status_bar"),
+            patch.object(
+                status_bar.StatusBarController,
+                "should_run_lid_close_animation",
+                return_value=False,
+            ),
+            patch.object(
+                status_bar.StatusBarController,
+                "play_lid_animation",
+            ) as play_lid_animation,
+        ):
+            controller.handleLidPollResult_(None)
+
+        self.assertTrue(controller.last_lid_closed)
+        self.assertFalse(controller.lid_closed_led_hold_active)
+        play_lid_animation.assert_not_called()
+
+    def test_lid_close_hold_suppresses_refresh_until_conditions_change(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        controller = status_bar.StatusBarController.alloc().init()
+        controller.leds_enabled = True
+        controller.lid_closed_led_hold_active = True
+        controller.led_animation_until_monotonic = 0.0
+        controller.led_sync_in_flight = False
+
+        with (
+            patch.object(controller, "sync_virtual_status_device"),
+            patch.object(
+                status_bar.StatusBarController,
+                "should_hold_lid_closed_led_state",
+                side_effect=[True, False],
+            ),
+            patch("sidepulse.status_bar.threading.Thread") as thread,
+            patch("sidepulse.status_bar.log_status_bar"),
+        ):
+            controller.sync_leds(AgentMode.IDLE_READY, None, "agent")
+            thread.assert_not_called()
+            self.assertTrue(controller.lid_closed_led_hold_active)
+
+            controller.sync_leds(AgentMode.WORKING, None, "agent")
+            thread.assert_called_once()
+            thread.return_value.start.assert_called_once()
+
+        self.assertFalse(controller.lid_closed_led_hold_active)
 
     def test_status_bar_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:
         try:
@@ -4276,6 +4994,306 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(loaded.recent_session_retention_seconds, 36 * 60 * 60)
             self.assertEqual(loaded.idle_timeout_seconds, 15 * 60)
+
+    def test_settings_round_trip_agent_animations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings()
+            settings = settings.with_agent_animation(
+                AgentMode.WORKING,
+                AGENT_ANIMATION_KITT,
+            )
+            settings = settings.with_agent_animation(
+                AgentMode.BLOCKED_ERROR,
+                AGENT_ANIMATION_CUSTOM,
+                custom_program="off\n#FF0000 pulse\nrepeat",
+            )
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            saved_json = json.loads(settings_path.read_text())
+            custom_metadata = next(
+                iter(saved_json["custom_agent_animations"].values())
+            )
+            self.assertNotIn("program", custom_metadata)
+            custom_path = settings_path.parent / "animations" / custom_metadata["file"]
+            self.assertEqual(
+                custom_path.read_text(),
+                "off\n#FF0000 pulse\nrepeat\n",
+            )
+
+            self.assertEqual(
+                loaded.agent_animation(AgentMode.WORKING).style,
+                AGENT_ANIMATION_KITT,
+            )
+            self.assertEqual(
+                loaded.agent_animation(AgentMode.BLOCKED_ERROR).custom_program,
+                "off\n#FF0000 pulse\nrepeat",
+            )
+            self.assertEqual(
+                loaded.agent_animation(AgentMode.COMPLETED).style,
+                AGENT_ANIMATION_CYAN_COMPLETE,
+            )
+
+            custom_path.write_text("brightness 128\n#123456\n")
+            reloaded = load_settings(settings_path)
+            self.assertEqual(
+                reloaded.agent_animation(AgentMode.BLOCKED_ERROR).custom_program,
+                "brightness 128\n#123456",
+            )
+
+    def test_agent_animation_catalog_is_shared_by_every_state(self) -> None:
+        settings = AgentMonitorSettings()
+        animation_id = custom_agent_animation_id(
+            "Purple Sweep",
+            settings.custom_agent_animations,
+        )
+        settings = settings.with_custom_agent_animation(
+            animation_id,
+            name="Purple Sweep",
+            program="off\n#AA44FF 700ms pulse\nrepeat",
+        )
+
+        expected = (
+            AGENT_ANIMATION_IDLE_PULSE,
+            AGENT_ANIMATION_CYAN_ROLL,
+            AGENT_ANIMATION_CYAN_COMPLETE,
+            AGENT_ANIMATION_AMBER_PULSE,
+            AGENT_ANIMATION_SOLID_GREEN,
+            AGENT_ANIMATION_KITT,
+            AGENT_ANIMATION_KITT_RED,
+            AGENT_ANIMATION_EMBER_IDLE,
+            AGENT_ANIMATION_EMBER_TIDE,
+            AGENT_ANIMATION_EMBER_ATTENTION,
+            AGENT_ANIMATION_EMBER_COMPLETE,
+            AGENT_ANIMATION_EMBER_LID_OPEN,
+            AGENT_ANIMATION_PURPLE_IDLE,
+            AGENT_ANIMATION_PURPLE_TIDE,
+            AGENT_ANIMATION_PURPLE_ATTENTION,
+            AGENT_ANIMATION_PURPLE_COMPLETE,
+            AGENT_ANIMATION_PURPLE_LID_OPEN,
+            AGENT_ANIMATION_NIGHT_RIDER,
+            AGENT_ANIMATION_LID_OPEN,
+            AGENT_ANIMATION_LID_CLOSED,
+            animation_id,
+        )
+        self.assertEqual(settings.agent_animation_choices(), expected)
+        for mode in ANIMATION_STATES:
+            with self.subTest(mode=mode):
+                selected = settings.with_agent_animation(mode, animation_id)
+                self.assertEqual(selected.agent_animation_id(mode), animation_id)
+                self.assertEqual(
+                    selected.agent_animation(mode).custom_program,
+                    "off\n#AA44FF 700ms pulse\nrepeat",
+                )
+
+    def test_working_tool_and_long_task_share_one_animation_setting(self) -> None:
+        settings = AgentMonitorSettings().with_agent_animation(
+            AgentMode.TOOL_RUNNING,
+            AGENT_ANIMATION_KITT,
+        )
+
+        self.assertEqual(
+            {
+                settings.agent_animation_id(mode)
+                for mode in AGENT_ANIMATION_WORKING_MODES
+            },
+            {AGENT_ANIMATION_KITT},
+        )
+
+    def test_animation_profile_round_trip_includes_every_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings()
+            custom_id = custom_agent_animation_id(
+                "Purple Sweep",
+                settings.custom_agent_animations,
+            )
+            settings = settings.with_custom_agent_animation(
+                custom_id,
+                name="Purple Sweep",
+                program="#AA44FF 700ms pulse\nrepeat",
+            )
+            for index, mode in enumerate(AgentMode):
+                selection = custom_id if index % 2 else AGENT_ANIMATION_KITT
+                settings = settings.with_agent_animation(mode, selection)
+            profile_id = agent_animation_profile_id(
+                "Focus",
+                settings.agent_animation_profiles,
+            )
+            settings = settings.with_agent_animation_profile(
+                profile_id,
+                name="Focus",
+            )
+            save_settings(settings, settings_path)
+
+            loaded = load_settings(settings_path)
+            profile = loaded.agent_animation_profiles[profile_id]
+            self.assertEqual(set(profile.animations), set(ANIMATION_STATES))
+            reset = loaded
+            for mode in AgentMode:
+                reset = reset.with_agent_animation(mode, AGENT_ANIMATION_DEFAULT)
+            applied = reset.with_applied_agent_animation_profile(profile_id)
+            self.assertEqual(
+                [applied.agent_animation_id(mode) for mode in AgentMode],
+                [loaded.agent_animation_id(mode) for mode in AgentMode],
+            )
+
+    def test_cyan_is_the_default_builtin_profile(self) -> None:
+        settings = AgentMonitorSettings()
+
+        self.assertEqual(
+            settings.matching_agent_animation_profile_id(),
+            AGENT_ANIMATION_PROFILE_CYAN,
+        )
+        self.assertEqual(
+            [settings.agent_animation_id(mode) for mode in ANIMATION_STATES],
+            [default_agent_animation_id(mode) for mode in ANIMATION_STATES],
+        )
+
+        purple = settings.with_applied_agent_animation_profile(
+            AGENT_ANIMATION_PROFILE_PURPLE
+        )
+        self.assertEqual(
+            purple.matching_agent_animation_profile_id(),
+            AGENT_ANIMATION_PROFILE_PURPLE,
+        )
+        self.assertEqual(
+            purple.agent_animation_id(AgentMode.WORKING),
+            AGENT_ANIMATION_PURPLE_TIDE,
+        )
+        self.assertEqual(
+            purple.agent_animation_id(ANIMATION_STATE_LID_OPEN),
+            AGENT_ANIMATION_PURPLE_LID_OPEN,
+        )
+        self.assertEqual(
+            purple.agent_animation_id(ANIMATION_STATE_LID_CLOSED),
+            AGENT_ANIMATION_LID_CLOSED,
+        )
+
+    def test_shipped_profile_json_matches_builtin_profiles(self) -> None:
+        profiles = builtin_agent_animation_profiles()
+        expected = {
+            "cyan": AGENT_ANIMATION_PROFILE_CYAN,
+            "ember": AGENT_ANIMATION_PROFILE_EMBER,
+            "purple": AGENT_ANIMATION_PROFILE_PURPLE,
+        }
+        for file_stem, profile_id in expected.items():
+            with self.subTest(profile=file_stem):
+                document = json.loads(
+                    (
+                        Path(__file__).parent.parent
+                        / "profiles"
+                        / f"{file_stem}.json"
+                    ).read_text()
+                )
+                profile = profiles[profile_id]
+                self.assertEqual(document["name"], profile.name)
+                self.assertEqual(document["animations"], profile.animations)
+                self.assertEqual(set(profile.animations), set(ANIMATION_STATES))
+
+    def test_builtin_profiles_keep_saved_animation_selections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "agent_animations": {
+                            AgentMode.IDLE_READY.value: {
+                                "style": AGENT_ANIMATION_KITT,
+                                "custom_program": "",
+                            }
+                        },
+                        "agent_animation_profiles": {
+                            "profile:default": {
+                                "name": "Default",
+                                "animations": {
+                                    mode: default_agent_animation_id(mode)
+                                    for mode in ANIMATION_STATES
+                                },
+                            }
+                        },
+                    }
+                )
+            )
+
+            loaded = load_settings(settings_path)
+
+        self.assertEqual(
+            loaded.agent_animation_id(AgentMode.IDLE_READY),
+            AGENT_ANIMATION_KITT,
+        )
+        self.assertEqual(
+            set(loaded.agent_animation_profiles),
+            {
+                AGENT_ANIMATION_PROFILE_CYAN,
+                AGENT_ANIMATION_PROFILE_EMBER,
+                AGENT_ANIMATION_PROFILE_PURPLE,
+            },
+        )
+
+    def test_animation_profile_json_is_self_contained_and_importable(self) -> None:
+        settings = AgentMonitorSettings()
+        custom_id = custom_agent_animation_id(
+            "Purple Sweep",
+            settings.custom_agent_animations,
+        )
+        settings = settings.with_custom_agent_animation(
+            custom_id,
+            name="Purple Sweep",
+            program="#AA44FF 700ms pulse\nrepeat",
+        )
+        for mode in AgentMode:
+            settings = settings.with_agent_animation(mode, custom_id)
+
+        document = agent_animation_profile_document(settings)
+
+        self.assertEqual(document["format"], "sidepulse-animation-profile")
+        self.assertEqual(document["version"], 1)
+        self.assertEqual(document["name"], "Current")
+        self.assertEqual(
+            set(document["animations"]),
+            set(ANIMATION_STATES),
+        )
+        self.assertEqual(
+            document["custom_animations"][custom_id]["program"],
+            "#AA44FF 700ms pulse\nrepeat",
+        )
+
+        imported, profile_id = with_imported_agent_animation_profile(
+            AgentMonitorSettings(),
+            json.loads(json.dumps(document)),
+        )
+        self.assertIn(profile_id, imported.agent_animation_profiles)
+        for mode in AgentMode:
+            self.assertEqual(imported.agent_animation_id(mode), custom_id)
+            self.assertEqual(
+                imported.agent_animation(mode).custom_program,
+                "#AA44FF 700ms pulse\nrepeat",
+            )
+
+    def test_animation_profile_json_requires_all_agent_states(self) -> None:
+        document = agent_animation_profile_document(AgentMonitorSettings())
+        del document["animations"][AgentMode.UNKNOWN.value]
+
+        with self.assertRaisesRegex(ValueError, "every agent state"):
+            with_imported_agent_animation_profile(
+                AgentMonitorSettings(),
+                document,
+            )
+
+    def test_settings_do_not_migrate_pr_kitt_toggle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(json.dumps({"kitt_mode_enabled": True}))
+
+            loaded = load_settings(settings_path)
+
+            self.assertEqual(
+                loaded.agent_animation(AgentMode.WORKING).style,
+                AGENT_ANIMATION_CYAN_ROLL,
+            )
 
     def test_settings_migrates_missing_agent_list_timing_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

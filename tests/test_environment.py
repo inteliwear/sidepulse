@@ -298,6 +298,7 @@ class CleanInstallTests(unittest.TestCase):
             for p in (REPO_ROOT / "src/sidepulse/resources").rglob("*")
             if p.is_file()
             and p.suffix != ".py"
+            and not p.name.startswith(".")
             and "__pycache__" not in p.parts
         }
         self.assertTrue(source_resources, "expected packaged resource files")

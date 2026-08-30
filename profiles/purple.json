@@ -1,0 +1,18 @@
+{
+  "animations": {
+    "blocked_error": "purple-attention",
+    "completed": "purple-complete",
+    "idle_ready": "purple-idle",
+    "lid_closed": "lid-closed",
+    "lid_open": "purple-lid-open",
+    "long_task_progress": "purple-tide",
+    "tool_running": "purple-tide",
+    "unknown": "purple-idle",
+    "waiting_for_input": "purple-attention",
+    "working": "purple-tide"
+  },
+  "custom_animations": {},
+  "format": "sidepulse-animation-profile",
+  "name": "Purple",
+  "version": 1
+}

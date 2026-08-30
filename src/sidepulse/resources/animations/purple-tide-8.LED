@@ -1,0 +1,3 @@
+off 320ms cosine
+0:#FF00FF 760ms pulse 0ms; 1:#FF00FF 760ms pulse 95ms; 2:#FF00FF 760ms pulse 190ms; 3:#FF00FF 760ms pulse 285ms; 4:#FF00FF 760ms pulse 380ms; 5:#FF00FF 760ms pulse 475ms; 6:#FF00FF 760ms pulse 570ms; 7:#FF00FF 760ms pulse 665ms
+repeat

@@ -101,6 +101,25 @@ Agent status modes:
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
 | Completed | The agent finished successfully. | Solid green. |
 
+Each mode can be configured independently in **Settings... → Animations**.
+Every state uses the same animation library: **Idle Pulse**, **Cyan Roll**,
+**Amber Pulse**, **Solid Green**, **KITT Scanner**, **KITT Scanner Red**, and
+the **Ember** and **Purple** animation families, plus any named custom animation.
+**Add Custom…** adds a reusable `LEDS.LED` program to that shared
+library, and animation profiles save or apply all state selections together.
+The built-in profiles are **Cyan** (the default), **Ember**, and **Purple**.
+Built-ins live in `src/sidepulse/resources/animations/` as `.LED` files; patterns
+that depend on the hardware layout have only `-2.LED` and `-8.LED` variants.
+Custom programs are stored in the `animations/` folder beside `settings.json`.
+An animation may set its own `brightness`, which is multiplied by the device's
+brightness setting so the device setting remains the overall limit. The tab shows a
+live Screen Bar-rendered preview for every state;
+**Show** sends that pattern to connected agent-display devices for three
+seconds, then restores live status. **Current** appears whenever individual
+state selections no longer match one of the built-in or saved profiles.
+Profiles can be exported as self-contained JSON—including referenced custom
+animations—and imported on another SidePulse installation.
+
 When multiple states are active, SidePulse should show the most actionable
 mode first: Blocked / Error, Waiting for Input, Tool Running, Long Task
 Progress, Working, then Idle / Ready.
@@ -484,8 +503,8 @@ it. Remove the helper with:
 sudo "$(command -v sidepulse)" status-bar uninstall-sleep-helper
 ```
 
-Open `Settings...` to edit and preview the Lid Closed and Lid Open LED
-animations. Animation programs use the same `LEDS.LED` syntax as
+Open **Settings... → Animations** to choose and preview the Lid Closed and Lid
+Open rows alongside the agent-state animations. Animation programs use the same `LEDS.LED` syntax as
 `sidepulse write`; device brightness is applied automatically before writing.
 
 The app is also installed as a user LaunchAgent at
