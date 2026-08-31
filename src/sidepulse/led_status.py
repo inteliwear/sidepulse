@@ -336,6 +336,7 @@ class AgentLedController:
         self.last_state: LedDisplayState | None = None
         self.last_brightness: int | None = None
         self.last_animation_signature: tuple[str, str] | None = None
+        self.last_program: str | None = None
         self.last_error: str | None = None
         self.last_target: Path | None = None
         self.last_attempt_monotonic = 0.0
@@ -344,9 +345,20 @@ class AgentLedController:
         self.last_state = None
         self.last_brightness = None
         self.last_animation_signature = None
+        self.last_program = None
         self.last_error = None
         self.last_target = None
         self.last_attempt_monotonic = 0.0
+
+    def _last_program_is_current(self) -> bool:
+        if self.dry_run:
+            return True
+        if self.last_target is None or self.last_program is None:
+            return False
+        try:
+            return self.last_target.read_text(encoding="utf-8") == self.last_program
+        except (OSError, UnicodeError):
+            return False
 
     def sync_mode(
         self,
@@ -367,6 +379,7 @@ class AgentLedController:
             and brightness == self.last_brightness
             and animation_signature == self.last_animation_signature
             and self.last_error is None
+            and self._last_program_is_current()
         ):
             return LedStatusWrite(
                 state=state,
@@ -416,6 +429,7 @@ class AgentLedController:
         self.last_state = state
         self.last_brightness = brightness
         self.last_animation_signature = animation_signature
+        self.last_program = result.program
         self.last_error = None
         self.last_target = result.target
         return result

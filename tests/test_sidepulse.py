@@ -4109,6 +4109,27 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(third.changed)
             self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
 
+    def test_agent_led_controller_repairs_externally_changed_program(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device, brightness=211)
+
+            first = controller.sync_mode(
+                AgentMode.WORKING,
+                animation_style=AGENT_ANIMATION_PURPLE_TIDE,
+            )
+            target = device / "LEDS.LED"
+            target.write_text("off 2s\n3:#006060 4:#006060 2s ease\nrepeat")
+
+            repaired = controller.sync_mode(
+                AgentMode.WORKING,
+                animation_style=AGENT_ANIMATION_PURPLE_TIDE,
+            )
+
+            self.assertTrue(repaired.changed)
+            self.assertEqual(target.read_text(), first.program)
+
     def test_agent_led_controller_tracks_mode_and_animation_choice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             device = Path(tmp) / "SidePulsePro"
