@@ -5,6 +5,7 @@ import os
 import plistlib
 import subprocess
 import sys
+from dataclasses import replace
 import tempfile
 import time
 import unittest
@@ -1747,7 +1748,7 @@ class AgentMonitorTests(unittest.TestCase):
             if hasattr(view, "numberOfTabViewItems")
         ]
         self.assertEqual(len(tab_views), 1)
-        self.assertEqual(tab_views[0].numberOfTabViewItems(), 6)
+        self.assertEqual(tab_views[0].numberOfTabViewItems(), 7)
         self.assertIn("debug_log_status", target.settings_fields)
         self.assertIn("status_history_status", target.settings_fields)
         self.assertIn("status_history_chart", target.settings_fields)
@@ -1757,6 +1758,10 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("idle_timeout_minutes", target.settings_fields)
         self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
         self.assertIn("status_history_timeframe", target.settings_fields)
+        self.assertIn("remote_host_popup", target.settings_fields)
+        self.assertIn("remote_host_name", target.settings_fields)
+        self.assertIn("remote_ssh_target", target.settings_fields)
+        self.assertIn("remote_host_status", target.settings_fields)
         self.assertIn("closed_animation_program", target.settings_fields)
         self.assertIn("closed_animation_duration", target.settings_fields)
         self.assertIn("open_animation_program", target.settings_fields)
@@ -6521,6 +6526,13 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             SESSION_OPEN_APP,
         )
 
+        remote_claude = status_for("claude", "Claude on macmini")
+        remote_claude = replace(
+            remote_claude,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+        )
+        self.assertEqual(default_session_open_action(remote_claude), SESSION_OPEN_APP)
+
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
             provider="claude",
@@ -6533,7 +6545,10 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             cwd="/Users/pero/pgit/sdstatus_bitbang",
         )
 
-        self.assertEqual(session_deep_link(status), "claude://")
+        self.assertEqual(
+            session_deep_link(status),
+            "claude://resume?session=1ca4348e-2aec-4147-9e81-d7d56364d257&cwd=%2FUsers%2Fpero%2Fpgit%2Fsdstatus_bitbang",
+        )
         self.assertEqual(
             session_resume_command(status),
             "cd /Users/pero/pgit/sdstatus_bitbang && claude --resume 1ca4348e-2aec-4147-9e81-d7d56364d257",
@@ -6549,6 +6564,19 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "url",
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
+        )
+
+        remote_status = replace(
+            status,
+            session_id="remote:macmini:1ca4348e-2aec-4147-9e81-d7d56364d257",
+            origin="Claude on macmini",
+        )
+        # Remote sessions open the desktop app (the transcript is on the
+        # host, so a resume deep link would fail); local sessions resume.
+        self.assertEqual(session_deep_link(remote_status), "claude://")
+        self.assertEqual(
+            session_vscode_link(remote_status),
+            "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
         )
 
 
