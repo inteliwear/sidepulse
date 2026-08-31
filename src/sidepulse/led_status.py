@@ -154,6 +154,8 @@ def program_for_agent_mode(
             brightness,
         )
     if animation_style in {
+        "off",
+        "immediate-off",
         "cyan-complete",
         "ember-idle",
         "ember-tide",

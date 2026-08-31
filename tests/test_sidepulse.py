@@ -139,6 +139,8 @@ from sidepulse.settings import (
     AGENT_ANIMATION_LID_CLOSED,
     AGENT_ANIMATION_LID_OPEN,
     AGENT_ANIMATION_NIGHT_RIDER,
+    AGENT_ANIMATION_IMMEDIATE_OFF,
+    AGENT_ANIMATION_SLOW_OFF,
     AGENT_ANIMATION_PROFILE_CYAN,
     AGENT_ANIMATION_PROFILE_EMBER,
     AGENT_ANIMATION_PROFILE_PURPLE,
@@ -3812,6 +3814,22 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
     def test_builtin_animation_programs_are_loaded_from_led_files(self) -> None:
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_SLOW_OFF, 2),
+            "off 1s",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_SLOW_OFF, 8),
+            "off 1s",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_IMMEDIATE_OFF, 2),
+            "off",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_IMMEDIATE_OFF, 8),
+            "off",
+        )
         self.assertEqual(builtin_animation_file_name("idle-pulse", 2), "idle-pulse-2.LED")
         self.assertEqual(builtin_animation_file_name("idle-pulse", 8), "idle-pulse-8.LED")
         self.assertEqual(
@@ -3849,7 +3867,7 @@ class AgentMonitorTests(unittest.TestCase):
             "purple-idle-2.LED",
         )
         self.assertIn(
-            "3:#FF00FF 4:#FF00FF 2s ease",
+            "2:#9F00FF 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease",
             builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 8),
         )
         self.assertIn(
@@ -3873,12 +3891,28 @@ class AgentMonitorTests(unittest.TestCase):
         def without_colors(program: str) -> str:
             return re.sub(r"#[0-9A-Fa-f]{6}", "#COLOR", program)
 
+        for led_count in (2, 8):
+            cyan_idle_shape = without_colors(
+                builtin_animation_program(AGENT_ANIMATION_IDLE_PULSE, led_count)
+            )
+            self.assertEqual(
+                without_colors(
+                    builtin_animation_program(AGENT_ANIMATION_EMBER_IDLE, led_count)
+                ),
+                cyan_idle_shape,
+            )
+            if led_count == 2:
+                self.assertEqual(
+                    without_colors(
+                        builtin_animation_program(
+                            AGENT_ANIMATION_PURPLE_IDLE,
+                            led_count,
+                        )
+                    ),
+                    cyan_idle_shape,
+                )
+
         corresponding_animations = (
-            (
-                AGENT_ANIMATION_IDLE_PULSE,
-                AGENT_ANIMATION_EMBER_IDLE,
-                AGENT_ANIMATION_PURPLE_IDLE,
-            ),
             (
                 AGENT_ANIMATION_CYAN_ROLL,
                 AGENT_ANIMATION_EMBER_TIDE,
@@ -3922,7 +3956,6 @@ class AgentMonitorTests(unittest.TestCase):
 
     def test_purple_profile_uses_ff00ff_for_every_colored_animation(self) -> None:
         purple_animations = (
-            AGENT_ANIMATION_PURPLE_IDLE,
             AGENT_ANIMATION_PURPLE_TIDE,
             AGENT_ANIMATION_PURPLE_ATTENTION,
             AGENT_ANIMATION_PURPLE_COMPLETE,
@@ -3940,6 +3973,16 @@ class AgentMonitorTests(unittest.TestCase):
                         ),
                         {"#FF00FF"},
                     )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 2),
+            "off 2s\n0:#FF00FF 1:#FF00FF 2s ease\nrepeat",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 8),
+            "off 2s\n"
+            "2:#9F00FF 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease\n"
+            "repeat",
+        )
 
     def test_ember_profile_uses_f23819_for_every_colored_animation(self) -> None:
         ember_animations = (
@@ -5056,6 +5099,8 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
         expected = (
+            AGENT_ANIMATION_SLOW_OFF,
+            AGENT_ANIMATION_IMMEDIATE_OFF,
             AGENT_ANIMATION_IDLE_PULSE,
             AGENT_ANIMATION_CYAN_ROLL,
             AGENT_ANIMATION_CYAN_COMPLETE,

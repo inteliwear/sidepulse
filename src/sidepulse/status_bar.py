@@ -172,6 +172,8 @@ from .settings import (
     AGENT_ANIMATION_LID_OPEN,
     AGENT_ANIMATION_MODES,
     AGENT_ANIMATION_NIGHT_RIDER,
+    AGENT_ANIMATION_IMMEDIATE_OFF,
+    AGENT_ANIMATION_SLOW_OFF,
     AGENT_ANIMATION_PURPLE_ATTENTION,
     AGENT_ANIMATION_PURPLE_COMPLETE,
     AGENT_ANIMATION_PURPLE_IDLE,
@@ -4705,6 +4707,8 @@ def add_agent_animation_popup(parent, state: str, x: int, y: int, target):
 
 def agent_animation_label(settings: AgentMonitorSettings, animation_id: str) -> str:
     built_in = {
+        AGENT_ANIMATION_SLOW_OFF: "Slow Off",
+        AGENT_ANIMATION_IMMEDIATE_OFF: "Immediate Off",
         AGENT_ANIMATION_IDLE_PULSE: "Idle Pulse",
         AGENT_ANIMATION_CYAN_ROLL: "Cyan Roll",
         AGENT_ANIMATION_CYAN_COMPLETE: "Cyan Complete",

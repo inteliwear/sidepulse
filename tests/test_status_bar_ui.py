@@ -742,6 +742,8 @@ class WindowBuildTests(StatusBarTestCase):
                     )
                 ],
                 [
+                    "Slow Off",
+                    "Immediate Off",
                     "Idle Pulse",
                     "Cyan Roll",
                     "Cyan Complete",
