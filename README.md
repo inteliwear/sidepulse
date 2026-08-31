@@ -99,7 +99,7 @@ Agent status modes:
 | Waiting for Input | The agent needs a user decision, approval, or additional context. | Slow amber pulse. |
 | Long Task Progress | A longer job has measurable progress. | Cyan rolling animation. |
 | Blocked / Error | The agent cannot continue, a tool failed, or a recoverable error needs attention. | Slow amber pulse. |
-| Completed | The agent finished successfully. | Solid green. |
+| Completed | The agent finished successfully. | Solid green for 12 seconds, then idle. |
 
 When multiple states are active, SidePulse should show the most actionable
 mode first: Blocked / Error, Waiting for Input, Tool Running, Long Task
@@ -122,6 +122,28 @@ Aggregation priority:
 | 5 | Working | Show while one or more agents are actively processing. |
 | 6 | Completed | Show briefly when the latest active agent completes successfully. |
 | 7 | Idle / Ready | Show only when all known agents are idle or no fresh agent status exists. |
+
+The device only has four LED patterns for those seven modes: dim idle pulse,
+cyan roll, amber pulse, and solid green. Working, Tool Running, and Long Task
+Progress share cyan. Waiting for Input and Blocked / Error share amber.
+
+Display rules:
+
+- Completed stays solid green for 12 seconds, then the aggregate returns to
+  Idle / Ready.
+- `Show Battery on Plug/Unplug` never overrides Working, Tool Running,
+  Waiting, Long Task, or Blocked. Battery preview is also debounced so a
+  flapping MagSafe connection cannot keep stealing the LEDs.
+- A Hermes `PermissionRequest` shorter than two seconds is shown as Working.
+  Hermes emits that event around auto-approved `terminal` / `execute_code`
+  calls; the amber Ask pulse is reserved for an approval that actually lingers.
+  Codex `PermissionRequest` stays Ask immediately and remains sticky until the
+  matching tool finishes.
+- Hermes `PostToolUseFailure` is shown as Working. A failed tool that the
+  agent continues past is not a blocked LED state. Approval denials and API
+  failures still use Blocked / Error.
+- Hermes `PostToolUse` stays Working while the model thinks. Codex still
+  expires a stale post-tool Working state after two minutes.
 
 Agent statuses should include a timestamp. SidePulse should ignore stale
 statuses after a short timeout so disconnected or finished agents do not hold
@@ -432,7 +454,8 @@ reconnect.
 The dropdown and Settings window can switch the LEDs between agent status and
 battery status. When agent status is selected, `Show Battery on Plug/Unplug`
 can briefly show the battery animation for seven seconds after the power source
-changes.
+changes, but only while every agent is Idle or Completed. Active agent work
+keeps the cyan or amber status animation.
 
 The Devices section also offers **Add Screen Bar**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers

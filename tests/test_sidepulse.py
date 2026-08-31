@@ -29,6 +29,7 @@ from sidepulse.battery import (
     BatterySnapshot,
     parse_ioreg_battery_plist,
     program_for_battery,
+    should_arm_battery_power_preview,
 )
 from sidepulse import collector as collector_module
 from sidepulse import cli as cli_module
@@ -66,6 +67,7 @@ from sidepulse.led_status import (
     display_state_for_mode,
     led_count_for_target,
     program_for_display_state,
+    resolve_led_display_kind,
     write_mode_to_leds,
 )
 from sidepulse.lid_sleep import (
@@ -125,6 +127,8 @@ from sidepulse.settings import (
     HISTORY_TIMEFRAME_48H_SECONDS,
     LID_ANIMATION_CLOSED,
     LID_ANIMATION_OPEN,
+    LED_DISPLAY_AGENT,
+    LED_DISPLAY_BATTERY,
     LED_DISPLAY_CUSTOM,
     SLEEP_PREVENTION_AGENTS,
     SLEEP_PREVENTION_ALWAYS,
@@ -1520,7 +1524,7 @@ class AgentMonitorTests(unittest.TestCase):
             device_errors={device.device_id: "old"},
             last_led_display_kind_by_device={},
             reset_led_controllers_for_device=lambda device_id: None,
-            active_led_display_kind_for_device=lambda _device, _battery: LED_DISPLAY_CUSTOM,
+            active_led_display_kind_for_device=lambda _device, _battery, _mode=None: LED_DISPLAY_CUSTOM,
             agent_controller_for_device=lambda _device: self.fail("agent LEDs should not sync"),
             battery_controller_for_device=lambda _device: self.fail("battery LEDs should not sync"),
         )
@@ -1670,7 +1674,7 @@ class AgentMonitorTests(unittest.TestCase):
             ),
             last_battery_snapshot=object(),
             reset_led_controllers_for_display_change=lambda: calls.append(("reset", None)),
-            active_led_display_kind=lambda snapshot: "agent",
+            active_led_display_kind=lambda snapshot, _mode=None: "agent",
             sync_leds=lambda mode, snapshot, display: calls.append(
                 ("sync", (mode, snapshot, display))
             ),
@@ -5149,10 +5153,10 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(len(snapshot.stale_statuses), 1)
             self.assertEqual(snapshot.stale_statuses[0].mode, AgentMode.COMPLETED)
 
-    def test_completed_status_stays_visible_for_twenty_minutes_by_default(self) -> None:
+    def test_completed_status_stays_visible_briefly_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "codex.jsonl"
-            recent_done = datetime.now(timezone.utc) - timedelta(minutes=19)
+            recent_done = datetime.now(timezone.utc) - timedelta(seconds=8)
             log.write_text(
                 json.dumps(
                     {
@@ -5175,6 +5179,33 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
             self.assertEqual(len(snapshot.statuses), 1)
+
+    def test_completed_status_returns_to_idle_after_brief_default_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "codex.jsonl"
+            recent_done = datetime.now(timezone.utc) - timedelta(seconds=20)
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": recent_done.isoformat(),
+                        "event": {
+                            "hook_event_name": "Stop",
+                            "session_id": "codex-session",
+                            "last_assistant_message": "Done.",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            monitor = AgentMonitor(
+                sources=(SourceSpec("codex", log),),
+                stale_after_seconds=3600,
+            )
+            snapshot = monitor.snapshot()
+
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.IDLE_READY)
+            self.assertEqual(snapshot.statuses, ())
 
     def test_completed_status_is_hidden_when_active_work_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5401,6 +5432,155 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
         self.assertEqual(snapshot.aggregate.active_count, 0)
         self.assertEqual(snapshot.statuses[0].event_name, "PostToolUse")
+
+    def test_hermes_post_tool_use_stays_working_while_model_thinks(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:abc123",
+            display_name="developer",
+            mode=AgentMode.WORKING,
+            updated_at=now
+            - timedelta(seconds=collector_module.POST_TOOL_WORKING_VISIBLE_SECONDS + 30),
+            event_name="PostToolUse",
+            session_id="hermes-session",
+            tool_name="read_file",
+        )
+
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+        self.assertEqual(snapshot.aggregate.active_count, 1)
+
+    def test_battery_preview_does_not_override_active_agent_modes(self) -> None:
+        for mode in (
+            AgentMode.WORKING,
+            AgentMode.TOOL_RUNNING,
+            AgentMode.WAITING_FOR_INPUT,
+            AgentMode.LONG_TASK_PROGRESS,
+            AgentMode.BLOCKED_ERROR,
+        ):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    resolve_led_display_kind(
+                        "agent",
+                        battery_preview_active=True,
+                        agent_mode=mode,
+                    ),
+                    LED_DISPLAY_AGENT,
+                )
+
+    def test_battery_preview_is_allowed_when_agent_is_idle_or_completed(self) -> None:
+        for mode in (AgentMode.IDLE_READY, AgentMode.COMPLETED):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    resolve_led_display_kind(
+                        "agent",
+                        battery_preview_active=True,
+                        agent_mode=mode,
+                    ),
+                    LED_DISPLAY_BATTERY,
+                )
+
+    def test_configured_battery_or_custom_display_still_wins(self) -> None:
+        self.assertEqual(
+            resolve_led_display_kind(
+                "battery",
+                battery_preview_active=False,
+                agent_mode=AgentMode.WORKING,
+            ),
+            LED_DISPLAY_BATTERY,
+        )
+        self.assertEqual(
+            resolve_led_display_kind(
+                "custom",
+                battery_preview_active=True,
+                agent_mode=AgentMode.WORKING,
+            ),
+            LED_DISPLAY_CUSTOM,
+        )
+
+    def test_power_flap_does_not_rearm_preview_immediately(self) -> None:
+        self.assertTrue(should_arm_battery_power_preview(False, True, now=10.0, last_armed_at=None))
+        self.assertFalse(should_arm_battery_power_preview(False, True, now=20.0, last_armed_at=10.0))
+        self.assertTrue(should_arm_battery_power_preview(False, True, now=45.0, last_armed_at=10.0))
+        self.assertFalse(should_arm_battery_power_preview(None, True, now=50.0, last_armed_at=None))
+        self.assertFalse(should_arm_battery_power_preview(True, True, now=50.0, last_armed_at=None))
+
+    def test_brief_permission_request_does_not_flash_ask(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:ask",
+            display_name="developer",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now - timedelta(seconds=0.4),
+            event_name="PermissionRequest",
+            session_id="hermes-session",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+
+    def test_sustained_permission_request_still_shows_ask(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:ask",
+            display_name="developer",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now - timedelta(seconds=3.0),
+            event_name="PermissionRequest",
+            session_id="hermes-session",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
+
+    def test_hermes_tool_failure_does_not_hold_blocked_led(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="hermes",
+            agent_id="hermes:agent:developer:fail",
+            display_name="developer",
+            mode=AgentMode.BLOCKED_ERROR,
+            updated_at=now,
+            event_name="PostToolUseFailure",
+            session_id="hermes-session",
+            tool_name="terminal",
+        )
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=12,
+            idle_visible_seconds=0,
+        )
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
 
     def test_internal_codex_helper_sessions_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
