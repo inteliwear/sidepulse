@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -172,6 +172,7 @@ from .settings import (
     TERMINAL_APP_CHOICES,
     TERMINAL_APP_WARP,
     TERMINAL_APP_WEZTERM,
+    AgentMonitorSettings,
     LedAnimationSetting,
     default_settings_path,
     default_lid_animation,
@@ -200,6 +201,77 @@ class StatusBarDevice:
     display: str
     brightness: int = 255
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class DndScheduleTransition:
+    key: str
+    enabled: bool
+
+
+def dnd_is_active(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+) -> bool:
+    return settings.dnd_enabled
+
+
+def latest_dnd_schedule_transition(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+) -> DndScheduleTransition | None:
+    if not settings.dnd_schedule_enabled:
+        return None
+
+    current = now or datetime.now().astimezone()
+    start_parts = tuple(int(part) for part in settings.dnd_start_time.split(":", 1))
+    end_parts = tuple(int(part) for part in settings.dnd_end_time.split(":", 1))
+    boundaries = [("start", start_parts, True)]
+    if start_parts != end_parts:
+        boundaries.append(("end", end_parts, False))
+
+    due: list[tuple[datetime, str, bool]] = []
+    for day_offset in (-1, 0):
+        day = current + timedelta(days=day_offset)
+        for label, (hour, minute), enabled in boundaries:
+            boundary = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if boundary <= current:
+                due.append((boundary, label, enabled))
+
+    boundary, label, enabled = max(due, key=lambda item: item[0])
+    key = f"{boundary:%Y-%m-%d}:{label}:{boundary:%H:%M}"
+    return DndScheduleTransition(key=key, enabled=enabled)
+
+
+def settings_after_dnd_schedule_transition(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+    *,
+    force: bool = False,
+) -> AgentMonitorSettings:
+    transition = latest_dnd_schedule_transition(settings, now)
+    if transition is None:
+        return settings
+    if not force and transition.key == settings.dnd_last_schedule_transition:
+        return settings
+    return settings.with_dnd(
+        enabled=transition.enabled,
+        schedule_transition=transition.key,
+    )
+
+
+def dnd_status_text(
+    settings: AgentMonitorSettings,
+    now: datetime | None = None,
+) -> str:
+    if settings.dnd_enabled:
+        status = "DND is on. LEDs are off."
+    else:
+        status = "DND is off."
+    if settings.dnd_schedule_enabled:
+        schedule = f"{settings.dnd_start_time}–{settings.dnd_end_time}"
+        return f"{status} Schedule: {schedule}."
+    return status
 
 
 @dataclass(frozen=True)
@@ -371,6 +443,8 @@ class StatusBarController(NSObject):
         self.device_errors = {}
         self.leds_enabled = True
         self.led_sync_in_flight = False
+        self.last_dnd_active = None
+        self.dnd_off_targets = set()
         self.last_led_error = None
         self.last_led_display_kind = LED_DISPLAY_AGENT
         self.last_connected_device_signature = None
@@ -442,13 +516,18 @@ class StatusBarController(NSObject):
             True,
         )
         self.show_setup_window_if_needed()
-        if SCREEN_BAR_FEATURE_ENABLED and self.settings.virtual_status_device_enabled:
+        if (
+            SCREEN_BAR_FEATURE_ENABLED
+            and self.settings.virtual_status_device_enabled
+            and not dnd_is_active(self.settings)
+        ):
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
 
     @objc.IBAction
     def refresh_(self, _sender):
+        self.apply_due_dnd_schedule()
         try:
             snapshot = self.monitor.snapshot(include_stale=False)
         except Exception as exc:
@@ -700,6 +779,18 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def setBatteryPowerPreviewFromCheckbox_(self, sender):
         self.set_battery_power_preview(sender.state() == NSOnState)
+
+    @objc.IBAction
+    def toggleDnd_(self, _sender):
+        self.set_dnd_enabled(not self.settings.dnd_enabled)
+
+    @objc.IBAction
+    def setDndFromCheckbox_(self, sender):
+        self.set_dnd_enabled(sender.state() == NSOnState)
+
+    @objc.IBAction
+    def saveDndSettings_(self, _sender):
+        self.save_dnd_schedule_from_fields()
 
     @objc.IBAction
     def saveAgentListTiming_(self, _sender):
@@ -1013,6 +1104,26 @@ class StatusBarController(NSObject):
         set_checkbox_state(
             self.settings_buttons.get("battery_power_preview"),
             self.settings.battery_show_on_power_change,
+        )
+        set_checkbox_state(
+            self.settings_buttons.get("dnd_enabled"),
+            self.settings.dnd_enabled,
+        )
+        set_checkbox_state(
+            self.settings_buttons.get("dnd_schedule"),
+            self.settings.dnd_schedule_enabled,
+        )
+        set_text_control_value(
+            self.settings_fields.get("dnd_start_time"),
+            self.settings.dnd_start_time,
+        )
+        set_text_control_value(
+            self.settings_fields.get("dnd_end_time"),
+            self.settings.dnd_end_time,
+        )
+        set_field_value(
+            self.settings_fields.get("dnd_status"),
+            dnd_status_text(self.settings),
         )
         for provider in ("codex", "claude", "grok"):
             popup = self.settings_fields.get(f"{provider}_session_opener")
@@ -1378,7 +1489,7 @@ class StatusBarController(NSObject):
         except Exception as exc:
             self.set_settings_message(f"Could not save Screen Bar: {exc}")
             return
-        if enabled:
+        if enabled and not dnd_is_active(self.settings):
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
@@ -1566,6 +1677,84 @@ class StatusBarController(NSObject):
         )
         self.refresh_settings_window()
         self.refresh_(None)
+
+    def set_dnd_enabled(self, enabled: bool) -> None:
+        try:
+            self.settings = self.settings.with_dnd(enabled=enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save DND setting: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        self.prepare_for_dnd_change()
+        self.set_settings_message(dnd_status_text(self.settings))
+        self.refresh_settings_window()
+        self.refresh_(None)
+
+    def save_dnd_schedule_from_fields(self) -> None:
+        start_time = text_control_value(
+            self.settings_fields.get("dnd_start_time")
+        ).strip()
+        end_time = text_control_value(
+            self.settings_fields.get("dnd_end_time")
+        ).strip()
+        schedule_enabled = checkbox_is_on(
+            self.settings_buttons.get("dnd_schedule")
+        )
+        try:
+            self.settings = self.settings.with_dnd(
+                schedule_enabled=schedule_enabled,
+                start_time=start_time,
+                end_time=end_time,
+                schedule_transition="",
+            )
+            if schedule_enabled:
+                self.settings = settings_after_dnd_schedule_transition(
+                    self.settings,
+                    force=True,
+                )
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save DND schedule: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        self.prepare_for_dnd_change()
+        self.set_settings_message(
+            f"DND schedule {'enabled' if schedule_enabled else 'disabled'}: "
+            f"{self.settings.dnd_start_time}–{self.settings.dnd_end_time}."
+        )
+        self.refresh_settings_window()
+        self.refresh_(None)
+
+    def apply_due_dnd_schedule(self, now: datetime | None = None) -> bool:
+        updated = settings_after_dnd_schedule_transition(self.settings, now)
+        if updated == self.settings:
+            return False
+
+        previous_enabled = self.settings.dnd_enabled
+        self.settings = updated
+        try:
+            save_settings(self.settings)
+        except Exception as exc:
+            log_status_bar(f"dnd schedule save error: {exc}")
+        self.prepare_for_dnd_change()
+        self.refresh_settings_window()
+        if previous_enabled != self.settings.dnd_enabled:
+            log_status_bar(
+                f"dnd schedule switched {'on' if self.settings.dnd_enabled else 'off'}"
+            )
+        return True
+
+    def prepare_for_dnd_change(self) -> None:
+        self.last_dnd_active = None
+        self.dnd_off_targets.clear()
+        self.led_animation_token += 1
+        self.led_animation_until_monotonic = 0.0
+        self.reset_led_controllers_for_display_change()
 
     def read_battery_snapshot(self) -> BatterySnapshot | None:
         try:
@@ -1849,6 +2038,18 @@ class StatusBarController(NSObject):
         if not self.leds_enabled:
             return
 
+        dnd_active = dnd_is_active(self.settings)
+        if dnd_active != self.last_dnd_active:
+            self.last_dnd_active = dnd_active
+            self.dnd_off_targets.clear()
+            self.reset_led_controllers_for_display_change()
+            log_status_bar(f"dnd={'active' if dnd_active else 'inactive'}")
+
+        if dnd_active:
+            self.virtual_status_device.hide()
+            self.sync_dnd_leds()
+            return
+
         self.sync_virtual_status_device(mode, battery_snapshot)
 
         if time.monotonic() < self.led_animation_until_monotonic:
@@ -1863,6 +2064,46 @@ class StatusBarController(NSObject):
             daemon=True,
         )
         thread.start()
+
+    def sync_dnd_leds(self) -> None:
+        if self.led_sync_in_flight:
+            return
+        self.led_sync_in_flight = True
+        thread = threading.Thread(
+            target=self.sync_dnd_leds_worker,
+            daemon=True,
+        )
+        thread.start()
+
+    def sync_dnd_leds_worker(self) -> None:
+        try:
+            self.sync_dnd_leds_now()
+        finally:
+            self.led_sync_in_flight = False
+
+    def sync_dnd_leds_now(self) -> None:
+        devices = [
+            device
+            for device in self.status_bar_devices()
+            if device.connected and device.device_id != VIRTUAL_DEVICE_ID
+        ]
+        active_errors: dict[str, str] = {}
+        for device in devices:
+            key = str(device.target)
+            if key in self.dnd_off_targets:
+                continue
+            try:
+                write_led_program("off", device_path=device.target)
+            except Exception as exc:
+                active_errors[device.device_id] = str(exc)
+                log_status_bar(f"dnd off error {device.name}: {exc}")
+                continue
+            self.dnd_off_targets.add(key)
+            self.device_errors.pop(device.device_id, None)
+            log_status_bar(f"dnd off device={device.name} target={device.target}")
+
+        self.device_errors.update(active_errors)
+        self.last_led_error = next(iter(self.device_errors.values()), None)
 
     def sync_virtual_status_device(
         self,
@@ -1921,6 +2162,9 @@ class StatusBarController(NSObject):
         battery_snapshot: BatterySnapshot | None,
         display_kind: str,
     ) -> None:
+        if dnd_is_active(self.settings):
+            self.sync_dnd_leds_now()
+            return
         devices = [
             device for device in self.status_bar_devices()
             if device.connected and device.device_id != VIRTUAL_DEVICE_ID
@@ -1981,7 +2225,7 @@ class StatusBarController(NSObject):
         *,
         animation: LedAnimationSetting | None = None,
     ) -> None:
-        if not self.leds_enabled:
+        if not self.leds_enabled or dnd_is_active(self.settings):
             return
         animation = animation or self.settings.lid_animation(kind)
         try:
@@ -2041,6 +2285,7 @@ class StatusBarController(NSObject):
 
     def connect_device(self) -> None:
         self.leds_enabled = True
+        self.dnd_off_targets.clear()
         self.status_bar_devices()
         self.reset_led_controllers_for_display_change()
         self.last_led_error = None
@@ -2049,6 +2294,7 @@ class StatusBarController(NSObject):
 
     def disconnect_device(self) -> None:
         self.leds_enabled = False
+        self.dnd_off_targets.clear()
         targets = self.current_led_targets()
         if not targets:
             targets = [
@@ -2350,6 +2596,23 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         )
         virtual_toggle.setTarget_(target)
         menu.addItem_(virtual_toggle)
+
+    menu.addItem_(NSMenuItem.separatorItem())
+    menu.addItem_(disabled_menu_item("Do Not Disturb"))
+    dnd_enabled = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "DND On",
+        "toggleDnd:",
+        "",
+    )
+    dnd_enabled.setTarget_(target)
+    dnd_enabled.setState_(1 if target.settings.dnd_enabled else 0)
+    menu.addItem_(dnd_enabled)
+    if target.settings.dnd_schedule_enabled:
+        menu.addItem_(
+            disabled_menu_item(
+                f"Schedule: {target.settings.dnd_start_time}–{target.settings.dnd_end_time}"
+            )
+        )
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Closed-Lid Sleep Prevention"))
@@ -3349,6 +3612,52 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         target,
         "setBatteryPowerPreviewFromCheckbox:",
     )
+    add_separator(devices_tab, 24, 282, tab_width - 48)
+    add_label(devices_tab, "Do Not Disturb", 24, 248, 240, 24)
+    dnd_enabled = add_checkbox(
+        devices_tab,
+        "DND On",
+        32,
+        210,
+        240,
+        24,
+        target,
+        "setDndFromCheckbox:",
+    )
+    dnd_schedule = add_checkbox(
+        devices_tab,
+        "Use a daily schedule",
+        32,
+        174,
+        220,
+        24,
+        target,
+        "saveDndSettings:",
+    )
+    add_label(devices_tab, "From", 280, 176, 44, 22)
+    dnd_start_time = add_editable_field(devices_tab, "", 328, 174, 70, 24)
+    add_label(devices_tab, "until", 410, 176, 44, 22)
+    dnd_end_time = add_editable_field(devices_tab, "", 458, 174, 70, 24)
+    add_label(devices_tab, "24-hour time", 540, 176, 90, 22)
+    add_button(
+        devices_tab,
+        "Save Schedule",
+        328,
+        132,
+        124,
+        28,
+        target,
+        "saveDndSettings:",
+    )
+    dnd_status = add_label(devices_tab, "", 32, 94, 590, 22)
+    add_label(
+        devices_tab,
+        "The schedule switches this toggle on/off; you can override it at any time.",
+        32,
+        62,
+        590,
+        22,
+    )
 
     add_label(sleep_tab, "Lid Closed", 24, 398, 120, 22)
     add_label(sleep_tab, "Duration", 516, 398, 70, 22)
@@ -3426,6 +3735,9 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "status_history_timeframe": history_timeframe,
         "status_history_status": history_status,
         "status_history_chart": history_chart,
+        "dnd_start_time": dnd_start_time,
+        "dnd_end_time": dnd_end_time,
+        "dnd_status": dnd_status,
         "message": message,
         "settings_path": settings_path,
     }
@@ -3434,6 +3746,8 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_transcripts": claude_transcripts,
         "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
+        "dnd_enabled": dnd_enabled,
+        "dnd_schedule": dnd_schedule,
     }
     return window
 
