@@ -3542,7 +3542,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
-            "off\n#020204 6s pulse\nrepeat",
+            "off",
         )
         self.assertEqual(program_for_display_state(LedDisplayState.DONE), "#00FF66")
         self.assertIn("#FF3A00 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
@@ -3558,6 +3558,21 @@ class AgentMonitorTests(unittest.TestCase):
             len(program_for_display_state(LedDisplayState.WORKING, led_count=8).splitlines()),
             3,
         )
+        kitt_program = program_for_display_state(
+            LedDisplayState.WORKING,
+            led_count=8,
+            brightness=128,
+            kitt_mode=True,
+        )
+        validate_led_text(kitt_program)
+        self.assertLessEqual(len(kitt_program.encode("utf-8")), 512)
+        kitt_lines = kitt_program.splitlines()
+        self.assertIn("7:#00E5FF 320ms pulse 595ms", kitt_lines[2])
+        self.assertIn("6:#00E5FF 320ms pulse 0ms", kitt_lines[3])
+        self.assertIn("0:#00E5FF 320ms pulse 510ms", kitt_lines[3])
+        self.assertEqual(kitt_lines[2].count("7:#00E5FF"), 1)
+        self.assertEqual(kitt_lines[3].count("7:#00E5FF"), 0)
+        self.assertTrue(kitt_program.endswith("repeat"))
         self.assertEqual(
             program_for_display_state(LedDisplayState.DONE, brightness=128),
             "brightness 128\n#00FF66",
@@ -3583,7 +3598,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(
                 (device / "LEDS.LED").read_text(),
-                "off\n#020204 6s pulse\nrepeat",
+                "off",
             )
 
             write_mode_to_leds(AgentMode.COMPLETED, device_path=device, brightness=64)
@@ -3623,6 +3638,24 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
             self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
+
+    def test_agent_led_controller_rewrites_working_state_when_kitt_mode_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+
+            standard = controller.sync_mode(AgentMode.WORKING)
+            kitt = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+            unchanged = controller.sync_mode(AgentMode.WORKING, kitt_mode=True)
+
+            self.assertTrue(standard.changed)
+            self.assertTrue(kitt.changed)
+            self.assertFalse(unchanged.changed)
+            program = (device / "LEDS.LED").read_text()
+            self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
+            self.assertIn("6:#00E5FF 320ms pulse 0ms", program)
+            self.assertIn("0:#00E5FF 320ms pulse 510ms", program)
 
     def test_battery_parser_uses_adapter_watts_and_raw_capacity(self) -> None:
         payload = plistlib.dumps(
@@ -4297,6 +4330,17 @@ class AgentMonitorTests(unittest.TestCase):
                 )
                 self.assertEqual(save_settings(saved), settings_path)
                 self.assertEqual(load_settings(), saved)
+
+    def test_settings_round_trip_kitt_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = AgentMonitorSettings().with_kitt_mode(True)
+
+            save_settings(settings, settings_path)
+            loaded = load_settings(settings_path)
+
+            self.assertTrue(loaded.kitt_mode_enabled)
+            self.assertFalse(AgentMonitorSettings().kitt_mode_enabled)
 
     def test_settings_round_trip_agent_list_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
