@@ -3831,7 +3831,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
             "off 2s\n"
-            "2:#006060 3:#006060 4:#006060 5:#006060 2s ease\n"
+            "2:#006060 3:#00E5FF 4:#00E5FF 5:#006060 2s ease\n"
             "repeat",
         )
         self.assertEqual(
@@ -3913,7 +3913,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(
             builtin_animation_program("idle-pulse", 8),
             "off 2s\n"
-            "2:#006060 3:#006060 4:#006060 5:#006060 2s ease\n"
+            "2:#006060 3:#00E5FF 4:#00E5FF 5:#006060 2s ease\n"
             "repeat",
         )
         self.assertEqual(
@@ -3947,7 +3947,7 @@ class AgentMonitorTests(unittest.TestCase):
             "purple-idle-2.LED",
         )
         self.assertIn(
-            "2:#9F00FF 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease",
+            "2:#9F009F 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease",
             builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 8),
         )
         self.assertIn(
@@ -4033,6 +4033,24 @@ class AgentMonitorTests(unittest.TestCase):
                         cyan_shape,
                     )
 
+    def test_idle_profiles_use_a_symmetric_center_bright_gradient(self) -> None:
+        for animation_id in (
+            AGENT_ANIMATION_IDLE_PULSE,
+            AGENT_ANIMATION_EMBER_IDLE,
+            AGENT_ANIMATION_PURPLE_IDLE,
+        ):
+            with self.subTest(animation=animation_id):
+                colors = re.findall(
+                    r"#[0-9A-Fa-f]{6}",
+                    builtin_animation_program(animation_id, 8).splitlines()[1],
+                )
+                self.assertEqual(len(colors), 4)
+                self.assertEqual(colors[0], colors[3])
+                self.assertEqual(colors[1], colors[2])
+                outer_peak = max(bytes.fromhex(colors[0][1:]))
+                center_peak = max(bytes.fromhex(colors[1][1:]))
+                self.assertLess(outer_peak, center_peak)
+
     def test_purple_profile_uses_ff00ff_for_every_colored_animation(self) -> None:
         purple_animations = (
             AGENT_ANIMATION_PURPLE_TIDE,
@@ -4059,13 +4077,12 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(
             builtin_animation_program(AGENT_ANIMATION_PURPLE_IDLE, 8),
             "off 2s\n"
-            "2:#9F00FF 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease\n"
+            "2:#9F009F 3:#FF00FF 4:#FF00FF 5:#9F009F 2s ease\n"
             "repeat",
         )
 
-    def test_ember_profile_uses_f23819_for_every_colored_animation(self) -> None:
+    def test_ember_profile_uses_f23819_as_its_primary_color(self) -> None:
         ember_animations = (
-            AGENT_ANIMATION_EMBER_IDLE,
             AGENT_ANIMATION_EMBER_TIDE,
             AGENT_ANIMATION_EMBER_ATTENTION,
             AGENT_ANIMATION_EMBER_COMPLETE,
@@ -4083,6 +4100,16 @@ class AgentMonitorTests(unittest.TestCase):
                         ),
                         {"#F23819"},
                     )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_EMBER_IDLE, 2),
+            "off 2s\n0:#F23819 1:#F23819 2s ease\nrepeat",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_EMBER_IDLE, 8),
+            "off 2s\n"
+            "2:#972310 3:#F23819 4:#F23819 5:#972310 2s ease\n"
+            "repeat",
+        )
 
     def test_core_state_transitions_and_lid_close_outside_in_program(self) -> None:
         completed = builtin_animation_program("solid-green", 8)
