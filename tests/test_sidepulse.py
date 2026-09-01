@@ -4180,6 +4180,35 @@ class AgentMonitorTests(unittest.TestCase):
                 "brightness 64\n#00FF66 320ms cosine",
             )
 
+    def test_ioreg_nits_ratio_parses_value_over_max(self) -> None:
+        from sidepulse.display_brightness import ioreg_nits_ratio
+
+        blob = (
+            '"IODisplayParameters" = {"BrightnessMilliNits"={"min"=3979,'
+            '"value"=381794,"uncalMilliNits"=140000,"max"=1599999},'
+            '"brightness"={"min"=0,"max"=65536,"value"=32768}}'
+        )
+        self.assertAlmostEqual(ioreg_nits_ratio(blob), 381794 / 1599999)
+        self.assertIsNone(ioreg_nits_ratio(""))
+        self.assertIsNone(ioreg_nits_ratio('"brightness"={"min"=0,"max"=65536,"value"=32768}'))
+
+    def test_system_brightness_ratio_prefers_display_services(self) -> None:
+        from sidepulse.display_brightness import system_brightness_ratio
+
+        with patch("sidepulse.display_brightness.display_services_ratio", return_value=0.18):
+            self.assertAlmostEqual(system_brightness_ratio(), 0.18)
+        with patch("sidepulse.display_brightness.display_services_ratio", return_value=None), patch(
+            "sidepulse.display_brightness.subprocess.run"
+        ) as run:
+            run.return_value = SimpleNamespace(
+                stdout='"BrightnessMilliNits"={"min"=0,"value"=25,"max"=100}'
+            )
+            self.assertAlmostEqual(system_brightness_ratio(), 0.25)
+        with patch("sidepulse.display_brightness.display_services_ratio", return_value=None), patch(
+            "sidepulse.display_brightness.subprocess.run", side_effect=OSError("no ioreg")
+        ):
+            self.assertEqual(system_brightness_ratio(), 1.0)
+
     def test_led_count_uses_product_name(self) -> None:
         self.assertEqual(led_count_for_target(Path("/Volumes/SidePulseDot/LEDS.LED")), 2)
         self.assertEqual(led_count_for_target(Path("/Volumes/PulseDot/LEDS.LED")), 2)
