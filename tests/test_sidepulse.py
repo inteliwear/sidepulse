@@ -4,6 +4,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,9 +56,11 @@ from sidepulse.install import (
     install_claude_hooks,
     install_codex_hooks,
     install_grok_hooks,
+    install_opencode_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_grok_hooks,
+    uninstall_opencode_hooks,
     update_codex_trusted_hashes,
 )
 from sidepulse.keep_awake import KeepAwakeController, status_file_for_target
@@ -86,10 +89,11 @@ from sidepulse.lid_sleep import (
     run_sudo_pmset_disablesleep,
     sleep_helper_sudoers_rule,
 )
-from sidepulse.models import AgentMode, AgentStatus, AggregateStatus
-from sidepulse.origin import ProcessInfo, origin_from_processes
+from sidepulse.models import AgentMode, AgentStatus, AggregateStatus, HookEvent
+from sidepulse.origin import ProcessInfo, origin_from_environment, origin_from_processes
 from sidepulse.providers import (
     detect_grok_config,
+    detect_opencode_config,
     default_log_path,
     default_state_dir,
     parse_log_line,
@@ -115,6 +119,7 @@ from sidepulse.session_actions import (
     SESSION_OPEN_VSCODE,
     default_session_open_action,
     session_deep_link,
+    session_open_action_label,
     session_open_target,
     session_resume_command,
     session_vscode_link,
@@ -357,6 +362,137 @@ class AgentMonitorTests(unittest.TestCase):
             "Claude Code CLI",
         )
 
+    def test_t3_code_origin_wins_over_nested_codex_process(self) -> None:
+        origin = origin_from_processes(
+            "codex",
+            (
+                ProcessInfo(pid=10, ppid=20, comm="codex", command="codex app-server"),
+                ProcessInfo(
+                    pid=20,
+                    ppid=1,
+                    comm="/Applications/T3 Code.app/Contents/MacOS/T3 Code",
+                    command="/Applications/T3 Code.app/Contents/MacOS/T3 Code",
+                ),
+            ),
+        )
+        self.assertIsNotNone(origin)
+        self.assertEqual(origin.label, "T3 Code")
+        self.assertEqual(origin.kind, "codex_t3code")
+
+    def test_t3_code_origin_recognizes_mcp_environment(self) -> None:
+        origin = origin_from_environment(
+            "opencode",
+            {"T3_MCP_BEARER_TOKEN": "present"},
+        )
+        self.assertIsNotNone(origin)
+        self.assertEqual(origin.label, "T3 Code")
+        self.assertEqual(origin.kind, "opencode_t3code")
+
+    def test_opencode_event_names_are_normalized(self) -> None:
+        record = parse_log_line(
+            "opencode",
+            json.dumps(
+                {
+                    "event_name": "tool.execute.before",
+                    "session_id": "open-session",
+                    "cwd": "/tmp/project",
+                    "tool_name": "bash",
+                    "timestamp": "2026-08-14T12:00:00Z",
+                }
+            ),
+        )
+        self.assertIsNotNone(record)
+        self.assertEqual(record.provider, "opencode")
+        self.assertEqual(record.event_name, "PreToolUse")
+
+    def test_opencode_session_can_resume_in_terminal(self) -> None:
+        from sidepulse.session_actions import session_resume_command
+
+        status = AgentStatus(
+            provider="opencode",
+            agent_id="opencode:session:open-session",
+            display_name="OpenCode session",
+            mode=AgentMode.COMPLETED,
+            updated_at=datetime.now(timezone.utc),
+            event_name="Stop",
+            session_id="open-session",
+            cwd="/tmp/project",
+        )
+        self.assertEqual(
+            session_resume_command(status),
+            "cd /tmp/project && opencode --session open-session",
+        )
+
+    def test_opencode_plugin_install_detect_and_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            plugin = base / ".config" / "opencode" / "plugins" / "sidepulse.js"
+            log = base / "state" / "opencode.jsonl"
+
+            installed = install_opencode_hooks(log_path=log, config_path=plugin)
+            self.assertTrue(installed.changed)
+            self.assertTrue(plugin.exists())
+            self.assertIn("sidepulse-opencode-plugin", plugin.read_text())
+            self.assertIn(str(log), plugin.read_text())
+            self.assertIn("T3_MCP_BEARER_TOKEN", plugin.read_text())
+
+            detected = detect_opencode_config(base)
+            self.assertTrue(detected.hooks_enabled)
+            self.assertEqual(detected.log_paths, (log,))
+
+            repeated = install_opencode_hooks(log_path=log, config_path=plugin)
+            self.assertFalse(repeated.changed)
+
+            removed = uninstall_opencode_hooks(log_path=log, config_path=plugin)
+            self.assertTrue(removed.changed)
+            self.assertFalse(plugin.exists())
+
+    def test_opencode_plugin_refuses_to_replace_unmanaged_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            plugin = base / "sidepulse.js"
+            plugin.write_text("export const ExistingPlugin = true\n")
+
+            with self.assertRaisesRegex(ValueError, "refusing to overwrite unmanaged"):
+                install_opencode_hooks(
+                    log_path=base / "opencode.jsonl",
+                    config_path=plugin,
+                )
+
+            self.assertEqual(plugin.read_text(), "export const ExistingPlugin = true\n")
+
+    @unittest.skipUnless(shutil.which("node"), "Node is required for OpenCode plugin test")
+    def test_opencode_plugin_emits_t3_busy_and_idle_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            plugin = base / "sidepulse.mjs"
+            log = base / "deleted-state" / "opencode.jsonl"
+            install_opencode_hooks(log_path=log, config_path=plugin)
+            log.unlink()
+            log.parent.rmdir()
+
+            runner = base / "run-plugin.mjs"
+            runner.write_text(
+                'import { SidePulsePlugin } from "./sidepulse.mjs"\n'
+                'const hooks = await SidePulsePlugin({directory: "/tmp/project", worktree: "/tmp/project"})\n'
+                'await hooks.event({event: {type: "session.status", properties: {sessionID: "open-session", status: {type: "busy"}}}})\n'
+                'await hooks.event({event: {type: "session.idle", properties: {sessionID: "open-session"}}})\n'
+            )
+            env = {**os.environ, "T3CODE_HOME": str(base / "t3")}
+            completed = subprocess.run(
+                [shutil.which("node"), str(runner)],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            payloads = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([item["event_name"] for item in payloads], ["session.status", "session.idle"])
+            self.assertTrue(all(item["agent_origin"] == "T3 Code" for item in payloads))
+
     def test_grok_log_line_normalizes_camel_case_payload(self) -> None:
         record = parse_log_line(
             "grok",
@@ -446,6 +582,10 @@ class AgentMonitorTests(unittest.TestCase):
 
             with (
                 patch("sidepulse.hook.detect_log_path", return_value=grok),
+                # Origin detection walks the real process tree before falling
+                # back to TERM_PROGRAM, so an editor-hosted test runner would
+                # otherwise decide this terminal session belongs to its host.
+                patch("sidepulse.origin.process_ancestry", return_value=()),
                 patch.dict(os.environ, {"TERM_PROGRAM": "Apple_Terminal"}, clear=True),
             ):
                 provider, path, line = routed_hook_payload("claude", claude, payload)
@@ -783,6 +923,27 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIsNotNone(image)
         self.assertEqual(image.size().width, 24)
         self.assertEqual(image.size().height, 18)
+
+    def test_status_bar_t3_origin_uses_t3_icon_without_codex_overlay(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        status = AgentStatus(
+            provider="codex",
+            agent_id="codex:session:abc",
+            display_name="T3 task",
+            mode=AgentMode.WORKING,
+            updated_at=datetime.now(timezone.utc),
+            event_name="UserPromptSubmit",
+            origin="T3 Code",
+        )
+        sentinel = object()
+        with patch("sidepulse.status_bar.host_icon_for_origin", return_value=sentinel):
+            image = status_bar.session_origin_icon_for_status(status)
+
+        self.assertIs(image, sentinel)
 
     def test_status_bar_session_row_icon_combines_status_and_origin(self) -> None:
         try:
@@ -1909,6 +2070,7 @@ class AgentMonitorTests(unittest.TestCase):
             },
         )
         self.assertIn("debug_log_status", target.settings_fields)
+        self.assertIn("t3code_hook_status", target.settings_fields)
         self.assertIn("status_history_status", target.settings_fields)
         self.assertIn("status_history_chart", target.settings_fields)
         self.assertIn("session_terminal", target.settings_fields)
@@ -2184,9 +2346,11 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("eject_guard", target.setup_buttons)
         self.assertIn("eject_guard_uninstall", target.setup_buttons)
         self.assertIn("sleep_helper", target.setup_buttons)
+        self.assertIn("opencode", target.setup_buttons)
         self.assertIn("launch_status", target.setup_fields)
         self.assertIn("eject_status", target.setup_fields)
         self.assertIn("sleep_status", target.setup_fields)
+        self.assertIn("opencode_status", target.setup_fields)
 
     def test_first_launch_setup_window_only_shows_until_completed(self) -> None:
         try:
@@ -3608,6 +3772,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        opencode_result = SimpleNamespace(
+            provider="opencode",
+            config_path=Path("/tmp/sidepulse.js"),
+            log_path=Path("/tmp/opencode.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3633,6 +3804,11 @@ class AgentMonitorTests(unittest.TestCase):
                 return_value=cursor_result,
             ) as cursor,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
+            patch.object(
+                cli_module,
+                "install_opencode_hooks",
+                return_value=opencode_result,
+            ) as opencode,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3649,6 +3825,7 @@ class AgentMonitorTests(unittest.TestCase):
         claude.assert_called_once()
         cursor.assert_called_once()
         grok.assert_called_once()
+        opencode.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
 
@@ -6615,6 +6792,69 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(snapshot.aggregate.mode, AgentMode.IDLE_READY)
             self.assertEqual(snapshot.statuses, ())
 
+    def test_t3_title_helpers_are_ignored_without_hiding_standalone_codex(self) -> None:
+        now = datetime.now(timezone.utc)
+        helper = collector_module.HookEvent(
+            provider="codex",
+            logged_at=now,
+            event_name="UserPromptSubmit",
+            raw={
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "t3-title",
+                "prompt": (
+                    "Generate a title that will help the user recognize this T3 Code "
+                    "thread weeks later. Return JSON with exactly one key: title."
+                ),
+                "agent_origin": "T3 Code",
+            },
+            session_id="t3-title",
+            message="Generate a title for this T3 Code thread",
+            origin="T3 Code",
+        )
+        standalone = collector_module.HookEvent(
+            provider="codex",
+            logged_at=now,
+            event_name="UserPromptSubmit",
+            raw={**helper.raw, "session_id": "standalone", "agent_origin": "Codex"},
+            session_id="standalone",
+            message=helper.message,
+            origin="Codex",
+        )
+        metadata = collector_module.StatusMetadata(cwd="/tmp/project")
+
+        self.assertTrue(collector_module.should_ignore_record(helper, metadata))
+        self.assertFalse(collector_module.should_ignore_record(standalone, metadata))
+
+    def test_structured_t3_helper_operation_removes_live_session(self) -> None:
+        store = collector_module.LiveAgentMonitor(sources=(), stale_after_seconds=3600)
+        now = datetime.now(timezone.utc)
+        session_id = "t3-helper"
+        store.ingest_record(
+            collector_module.HookEvent(
+                provider="codex",
+                logged_at=now,
+                event_name="SessionStart",
+                raw={"hook_event_name": "SessionStart", "session_id": session_id},
+                session_id=session_id,
+            )
+        )
+        self.assertEqual(len(store.statuses_by_key), 1)
+
+        store.ingest_record(
+            collector_module.HookEvent(
+                provider="codex",
+                logged_at=now,
+                event_name="UserPromptSubmit",
+                raw={
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": session_id,
+                    "agent_internal_operation": "generateThreadTitle",
+                },
+                session_id=session_id,
+            )
+        )
+        self.assertEqual(store.statuses_by_key, {})
+
     def test_codex_transcript_fallback_marks_recent_user_turn_active(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -6910,6 +7150,897 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
             self.assertEqual(snapshot.statuses[0].event_name, "Stop")
+
+    def test_t3code_canonical_events_track_all_provider_lifecycles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            now = datetime.now(timezone.utc)
+            providers = ("codex", "claudeAgent", "opencode", "cursor", "grok")
+            for index, provider in enumerate(providers):
+                thread_id = f"00000000-0000-4000-8000-{index:012d}"
+                path = root / f"events.{thread_id}.log"
+                started_at = (now + timedelta(milliseconds=index * 2)).isoformat()
+                ended_at = (now + timedelta(milliseconds=index * 2 + 1)).isoformat()
+                path.write_text(
+                    "\n".join(
+                        [
+                            f"[{started_at}] CANON: "
+                            + json.dumps(
+                                {
+                                    "type": "turn.started",
+                                    "provider": provider,
+                                    "threadId": thread_id,
+                                    "createdAt": started_at,
+                                    "payload": {},
+                                }
+                            ),
+                            f"[{ended_at}] CANON: "
+                            + json.dumps(
+                                {
+                                    "type": "turn.aborted",
+                                    "provider": provider,
+                                    "threadId": thread_id,
+                                    "createdAt": ended_at,
+                                    "payload": {"reason": "interrupted"},
+                                }
+                            ),
+                        ]
+                    )
+                    + "\n"
+                )
+
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+            self.assertEqual(len(snapshot.statuses), len(providers))
+            self.assertTrue(
+                all(status.mode == AgentMode.COMPLETED for status in snapshot.statuses)
+            )
+            self.assertTrue(all(status.origin == "T3 Code" for status in snapshot.statuses))
+            self.assertEqual(
+                {status.provider for status in snapshot.statuses},
+                {"codex", "claude", "opencode", "cursor", "grok"},
+            )
+
+    def test_t3code_canonical_tool_and_input_events_map_to_statuses(self) -> None:
+        thread_id = "00000000-0000-4000-8000-000000000001"
+        now = datetime.now(timezone.utc).isoformat()
+
+        tool = collector_module.parse_t3code_event_line(
+            f"[{now}] CANON: "
+            + json.dumps(
+                {
+                    "type": "item.started",
+                    "provider": "claudeAgent",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": {
+                        "itemType": "command_execution",
+                        "title": "Bash",
+                    },
+                }
+            )
+        )
+        waiting = collector_module.parse_t3code_event_line(
+            f"[{now}] CANON: "
+            + json.dumps(
+                {
+                    "type": "user-input.requested",
+                    "provider": "claudeAgent",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": {"message": "Choose an option"},
+                }
+            )
+        )
+        resolved = collector_module.parse_t3code_event_line(
+            f"[{now}] CANON: "
+            + json.dumps(
+                {
+                    "type": "user-input.resolved",
+                    "provider": "claudeAgent",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": {},
+                }
+            )
+        )
+
+        self.assertIsNotNone(tool)
+        self.assertIsNotNone(waiting)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(collector_module.status_from_event(tool).mode, AgentMode.TOOL_RUNNING)
+        self.assertEqual(
+            collector_module.status_from_event(waiting).mode,
+            AgentMode.WAITING_FOR_INPUT,
+        )
+        self.assertEqual(
+            collector_module.status_from_event(resolved).mode,
+            AgentMode.WORKING,
+        )
+        self.assertEqual(tool.origin, "T3 Code")
+        self.assertEqual(tool.provider, "claude")
+
+    def test_t3code_canonical_sessions_replace_duplicate_hook_rows(self) -> None:
+        from sidepulse.status_bar import reconcile_t3code_sessions
+
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        hook_row = AgentStatus(
+            provider="claude",
+            agent_id="claude:session:claude-native-id",
+            display_name="hosted session",
+            mode=AgentMode.WORKING,
+            updated_at=now - timedelta(seconds=30),
+            event_name="PreToolUse",
+            session_id="claude-native-id",
+            origin="Claude Code CLI",
+        )
+        local_row = AgentStatus(
+            provider="claude",
+            agent_id="claude:session:terminal-id",
+            display_name="terminal session",
+            mode=AgentMode.WORKING,
+            updated_at=now - timedelta(seconds=30),
+            event_name="PreToolUse",
+            session_id="terminal-id",
+        )
+        live.statuses_by_key = {
+            hook_row.agent_id: hook_row,
+            local_row.agent_id: local_row,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "00000000-0000-4000-8000-000000000047"
+            started_at = now.isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                f"[{started_at}] CANON: "
+                + json.dumps(
+                    {
+                        "type": "turn.started",
+                        "provider": "claudeAgent",
+                        "threadId": thread_id,
+                        "createdAt": started_at,
+                        "raw": {
+                            "payload": {"session_id": "claude-native-id"},
+                        },
+                        "payload": {},
+                    }
+                )
+                + "\n"
+            )
+            t3code = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            )
+
+            reconcile_t3code_sessions(live, t3code)
+
+        keys = set(live.statuses_by_key)
+        self.assertIn(f"claude:session:{thread_id}", keys)
+        self.assertIn(local_row.agent_id, keys, "non-T3 sessions must survive")
+        self.assertNotIn(
+            hook_row.agent_id,
+            keys,
+            "the hosted agent's own hook row duplicates the canonical T3 row",
+        )
+
+    def test_t3code_native_provider_session_id_is_preserved(self) -> None:
+        record = collector_module.parse_t3code_event_line(
+            "[2026-08-25T14:30:08Z] CANON: "
+            + json.dumps(
+                {
+                    "type": "session.state.changed",
+                    "provider": "claudeAgent",
+                    "threadId": "t3-thread-id",
+                    "createdAt": "2026-08-25T14:30:08Z",
+                    "raw": {
+                        "payload": {"session_id": "claude-native-id"},
+                    },
+                    "payload": {"state": "running"},
+                }
+            )
+        )
+
+        self.assertIsNotNone(record)
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        self.assertEqual(status.provider_session_id, "claude-native-id")
+
+    def test_t3code_hook_started_binds_native_id_onto_later_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "76bc0b8f-1111-4000-8000-000000000001"
+            native_id = "9c3e1232-a5b7-45b2-9f6c-09f8a44244c7"
+            now = datetime.now(timezone.utc)
+            started_at = now.isoformat()
+            turn_at = (now + timedelta(milliseconds=1)).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                "\n".join(
+                    [
+                        f"[{started_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "hook.started",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": started_at,
+                                "raw": {
+                                    "payload": {"session_id": native_id},
+                                },
+                                "payload": {},
+                            }
+                        ),
+                        f"[{turn_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "turn.started",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": turn_at,
+                                "payload": {},
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+        self.assertEqual(len(snapshot.statuses), 1)
+        status = snapshot.statuses[0]
+        self.assertEqual(status.session_id, thread_id)
+        self.assertEqual(status.provider_session_id, native_id)
+        self.assertEqual(status.origin, "T3 Code")
+
+    def test_t3code_camelcase_session_id_is_extracted(self) -> None:
+        record = collector_module.parse_t3code_event_line(
+            "[2026-08-25T14:30:08Z] CANON: "
+            + json.dumps(
+                {
+                    "type": "turn.started",
+                    "provider": "cursor",
+                    "threadId": "t3-thread-id",
+                    "createdAt": "2026-08-25T14:30:08Z",
+                    "payload": {"sessionId": "cursor-native-id"},
+                }
+            )
+        )
+
+        self.assertIsNotNone(record)
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        self.assertEqual(status.provider_session_id, "cursor-native-id")
+
+    def test_t3code_live_hook_folds_into_existing_t3_row(self) -> None:
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        thread_id = "76bc0b8f-1111-4000-8000-000000000001"
+        native_id = "9c3e1232-a5b7-45b2-9f6c-09f8a44244c7"
+        t3_row = AgentStatus(
+            provider="claude",
+            agent_id=f"claude:session:{thread_id}",
+            display_name="hosted T3 task",
+            mode=AgentMode.WORKING,
+            updated_at=now - timedelta(seconds=5),
+            event_name="UserPromptSubmit",
+            session_id=thread_id,
+            provider_session_id=native_id,
+            origin="T3 Code",
+        )
+        live.statuses_by_key = {t3_row.agent_id: t3_row}
+
+        live.ingest_record(
+            HookEvent(
+                provider="claude",
+                logged_at=now,
+                event_name="PreToolUse",
+                raw={"tool_name": "Bash"},
+                session_id=native_id,
+                tool_name="Bash",
+                origin="Claude in VS Code",
+            )
+        )
+
+        self.assertEqual(set(live.statuses_by_key), {t3_row.agent_id})
+        folded = live.statuses_by_key[t3_row.agent_id]
+        self.assertEqual(folded.origin, "T3 Code")
+        self.assertEqual(folded.session_id, thread_id)
+        self.assertEqual(folded.provider_session_id, native_id)
+        self.assertEqual(folded.mode, AgentMode.TOOL_RUNNING)
+        self.assertEqual(folded.tool_name, "Bash")
+        self.assertNotIn(f"claude:session:{native_id}", live.statuses_by_key)
+
+    def test_t3code_origin_hooks_stay_pending_until_canonical_row(self) -> None:
+        from sidepulse.status_bar import reconcile_t3code_sessions
+
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        native_id = "9c3e1232-a5b7-45b2-9f6c-09f8a44244c7"
+        live.ingest_record(
+            HookEvent(
+                provider="claude",
+                logged_at=now,
+                event_name="PreToolUse",
+                raw={"tool_name": "Bash"},
+                session_id=native_id,
+                tool_name="Bash",
+                origin="T3 Code",
+            )
+        )
+        self.assertEqual(live.statuses_by_key, {})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "t3-thread-id"
+            started_at = now.isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                f"[{started_at}] CANON: "
+                + json.dumps(
+                    {
+                        "type": "turn.started",
+                        "provider": "claudeAgent",
+                        "threadId": thread_id,
+                        "createdAt": started_at,
+                        "raw": {"payload": {"session_id": native_id}},
+                        "payload": {},
+                    }
+                )
+                + "\n"
+            )
+            t3code = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            )
+            reconcile_t3code_sessions(live, t3code)
+
+        self.assertEqual(set(live.statuses_by_key), {f"claude:session:{thread_id}"})
+        folded = live.statuses_by_key[f"claude:session:{thread_id}"]
+        self.assertEqual(folded.origin, "T3 Code")
+        self.assertEqual(folded.mode, AgentMode.TOOL_RUNNING)
+        self.assertEqual(folded.tool_name, "Bash")
+
+    def test_claude_in_cursor_folds_into_unique_cursor_session(self) -> None:
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        cwd = "/tmp/sidepulse"
+        cursor_row = AgentStatus(
+            provider="cursor",
+            agent_id="cursor:session:cursor-1",
+            display_name="Cursor task",
+            mode=AgentMode.WORKING,
+            updated_at=now - timedelta(seconds=2),
+            event_name="UserPromptSubmit",
+            session_id="cursor-1",
+            cwd=cwd,
+            origin="Cursor",
+        )
+        live.statuses_by_key = {cursor_row.agent_id: cursor_row}
+        live.ingest_record(
+            HookEvent(
+                provider="claude",
+                logged_at=now,
+                event_name="PreToolUse",
+                raw={"tool_name": "Edit"},
+                session_id="claude-in-cursor",
+                cwd=cwd,
+                tool_name="Edit",
+                origin="Claude in Cursor",
+            )
+        )
+
+        self.assertEqual(set(live.statuses_by_key), {cursor_row.agent_id})
+        folded = live.statuses_by_key[cursor_row.agent_id]
+        self.assertEqual(folded.provider, "cursor")
+        self.assertEqual(folded.mode, AgentMode.TOOL_RUNNING)
+        self.assertEqual(folded.tool_name, "Edit")
+        self.assertNotIn("claude:session:claude-in-cursor", live.statuses_by_key)
+
+    def test_claude_in_cursor_does_not_fold_when_two_cursor_sessions_share_cwd(self) -> None:
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        cwd = "/tmp/sidepulse"
+        for session_id in ("cursor-1", "cursor-2"):
+            row = AgentStatus(
+                provider="cursor",
+                agent_id=f"cursor:session:{session_id}",
+                display_name=session_id,
+                mode=AgentMode.WORKING,
+                updated_at=now,
+                event_name="UserPromptSubmit",
+                session_id=session_id,
+                cwd=cwd,
+                origin="Cursor",
+            )
+            live.statuses_by_key[row.agent_id] = row
+        live.ingest_record(
+            HookEvent(
+                provider="claude",
+                logged_at=now,
+                event_name="PreToolUse",
+                raw={},
+                session_id="claude-in-cursor",
+                cwd=cwd,
+                origin="Claude in Cursor",
+            )
+        )
+        self.assertIn("claude:session:claude-in-cursor", live.statuses_by_key)
+        self.assertEqual(len(live.statuses_by_key), 3)
+
+    def test_cursor_row_absorbs_existing_claude_in_cursor_guest(self) -> None:
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        cwd = "/tmp/sidepulse"
+        live.ingest_record(
+            HookEvent(
+                provider="claude",
+                logged_at=now,
+                event_name="PreToolUse",
+                raw={"tool_name": "Read"},
+                session_id="claude-in-cursor",
+                cwd=cwd,
+                tool_name="Read",
+                origin="Claude in Cursor",
+            )
+        )
+        self.assertIn("claude:session:claude-in-cursor", live.statuses_by_key)
+        live.ingest_record(
+            HookEvent(
+                provider="cursor",
+                logged_at=now - timedelta(seconds=2),
+                event_name="UserPromptSubmit",
+                raw={"prompt": "keep going"},
+                session_id="cursor-1",
+                cwd=cwd,
+                origin="Cursor",
+            )
+        )
+        self.assertEqual(set(live.statuses_by_key), {"cursor:session:cursor-1"})
+        folded = live.statuses_by_key["cursor:session:cursor-1"]
+        self.assertEqual(folded.provider, "cursor")
+        self.assertEqual(folded.tool_name, "Read")
+        self.assertEqual(folded.mode, AgentMode.TOOL_RUNNING)
+
+    def test_t3code_environment_id_and_thread_url(self) -> None:
+        from sidepulse.session_actions import t3code_local_environment_id, t3code_thread_url
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            userdata = home / ".t3" / "userdata"
+            userdata.mkdir(parents=True)
+            (userdata / "environment-id").write_text("df5f9151-3b4b-478f-a3bf-3d4b55f711e3\n")
+            self.assertEqual(
+                t3code_local_environment_id(home),
+                "df5f9151-3b4b-478f-a3bf-3d4b55f711e3",
+            )
+            status = AgentStatus(
+                provider="claude",
+                agent_id="claude:session:thread-1",
+                display_name="T3 task",
+                mode=AgentMode.WORKING,
+                updated_at=datetime.now(timezone.utc),
+                event_name="UserPromptSubmit",
+                session_id="thread-1",
+                origin="T3 Code",
+            )
+            self.assertEqual(
+                t3code_thread_url(status, home=home),
+                "t3code://threads/df5f9151-3b4b-478f-a3bf-3d4b55f711e3/thread-1",
+            )
+
+    def test_t3code_thread_started_binds_provider_thread_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "t3-thread-id"
+            native_id = "9c3e1232-a5b7-45b2-9f6c-09f8a44244c7"
+            now = datetime.now(timezone.utc)
+            started_at = now.isoformat()
+            turn_at = (now + timedelta(milliseconds=1)).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                "\n".join(
+                    [
+                        f"[{started_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "thread.started",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": started_at,
+                                "payload": {"providerThreadId": native_id},
+                            }
+                        ),
+                        f"[{turn_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "turn.started",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": turn_at,
+                                "payload": {},
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+        self.assertEqual(len(snapshot.statuses), 1)
+        self.assertEqual(snapshot.statuses[0].provider_session_id, native_id)
+
+    def test_t3code_task_title_names_the_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "00000000-0000-4000-8000-000000000050"
+            now = datetime.now(timezone.utc).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                f"[{now}] CANON: "
+                + json.dumps(
+                    {
+                        "type": "task.started",
+                        "provider": "claudeAgent",
+                        "threadId": thread_id,
+                        "createdAt": now,
+                        "payload": {
+                            "taskId": "b5yqez9eq",
+                            "title": "Rewrite SchedulerPanel with week strip and swipe",
+                            "description": "Rewrite SchedulerPanel with week strip and swipe",
+                            "taskType": "local_bash",
+                        },
+                    }
+                )
+                + "\n"
+            )
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+        self.assertEqual(len(snapshot.statuses), 1)
+        self.assertIn("Rewrite SchedulerPanel", snapshot.statuses[0].display_name)
+        self.assertNotIn("Read file", snapshot.statuses[0].display_name)
+
+    def test_t3code_reconcile_keeps_newer_hook_tool_state(self) -> None:
+        from sidepulse.status_bar import reconcile_t3code_sessions
+
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        native_id = "claude-native-id"
+        hook_row = AgentStatus(
+            provider="claude",
+            agent_id=f"claude:session:{native_id}",
+            display_name="Claude session claude-n",
+            mode=AgentMode.TOOL_RUNNING,
+            updated_at=now,
+            event_name="PreToolUse",
+            session_id=native_id,
+            tool_name="Bash",
+            origin="Claude in VS Code",
+        )
+        live.statuses_by_key = {hook_row.agent_id: hook_row}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "00000000-0000-4000-8000-000000000051"
+            started_at = (now - timedelta(seconds=5)).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                f"[{started_at}] CANON: "
+                + json.dumps(
+                    {
+                        "type": "turn.started",
+                        "provider": "claudeAgent",
+                        "threadId": thread_id,
+                        "createdAt": started_at,
+                        "raw": {"payload": {"session_id": native_id}},
+                        "payload": {},
+                    }
+                )
+                + "\n"
+            )
+            t3code = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            )
+            reconcile_t3code_sessions(live, t3code)
+
+        self.assertEqual(set(live.statuses_by_key), {f"claude:session:{thread_id}"})
+        folded = live.statuses_by_key[f"claude:session:{thread_id}"]
+        self.assertEqual(folded.origin, "T3 Code")
+        self.assertEqual(folded.mode, AgentMode.TOOL_RUNNING)
+        self.assertEqual(folded.tool_name, "Bash")
+        self.assertEqual(folded.provider_session_id, native_id)
+
+    def test_t3code_reconcile_leaves_hook_rows_when_no_canonical_events(self) -> None:
+        from sidepulse.status_bar import reconcile_t3code_sessions
+
+        now = datetime.now(timezone.utc)
+        live = collector_module.LiveAgentMonitor(stale_after_seconds=3600)
+        hook_row = AgentStatus(
+            provider="claude",
+            agent_id="claude:session:claude-native-id",
+            display_name="hosted session",
+            mode=AgentMode.WORKING,
+            updated_at=now - timedelta(seconds=30),
+            event_name="PreToolUse",
+            session_id="claude-native-id",
+            origin="T3 Code",
+        )
+        live.statuses_by_key = {hook_row.agent_id: hook_row}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            t3code = AgentMonitor(
+                sources=(SourceSpec("t3code", Path(tmp)),),
+                stale_after_seconds=3600,
+            )
+            self.assertEqual(reconcile_t3code_sessions(live, t3code), 0)
+
+        self.assertIn(hook_row.agent_id, live.statuses_by_key)
+
+    def test_t3code_thread_state_changes_drive_codex_status(self) -> None:
+        thread_id = "00000000-0000-4000-8000-000000000042"
+        now = datetime.now(timezone.utc).isoformat()
+
+        def canon(event_type: str, payload: dict) -> str:
+            return f"[{now}] CANON: " + json.dumps(
+                {
+                    "type": event_type,
+                    "provider": "codex",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": payload,
+                }
+            )
+
+        active = collector_module.parse_t3code_event_line(
+            canon("thread.state.changed", {"state": "active"})
+        )
+        idle = collector_module.parse_t3code_event_line(
+            canon("thread.state.changed", {"state": "idle"})
+        )
+
+        self.assertIsNotNone(active)
+        self.assertIsNotNone(idle)
+        self.assertEqual(
+            collector_module.status_from_event(active).mode,
+            AgentMode.WORKING,
+        )
+        self.assertEqual(
+            collector_module.status_from_event(idle).mode,
+            AgentMode.COMPLETED,
+        )
+        self.assertEqual(idle.provider, "codex")
+
+    def test_t3code_failed_items_and_turns_report_errors(self) -> None:
+        thread_id = "00000000-0000-4000-8000-000000000043"
+        now = datetime.now(timezone.utc).isoformat()
+
+        def canon(event_type: str, payload: dict) -> str:
+            return f"[{now}] CANON: " + json.dumps(
+                {
+                    "type": event_type,
+                    "provider": "claudeAgent",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": payload,
+                }
+            )
+
+        failed_item = collector_module.parse_t3code_event_line(
+            canon(
+                "item.completed",
+                {"itemType": "command_execution", "status": "failed", "title": "Command run"},
+            )
+        )
+        ok_item = collector_module.parse_t3code_event_line(
+            canon(
+                "item.completed",
+                {"itemType": "command_execution", "status": "completed", "title": "Command run"},
+            )
+        )
+        failed_turn = collector_module.parse_t3code_event_line(
+            canon("turn.completed", {"state": "failed", "stopReason": "error"})
+        )
+
+        self.assertEqual(
+            collector_module.status_from_event(failed_item).mode,
+            AgentMode.BLOCKED_ERROR,
+        )
+        self.assertEqual(
+            collector_module.status_from_event(ok_item).mode,
+            AgentMode.WORKING,
+        )
+        self.assertEqual(
+            collector_module.status_from_event(failed_turn).mode,
+            AgentMode.BLOCKED_ERROR,
+        )
+
+    def test_t3code_tool_name_prefers_tool_over_generic_title(self) -> None:
+        thread_id = "00000000-0000-4000-8000-000000000044"
+        now = datetime.now(timezone.utc).isoformat()
+
+        def canon(payload: dict) -> str:
+            return f"[{now}] CANON: " + json.dumps(
+                {
+                    "type": "item.started",
+                    "provider": "claudeAgent",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": payload,
+                }
+            )
+
+        tool = collector_module.parse_t3code_event_line(
+            canon(
+                {
+                    "itemType": "command_execution",
+                    "title": "Command run",
+                    "data": {"toolName": "Bash", "input": {"command": "ls"}},
+                }
+            )
+        )
+        titled = collector_module.parse_t3code_event_line(
+            canon({"itemType": "file_change", "title": "File change"})
+        )
+        reasoning = collector_module.parse_t3code_event_line(
+            canon({"itemType": "reasoning", "title": "Reasoning"})
+        )
+
+        self.assertEqual(tool.tool_name, "Bash")
+        self.assertEqual(titled.tool_name, "File change")
+        self.assertIsNone(reasoning.tool_name)
+        self.assertNotIn("input", json.dumps(tool.raw))
+
+    def test_t3code_token_usage_annotates_context_without_changing_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "00000000-0000-4000-8000-000000000045"
+            now = datetime.now(timezone.utc)
+            started_at = now.isoformat()
+            usage_at = (now + timedelta(milliseconds=1)).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                "\n".join(
+                    [
+                        f"[{started_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "turn.started",
+                                "provider": "codex",
+                                "threadId": thread_id,
+                                "createdAt": started_at,
+                                "payload": {},
+                            }
+                        ),
+                        f"[{usage_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "thread.token-usage.updated",
+                                "provider": "codex",
+                                "threadId": thread_id,
+                                "createdAt": usage_at,
+                                "payload": {
+                                    "usage": {"usedTokens": 116305, "maxTokens": 258400}
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+            self.assertEqual(len(snapshot.statuses), 1)
+            status = snapshot.statuses[0]
+            self.assertEqual(status.mode, AgentMode.WORKING)
+            self.assertEqual(status.context_percent, 45.0)
+
+    def test_t3code_session_config_names_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thread_id = "00000000-0000-4000-8000-000000000048"
+            now = datetime.now(timezone.utc)
+            configured_at = now.isoformat()
+            started_at = (now + timedelta(milliseconds=1)).isoformat()
+            (root / f"events.{thread_id}.log").write_text(
+                "\n".join(
+                    [
+                        f"[{configured_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "session.configured",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": configured_at,
+                                "payload": {
+                                    "config": {
+                                        "cwd": "/Users/test/GitHub/sidepulse",
+                                        "model": "claude-opus-5",
+                                    }
+                                },
+                            }
+                        ),
+                        f"[{started_at}] CANON: "
+                        + json.dumps(
+                            {
+                                "type": "turn.started",
+                                "provider": "claudeAgent",
+                                "threadId": thread_id,
+                                "createdAt": started_at,
+                                "payload": {},
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("t3code", root),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+            self.assertEqual(len(snapshot.statuses), 1)
+            status = snapshot.statuses[0]
+            self.assertEqual(status.cwd, "/Users/test/GitHub/sidepulse")
+            self.assertIn("sidepulse", status.display_name)
+
+    def test_t3code_rate_limit_reached_blocks_session(self) -> None:
+        thread_id = "00000000-0000-4000-8000-000000000046"
+        now = datetime.now(timezone.utc).isoformat()
+
+        def canon(reached) -> str:
+            return f"[{now}] CANON: " + json.dumps(
+                {
+                    "type": "account.rate-limits.updated",
+                    "provider": "codex",
+                    "threadId": thread_id,
+                    "createdAt": now,
+                    "payload": {
+                        "rateLimits": {
+                            "rateLimits": {
+                                "planType": "plus",
+                                "primary": {"usedPercent": 87},
+                                "rateLimitReachedType": reached,
+                            }
+                        }
+                    },
+                }
+            )
+
+        self.assertIsNone(collector_module.parse_t3code_event_line(canon(None)))
+        reached = collector_module.parse_t3code_event_line(canon("primary"))
+        self.assertIsNotNone(reached)
+        self.assertEqual(
+            collector_module.status_from_event(reached).mode,
+            AgentMode.BLOCKED_ERROR,
+        )
+        self.assertIn("Rate limit reached", reached.message)
+
+    def test_t3code_event_files_skip_stale_rotated_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fresh = root / "events.fresh.log"
+            stale = root / "events.stale.log.1"
+            fresh.write_text("")
+            stale.write_text("")
+            old = time.time() - collector_module.T3CODE_MAX_FILE_AGE_SECONDS - 60
+            os.utime(stale, (old, old))
+
+            files = collector_module.recent_t3code_event_files(root)
+
+            self.assertEqual(files, [fresh])
 
     def test_claude_transcript_fallback_marks_tool_calls_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7647,6 +8778,57 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             default_session_open_action(status_for("codex", "Codex UI")),
             SESSION_OPEN_APP,
         )
+        t3_status = status_for("codex", "T3 Code")
+        self.assertEqual(default_session_open_action(t3_status), SESSION_OPEN_APP)
+        with patch(
+            "sidepulse.session_actions.t3code_local_environment_id",
+            return_value="env-local",
+        ):
+            self.assertEqual(
+                session_open_target(t3_status, SESSION_OPEN_APP),
+                (
+                    "url",
+                    f"t3code://threads/env-local/{t3_status.session_id}",
+                ),
+            )
+        with patch(
+            "sidepulse.session_actions.t3code_local_environment_id",
+            return_value=None,
+        ):
+            self.assertEqual(
+                session_open_target(t3_status, SESSION_OPEN_APP),
+                ("application", "t3code"),
+            )
+        self.assertEqual(
+            session_open_action_label(t3_status, SESSION_OPEN_APP),
+            "Open T3 Code",
+        )
+        t3_claude = AgentStatus(
+            provider="claude",
+            agent_id="claude:session:t3-thread",
+            display_name="T3 Claude",
+            mode=AgentMode.WORKING,
+            updated_at=datetime.now(timezone.utc),
+            event_name="UserPromptSubmit",
+            session_id="t3-thread-id",
+            provider_session_id="claude-native-id",
+            cwd="/tmp/project",
+            origin="T3 Code",
+        )
+        self.assertEqual(default_session_open_action(t3_claude), SESSION_OPEN_APP)
+        self.assertEqual(
+            session_open_action_label(t3_claude, SESSION_OPEN_APP),
+            "Open T3 Code",
+        )
+        self.assertEqual(
+            session_resume_command(t3_claude),
+            "cd /tmp/project && claude --resume claude-native-id",
+        )
+        self.assertEqual(
+            session_vscode_link(t3_claude),
+            "vscode://anthropic.claude-code/open?session=claude-native-id",
+        )
+
 
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(

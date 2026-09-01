@@ -63,7 +63,7 @@ def requirement_name(spec: str) -> str:
     ``"pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'"`` -> ``pyobjc-framework-cocoa``
     """
     head = spec.split(";", 1)[0].strip()
-    head = re.split(r"[<>=!~\[\s]", head, 1)[0]
+    head = re.split(r"[<>=!~\[\s]", head, maxsplit=1)[0]
     return normalize_dist_name(head)
 
 

@@ -92,6 +92,7 @@ def make_status(
     cwd: str | None = "/Users/test/project",
     origin: str | None = None,
     stale: bool = False,
+    context_percent: float | None = None,
     now: datetime | None = None,
 ) -> AgentStatus:
     now = now or datetime.now(timezone.utc)
@@ -108,6 +109,7 @@ def make_status(
         message="doing a thing",
         origin=origin,
         stale=stale,
+        context_percent=context_percent,
     )
 
 
@@ -940,6 +942,36 @@ class PureUiLogicTests(unittest.TestCase):
         self.assertEqual(
             sb.normalize_match_text("  Mixed CASE  "),
             sb.normalize_match_text("mixed case"),
+        )
+
+
+class ContextUsageDisplayTests(unittest.TestCase):
+    def test_menu_title_shows_context_only_when_nearly_full(self):
+        quiet = make_status(context_percent=12.0)
+        full = make_status(context_percent=84.0)
+
+        self.assertNotIn("context", sb.native_session_menu_title(quiet))
+        self.assertIn("84% context", sb.native_session_menu_title(full))
+
+    def test_unknown_context_is_omitted(self):
+        self.assertNotIn("context", sb.native_session_menu_title(make_status()))
+        self.assertIsNone(sb.format_context_percent(make_status()))
+
+    def test_session_detail_always_reports_known_context(self):
+        detail = sb.session_detail_for_status(
+            make_status(context_percent=12.0),
+            datetime.now(timezone.utc),
+        )
+        self.assertIn("12% context", detail)
+
+    def test_context_suffix_does_not_defeat_title_disambiguation(self):
+        """Two rows with the same name must still disambiguate as usage drifts."""
+        first = make_status(agent_id="a", context_percent=80.0)
+        second = make_status(agent_id="b", context_percent=90.0)
+
+        self.assertEqual(
+            sb.session_title_collision_key(first),
+            sb.session_title_collision_key(second),
         )
 
 

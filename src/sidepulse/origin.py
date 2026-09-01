@@ -10,6 +10,21 @@ from typing import Any, Mapping
 
 from .models import provider_label
 
+T3_PROCESS_TOKENS = (
+    "t3 code.app",
+    "t3-code.app",
+    "t3 code (alpha).app",
+    "t3-code-desktop",
+    "t3code",
+    "node_modules/.bin/t3",
+)
+T3_ENV_VALUE_MARKERS = (
+    "t3 code.app",
+    "t3-code.app",
+    "t3 code (alpha).app",
+    "t3code.app",
+)
+
 
 @dataclass(frozen=True)
 class ProcessInfo:
@@ -50,6 +65,14 @@ def detect_agent_origin(
 
     env_origin = origin_from_environment(normalized_provider, active_env)
     if env_origin is not None:
+        # T3 Code is a VS Code fork and sets VSCODE_* variables. Confirm the
+        # host isn't T3 before treating those as a standalone VS Code session.
+        if env_origin.kind.endswith("_vscode"):
+            processes = process_ancestry(parent_pid or os.getppid())
+            if t3_code_host_in_processes(processes):
+                return surface_origin(
+                    normalized_provider, "t3code", "process:T3 Code"
+                )
         return env_origin
 
     processes = process_ancestry(parent_pid or os.getppid())
@@ -82,6 +105,9 @@ def explicit_origin_from_env(provider: str, env: Mapping[str, str]) -> AgentOrig
 
 
 def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigin | None:
+    if t3_code_environment(env):
+        return surface_origin(provider, "t3code", "env:T3_CODE")
+
     term_program = str(env.get("TERM_PROGRAM") or "").strip().lower()
     if term_program == "vscode" or any(key.startswith("VSCODE_") for key in env):
         return surface_origin(provider, "vscode", "env:VSCODE")
@@ -94,6 +120,8 @@ def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigi
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
         if provider == "grok" and "grok" in bundle_id:
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
+        if provider == "opencode" and "opencode" in bundle_id:
+            return surface_origin(provider, "app", "env:__CFBundleIdentifier")
 
     return None
 
@@ -103,6 +131,12 @@ def origin_from_processes(
     processes: tuple[ProcessInfo, ...],
 ) -> AgentOrigin | None:
     haystack = "\n".join(f"{info.comm}\n{info.command}" for info in processes).lower()
+
+    # T3 Code hosts provider CLIs (including Codex and OpenCode). Detect the
+    # outer host first so a nested Codex process remains one status entry and
+    # is presented as T3 Code instead of looking like a second standalone run.
+    if t3_code_host_in_processes(processes):
+        return surface_origin(provider, "t3code", "process:T3 Code")
 
     if any(token in haystack for token in ("visual studio code.app", "code helper", "vscode")):
         return surface_origin(provider, "vscode", "process:Visual Studio Code")
@@ -119,6 +153,8 @@ def origin_from_processes(
         return surface_origin(provider, "app", "process:Claude.app")
     if provider == "grok" and "grok.app" in haystack:
         return surface_origin(provider, "app", "process:Grok.app")
+    if provider == "opencode" and "opencode.app" in haystack:
+        return surface_origin(provider, "app", "process:OpenCode.app")
 
     for info in processes:
         basename = process_basename(info)
@@ -128,6 +164,8 @@ def origin_from_processes(
             return surface_origin(provider, "cli", "process:claude")
         if provider == "grok" and basename == "grok":
             return surface_origin(provider, "cli", "process:grok")
+        if provider == "opencode" and basename == "opencode":
+            return surface_origin(provider, "cli", "process:opencode")
 
     return None
 
@@ -139,19 +177,29 @@ def surface_origin(provider: str, surface: str, source: str) -> AgentOrigin:
         ("codex", "vscode"): "Codex in VS Code",
         ("codex", "cursor"): "Codex in Cursor",
         ("codex", "windsurf"): "Codex in Windsurf",
+        ("codex", "t3code"): "T3 Code",
         ("codex", "transcript"): "Codex Transcript",
         ("claude", "app"): "Claude App",
         ("claude", "cli"): "Claude Code CLI",
         ("claude", "vscode"): "Claude in VS Code",
         ("claude", "cursor"): "Claude in Cursor",
         ("claude", "windsurf"): "Claude in Windsurf",
+        ("claude", "t3code"): "T3 Code",
         ("claude", "transcript"): "Claude Transcript",
         ("grok", "app"): "Grok App",
         ("grok", "cli"): "Grok CLI",
         ("grok", "vscode"): "Grok in VS Code",
         ("grok", "cursor"): "Grok in Cursor",
         ("grok", "windsurf"): "Grok in Windsurf",
+        ("grok", "t3code"): "T3 Code",
         ("grok", "transcript"): "Grok Transcript",
+        ("opencode", "app"): "OpenCode",
+        ("opencode", "cli"): "OpenCode CLI",
+        ("opencode", "vscode"): "OpenCode in VS Code",
+        ("opencode", "cursor"): "OpenCode in Cursor",
+        ("opencode", "windsurf"): "OpenCode in Windsurf",
+        ("opencode", "t3code"): "T3 Code",
+        ("opencode", "transcript"): "OpenCode Transcript",
     }
     label = labels.get((provider, surface), provider_label(provider))
     return AgentOrigin(
@@ -227,16 +275,53 @@ def terminal_environment(env: Mapping[str, str]) -> bool:
     return bool(term_program and term_program.lower() != "vscode")
 
 
+def t3_code_host_in_processes(processes: tuple[ProcessInfo, ...]) -> bool:
+    haystack = "\n".join(f"{info.comm}\n{info.command}" for info in processes).lower()
+    return any(token in haystack for token in T3_PROCESS_TOKENS)
+
+
+def t3_code_environment(env: Mapping[str, str]) -> bool:
+    """Recognize explicit environment markers used by T3 Code launches."""
+    for key in (
+        "T3_CODE",
+        "T3CODE",
+        "T3_CODE_HOME",
+        "T3CODE_HOME",
+        "T3_MCP_BEARER_TOKEN",
+    ):
+        if str(env.get(key) or "").strip():
+            return True
+
+    bundle_id = str(env.get("__CFBundleIdentifier") or "").strip().lower()
+    if any(marker in bundle_id.replace("_", " ") for marker in ("t3 code", "t3-code", "t3code")):
+        return True
+
+    term_program = str(env.get("TERM_PROGRAM") or "").strip().lower()
+    if any(marker in term_program.replace("_", " ") for marker in ("t3 code", "t3-code", "t3code")):
+        return True
+
+    for key, value in env.items():
+        if not str(key).startswith("VSCODE_"):
+            continue
+        lowered = str(value or "").lower()
+        if any(marker in lowered for marker in T3_ENV_VALUE_MARKERS):
+            return True
+    return False
+
+
 def annotate_payload_with_origin(
     provider: str,
     payload: dict[str, Any],
     *,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    if "agent_origin" in payload or "agentOrigin" in payload:
-        return payload
+    active_env = os.environ if env is None else env
     result = dict(payload)
-    result.update(detect_agent_origin(provider, env=env).to_payload())
+    if "agent_origin" not in payload and "agentOrigin" not in payload:
+        result.update(detect_agent_origin(provider, env=active_env).to_payload())
+    operation = clean_label(active_env.get("T3CODE_TEXT_GENERATION_OPERATION"))
+    if operation:
+        result["agent_internal_operation"] = operation
     return result
 
 

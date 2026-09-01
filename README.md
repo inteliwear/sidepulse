@@ -116,7 +116,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, and Grok through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, and OpenCode through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -196,6 +196,21 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| OpenCode | `~/.config/opencode/plugins/sidepulse.js` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/opencode.jsonl` |
+
+Agents launched through T3 Code are identified as `T3 Code` in the menu while
+retaining their underlying provider session. This avoids counting a T3-hosted
+Codex session once as T3 Code and again as standalone Codex.
+
+T3 Code writes a canonical event log to `~/.t3/userdata/logs/provider`, and
+SidePulse reads it directly rather than relying on each hosted agent shipping
+its own hooks. That log is authoritative for T3-hosted sessions, so a session
+that also reports through provider hooks is shown once, under its T3 thread.
+Canonical events supply the working directory, the running tool, turn and
+thread state, provider rate limits, and token usage; a session whose context is
+at least 70% full shows that percentage in the menu, and every session shows it
+in the session submenu. Only logs modified in the last 24 hours are parsed, so
+rotated history does not slow down a refresh.
 
 #### Local reply classifier (Apple Silicon)
 
@@ -271,11 +286,12 @@ Set up this Mac explicitly after package install:
 sidepulse setup
 ```
 
-`sidepulse setup` installs or refreshes Codex, Claude, and Grok hooks, installs
+`sidepulse setup` installs or refreshes Codex, Claude, Grok, and OpenCode hooks, installs
 SidePulse Pro Eject Prevention, writes the status-bar LaunchAgent, starts both helpers
 immediately, and enables them at login. This is intentionally an explicit
 command instead of a `pip install` side effect. To set up only one provider, use
-`sidepulse setup codex`, `sidepulse setup claude`, or `sidepulse setup grok`.
+`sidepulse setup codex`, `sidepulse setup claude`, `sidepulse setup grok`, or
+`sidepulse setup opencode`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
 
@@ -332,6 +348,7 @@ sidepulse agent-monitor install
 sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
+sidepulse agent-monitor install opencode
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -495,7 +512,7 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, and Grok hooks. The transcript
+window can install or uninstall Codex, Claude, Grok, and OpenCode hooks. The transcript
 checkboxes control the file-based CLI/debug fallback; the status-bar app gets
 live updates from the local hook event socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.

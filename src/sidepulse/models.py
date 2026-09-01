@@ -73,11 +73,13 @@ class AgentStatus:
     updated_at: datetime
     event_name: str
     session_id: str | None = None
+    provider_session_id: str | None = None
     cwd: str | None = None
     tool_name: str | None = None
     message: str | None = None
     origin: str | None = None
     stale: bool = False
+    context_percent: float | None = None
 
     @property
     def priority(self) -> int:
@@ -103,11 +105,13 @@ class AgentStatus:
             "age_seconds": round(self.age_seconds(now), 3),
             "event_name": self.event_name,
             "session_id": self.session_id,
+            "provider_session_id": self.provider_session_id,
             "cwd": self.cwd,
             "tool_name": self.tool_name,
             "message": self.message,
             "origin": self.origin,
             "stale": self.stale,
+            "context_percent": self.context_percent,
         }
 
 
@@ -159,5 +163,5 @@ def provider_label(provider: str) -> str:
         "claude": "Claude",
         "grok": "Grok",
         # Lowercase is the product's own spelling, and provider.title() would break it.
-        "opencode": "opencode",
+        "opencode": "OpenCode",
     }.get(provider, provider.title())

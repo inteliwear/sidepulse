@@ -21,6 +21,7 @@ from .providers import (
     CURSOR_EVENTS,
     GROK_EVENTS,
     default_cursor_hook_config_path,
+    default_opencode_plugin_path,
     default_grok_hook_config_path,
     detect_log_path,
 )
@@ -167,6 +168,88 @@ def install_grok_hooks(
         target_log.touch(exist_ok=True)
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+def install_opencode_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    del python_executable  # OpenCode plugins run in-process and need no Python command.
+    config = config_path or default_opencode_plugin_path()
+    target_log = (log_path or detect_log_path("opencode")).expanduser()
+    original = config.read_text() if config.exists() else ""
+    if original and "sidepulse-opencode-plugin" not in original:
+        raise ValueError(f"refusing to overwrite unmanaged OpenCode plugin: {config}")
+    new_text = opencode_plugin_source(target_log)
+    changed = original != new_text
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config) if config.exists() else None
+        config.write_text(new_text)
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+    return InstallResult("opencode", config, target_log, changed, backup, dry_run)
+
+
+def opencode_plugin_source(log_path: Path) -> str:
+    encoded_log = json.dumps(str(log_path.expanduser()))
+    return f'''// sidepulse-opencode-plugin
+import {{ appendFile, mkdir }} from "node:fs/promises"
+import {{ dirname }} from "node:path"
+
+const SIDEPULSE_LOG = {encoded_log}
+
+function firstString(...values) {{
+  return values.find((value) => typeof value === "string" && value.length > 0)
+}}
+
+function sessionId(event) {{
+  const p = event?.properties ?? {{}}
+  return firstString(p.sessionID, p.sessionId, p.session_id, p.id, p.info?.id, p.session?.id)
+}}
+
+function eventName(event) {{
+  if (event?.type === "session.status") {{
+    const status = event.properties?.status?.type ?? event.properties?.status
+    if (status === "idle") return "session.idle"
+  }}
+  return event?.type
+}}
+
+export const SidePulsePlugin = async ({{ directory, worktree }}) => ({{
+  event: async ({{ event }}) => {{
+    const name = eventName(event)
+    if (!name || ![
+      "session.created", "session.status", "session.idle", "session.error",
+      "permission.asked", "permission.replied", "tool.execute.before", "tool.execute.after"
+    ].includes(name)) return
+
+    const properties = event.properties ?? {{}}
+    const payload = {{
+      event_name: name,
+      session_id: sessionId(event),
+      cwd: firstString(properties.cwd, properties.directory, worktree, directory),
+      tool_name: firstString(properties.tool, properties.toolName),
+      message: firstString(properties.message, properties.error?.message),
+      timestamp: new Date().toISOString(),
+      ...(process.env.T3CODE_HOME || process.env.T3_CODE || process.env.T3CODE ||
+          process.env.T3_MCP_BEARER_TOKEN
+        ? {{ agent_origin: "T3 Code", agent_origin_kind: "opencode_t3code" }}
+        : {{ agent_origin: "OpenCode", agent_origin_kind: "opencode_app" }}),
+    }}
+    if (!payload.session_id) return
+    try {{
+      await mkdir(dirname(SIDEPULSE_LOG), {{ recursive: true }})
+      await appendFile(SIDEPULSE_LOG, JSON.stringify(payload) + "\\n", "utf8")
+    }} catch {{
+      // Monitoring must never interrupt an OpenCode session.
+    }}
+  }},
+}})
+'''
 
 
 def uninstall_codex_hooks(
@@ -416,6 +499,22 @@ def remove_cursor_hook_entries(entries: list[Any]) -> list[Any]:
             )
         )
     ]
+
+
+def uninstall_opencode_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_opencode_plugin_path()
+    target_log = (log_path or detect_log_path("opencode")).expanduser()
+    original = config.read_text() if config.exists() else ""
+    managed = "sidepulse-opencode-plugin" in original
+    backup = None
+    if managed and not dry_run:
+        backup = backup_file(config)
+        config.unlink()
+    return InstallResult("opencode", config, target_log, managed, backup, dry_run)
 
 
 def hook_command(
