@@ -812,9 +812,65 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(sb.session_row_icon_for_status(status), NSImage)
 
     def test_provider_icons_do_not_raise(self):
-        for provider in ("claude", "codex", "grok", "nonsense"):
+        for provider in ("claude", "codex", "grok", "opencode", "nonsense"):
             with self.subTest(provider=provider):
                 sb.provider_icon_for_provider(provider)
+
+    def test_mapped_providers_look_up_their_own_bundle(self):
+        """The generic fallback would absorb a deleted branch without failing.
+
+        provider_app_icon("codex") resolves ChatGPT.app by name on its own, so removing
+        the codex branch still yields an icon and no test notices. Pin the bundle that
+        each explicit branch reads.
+        """
+        wanted = {
+            "codex": "/Applications/Codex.app",
+            "claude": "/Applications/Claude.app",
+            "grok": "/Applications/Grok.app",
+        }
+        for provider, bundle in wanted.items():
+            with self.subTest(provider=provider):
+                looked_up: list[str] = []
+                sb._provider_icon_cache.pop(provider, None)
+                self.addCleanup(sb._provider_icon_cache.pop, provider, None)
+                with patch.object(
+                    sb, "app_icon", lambda path: looked_up.append(path) and None
+                ):
+                    sb.provider_icon_for_provider(provider)
+                self.assertIn(bundle, looked_up)
+
+    def test_unmapped_provider_tries_its_own_app_before_the_glyph(self):
+        """The terminal glyph always returns an image, so it hides a missing lookup.
+
+        Assert that an unmapped provider consults its own application first. Without that
+        step a new agent silently renders as a bare terminal icon.
+        """
+        looked_up: list[str] = []
+        sb._provider_icon_cache.pop("someagent", None)
+        self.addCleanup(sb._provider_icon_cache.pop, "someagent", None)
+        with patch.object(sb, "provider_app_icon", lambda p: looked_up.append(p) and None):
+            image = sb.provider_icon_for_provider("someagent")
+        self.assertEqual(looked_up, ["someagent"])
+        self.assertIsInstance(image, NSImage)
+
+    def test_provider_app_icon_resolves_an_installed_app_by_name(self):
+        """Pin the name matching itself, which is what makes the generic path work."""
+        installed = next(
+            (
+                name
+                for name, path in (
+                    ("opencode", "/Applications/OpenCode.app"),
+                    ("claude", "/Applications/Claude.app"),
+                    ("grok", "/Applications/Grok.app"),
+                )
+                if Path(path).exists()
+            ),
+            None,
+        )
+        if installed is None:  # pragma: no cover
+            self.skipTest("no known agent application installed")
+        self.assertIsInstance(sb.provider_app_icon(installed), NSImage)
+        self.assertIsNone(sb.provider_app_icon("definitely-not-an-installed-app"))
 
     def test_state_symbols_render(self):
         for state in (sb.STATE_IDLE, sb.STATE_WORKING, sb.STATE_DONE, sb.STATE_ASK):

@@ -18,7 +18,9 @@ from typing import Any
 from .providers import (
     CLAUDE_EVENTS,
     CODEX_EVENTS,
+    CURSOR_EVENTS,
     GROK_EVENTS,
+    default_cursor_hook_config_path,
     default_grok_hook_config_path,
     detect_log_path,
 )
@@ -278,6 +280,142 @@ def uninstall_grok_hooks(
         clean_grok_live_backup_hook_files(config)
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+def install_cursor_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    config = config_path or default_cursor_hook_config_path()
+    target_log = (log_path or detect_log_path("cursor")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    data.setdefault("version", 1)
+    hooks = data.setdefault("hooks", {})
+
+    for event_name in CURSOR_EVENTS:
+        entries = hooks.get(event_name, [])
+        if not isinstance(entries, list):
+            entries = []
+        # Anything we did not write -- including entries in a shape a future
+        # Cursor release introduces -- is preserved untouched.
+        cleaned = remove_cursor_hook_entries(entries)
+        cleaned.append(
+            {
+                "command": cursor_hook_command(
+                    event_name,
+                    target_log,
+                    python_executable,
+                )
+            }
+        )
+        hooks[event_name] = cleaned
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+
+    return InstallResult("cursor", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_cursor_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_cursor_hook_config_path()
+    target_log = (log_path or detect_log_path("cursor")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event_name in list(hooks):
+            entries = hooks.get(event_name)
+            if not isinstance(entries, list):
+                continue
+            cleaned = remove_cursor_hook_entries(entries)
+            if cleaned:
+                hooks[event_name] = cleaned
+            else:
+                hooks.pop(event_name, None)
+        if not hooks:
+            data.pop("hooks", None)
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        # Only remove the file if nothing of the user's is left in it.
+        if data:
+            config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        else:
+            try:
+                config.unlink()
+            except FileNotFoundError:
+                pass
+
+    return InstallResult("cursor", config, target_log, changed, backup, dry_run)
+
+
+def cursor_hook_command(
+    event_name: str,
+    log_path: Path,
+    python_executable: str | None = None,
+) -> str:
+    executable = python_executable or sys.executable or "python3"
+    if getattr(sys, "frozen", False) and python_executable is None:
+        command = " ".join(
+            [
+                shlex.quote(executable),
+                "agent-monitor",
+                "hook-log",
+                "--provider",
+                "cursor",
+                "--event",
+                shlex.quote(event_name),
+                "--log",
+                shlex.quote(str(log_path.expanduser())),
+            ]
+        )
+        return fail_open_command(command)
+    entry_point = Path(__file__).with_name("hook_entry.py")
+    command = " ".join(
+        [
+            shlex.quote(executable),
+            shlex.quote(str(entry_point)),
+            "--provider",
+            "cursor",
+            "--event",
+            shlex.quote(event_name),
+            "--log",
+            shlex.quote(str(log_path.expanduser())),
+        ]
+    )
+    return fail_open_command(command)
+
+
+def remove_cursor_hook_entries(entries: list[Any]) -> list[Any]:
+    """Drop entries this installer wrote, in any generation's spelling."""
+    return [
+        entry
+        for entry in entries
+        if not (
+            isinstance(entry, dict)
+            and (
+                "sidepulse.cursor_hook" in str(entry.get("command") or "")
+                or "agent-monitor hook-log" in str(entry.get("command") or "")
+                or "hook_entry.py" in str(entry.get("command") or "")
+            )
+        )
+    ]
 
 
 def hook_command(

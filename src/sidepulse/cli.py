@@ -22,9 +22,11 @@ from .hook import hook_log_main
 from .install import (
     install_claude_hooks,
     install_codex_hooks,
+    install_cursor_hooks,
     install_grok_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
+    uninstall_cursor_hooks,
     uninstall_grok_hooks,
 )
 from .led_status import AgentLedController, LedStatusWrite
@@ -143,6 +145,7 @@ def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
     hook_log = subparsers.add_parser("hook-log", help="Internal hook logging entry point.")
     hook_log.add_argument("--provider", choices=HOOK_PROVIDERS, required=True)
     hook_log.add_argument("--log", type=Path, required=True)
+    hook_log.add_argument("--event", help="Provider-native lifecycle event name (used by cursor).")
     hook_log.set_defaults(func=cmd_hook_log)
 
 
@@ -816,6 +819,8 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_codex_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "claude":
             results.append(install_claude_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "cursor":
+            results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
@@ -842,6 +847,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_codex_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "claude":
             results.append(uninstall_claude_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "cursor":
+            results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
 
@@ -858,7 +865,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 def cmd_hook_log(args: argparse.Namespace) -> int:
-    return hook_log_main(args.provider, args.log)
+    return hook_log_main(args.provider, args.log, event=getattr(args, "event", None))
 
 
 def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:

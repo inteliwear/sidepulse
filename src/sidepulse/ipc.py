@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from .providers import default_state_dir
+from .providers import candidate_state_dirs, default_state_dir
 
 
 MAX_EVENT_BYTES = 1024 * 1024
@@ -15,6 +15,11 @@ HOOK_EVENT_SEND_TIMEOUT_SECONDS = 0.2
 
 def default_event_socket_path() -> Path:
     return default_state_dir() / "events.sock"
+
+
+def candidate_event_socket_paths() -> tuple[Path, ...]:
+    """Socket paths a listening app may have bound, most likely first."""
+    return tuple(directory / "events.sock" for directory in candidate_state_dirs())
 
 
 def default_latest_state_path() -> Path:
@@ -28,7 +33,6 @@ def send_hook_event(
     socket_path: Path | None = None,
     timeout: float = HOOK_EVENT_SEND_TIMEOUT_SECONDS,
 ) -> bool:
-    target = (socket_path or default_event_socket_path()).expanduser()
     payload = json.dumps(
         {"provider": provider, "line": line},
         separators=(",", ":"),
@@ -37,6 +41,17 @@ def send_hook_event(
     if len(payload) > MAX_EVENT_BYTES:
         return False
 
+    if socket_path is not None:
+        return _send_payload(socket_path.expanduser(), payload, timeout)
+
+    # The caller and the app can resolve different state dirs, so try each candidate.
+    for target in candidate_event_socket_paths():
+        if _send_payload(target.expanduser(), payload, timeout):
+            return True
+    return False
+
+
+def _send_payload(target: Path, payload: bytes, timeout: float) -> bool:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
     try:

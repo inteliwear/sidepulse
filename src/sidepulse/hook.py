@@ -105,12 +105,24 @@ def hook_event_socket_disabled() -> bool:
     }
 
 
-def hook_log_main(provider: str, log_path: Path) -> int:
+def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> int:
     try:
+        payload_text = sys.stdin.read()
+        if provider == "cursor" and event:
+            from .cursor_hook import normalize_payload
+
+            try:
+                raw = json.loads(payload_text or "{}")
+            except json.JSONDecodeError:
+                raw = {}
+            payload = raw if isinstance(raw, dict) else {}
+            normalized = normalize_payload(event, payload)
+            payload_text = json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+
         actual_provider, actual_log_path, line = routed_hook_payload(
             provider,
             log_path,
-            sys.stdin.read(),
+            payload_text,
         )
         if not hook_event_socket_disabled():
             send_hook_event(actual_provider, line)

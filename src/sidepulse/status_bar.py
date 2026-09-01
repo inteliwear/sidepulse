@@ -5455,8 +5455,16 @@ def provider_icon_for_provider(provider: str):
     elif provider == "grok":
         image = app_icon("/Applications/Grok.app")
         image = image or grok_badge_icon()
+    elif provider == "opencode":
+        image = app_icon("/Applications/OpenCode.app")
+        image = image or image_for_symbol(
+            "chevron.left.forwardslash.chevron.right", "opencode"
+        )
     else:
-        image = image_for_symbol("terminal", provider.title() or "Agent")
+        # Any other provider resolves its own app by name, so a new agent needs no branch
+        # here. Only providers with an alias or a custom glyph need one.
+        image = provider_app_icon(provider)
+        image = image or image_for_symbol("terminal", provider_label(provider) or "Agent")
     _provider_icon_cache[provider] = image
     return image
 
@@ -5606,6 +5614,21 @@ def grok_badge_icon():
     image.setSize_((18, 18))
     _grok_badge_icon = image
     return image
+
+
+def provider_app_icon(provider: str):
+    """Resolve a provider's own application icon by name.
+
+    LaunchServices matches an application name case-insensitively, so a provider named
+    "opencode" finds OpenCode.app and "ghostty" finds Ghostty.app. This keeps new
+    providers from needing a branch in provider_icon_for_provider. Returns None when no
+    application matches, which includes every provider that is not an installed app.
+    """
+    try:
+        path = NSWorkspace.sharedWorkspace().fullPathForApplication_(provider)
+    except Exception:
+        return None
+    return app_icon(path) if path else None
 
 
 def app_icon(path: str):

@@ -613,6 +613,49 @@ class AgentMonitorTests(unittest.TestCase):
             finally:
                 server.stop()
 
+    def test_hook_event_reaches_app_when_xdg_state_home_differs(self) -> None:
+        """A shell hook must still find an app that resolved another state dir.
+
+        The LaunchAgent plist forwards only PATH and PYTHONUNBUFFERED, so the app never
+        sees XDG_STATE_HOME and binds under ~/.local/state. A hook started from the user's
+        shell does see it. Before candidate probing the send failed silently.
+        """
+        # An AF_UNIX path is capped near 104 bytes and the macOS default temp dir is long,
+        # so root this fixture somewhere short.
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            home = Path(tmp) / "home"
+            app_dir = home / ".local" / "state" / "sidepulse" / "agent-monitor"
+            app_dir.mkdir(parents=True)
+
+            received: list[tuple[str, dict]] = []
+            server = HookEventServer(
+                lambda provider, line: received.append((provider, line)),
+                socket_path=app_dir / "events.sock",
+            )
+            try:
+                server.start()
+                environment = {
+                    "HOME": str(home),
+                    "XDG_STATE_HOME": str(Path(tmp) / "xdg"),
+                }
+                with patch.dict(os.environ, environment):
+                    sent = send_hook_event(
+                        "claude",
+                        {"hook_event_name": "Stop", "session_id": "claude-session"},
+                        timeout=0.5,
+                    )
+
+                deadline = time.time() + 1
+                while sent and not received and time.time() < deadline:
+                    time.sleep(0.01)
+
+                self.assertTrue(sent)
+                self.assertTrue(received)
+                self.assertEqual(received[0][0], "claude")
+                self.assertEqual(received[0][1]["hook_event_name"], "Stop")
+            finally:
+                server.stop()
+
     def test_live_sidepulse_ingests_events_and_persists_latest_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

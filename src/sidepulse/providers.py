@@ -61,7 +61,20 @@ GROK_EVENTS = (
     "SessionEnd",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok")
+CURSOR_EVENTS = (
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "preToolUse",
+    "beforeShellExecution",
+    "afterShellExecution",
+    "afterFileEdit",
+    "postToolUse",
+    "postToolUseFailure",
+    "stop",
+)
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor")
 KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
 
 
@@ -95,13 +108,33 @@ def default_state_dir(home: Path | None = None) -> Path:
     return base / ".local" / "state" / "sidepulse" / "agent-monitor"
 
 
+def candidate_state_dirs(home: Path | None = None) -> tuple[Path, ...]:
+    """Every state dir a peer process may have resolved, most likely first.
+
+    ``default_state_dir`` reads ``XDG_STATE_HOME`` from the calling process. Hooks run in
+    the user's shell, while the status bar app runs from a LaunchAgent whose plist forwards
+    only ``PATH`` and ``PYTHONUNBUFFERED``. Whenever the user exports ``XDG_STATE_HOME``,
+    the two processes resolve different directories and never meet.
+    """
+    dirs = [default_state_dir(home)]
+    fallback = (home or Path.home()) / ".local" / "state" / "sidepulse" / "agent-monitor"
+    if fallback not in dirs:
+        dirs.append(fallback)
+    return tuple(dirs)
+
+
 def default_log_path(provider: str, home: Path | None = None) -> Path:
     suffix = "jsonl"
     return default_state_dir(home) / f"{provider}.{suffix}"
 
 
 def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
-    return [detect_codex_config(home), detect_claude_config(home), detect_grok_config(home)]
+    return [
+        detect_codex_config(home),
+        detect_claude_config(home),
+        detect_grok_config(home),
+        detect_cursor_config(home),
+    ]
 
 
 def detect_codex_config(home: Path | None = None) -> ProviderConfig:
@@ -243,6 +276,65 @@ def detect_grok_config(home: Path | None = None) -> ProviderConfig:
     )
 
 
+def default_cursor_hook_config_path(home: Path | None = None) -> Path:
+    base = home or Path.home()
+    return base / ".cursor" / "hooks.json"
+
+
+def detect_cursor_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_cursor_hook_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("cursor", config_path, False, False, (), ())
+
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        return ProviderConfig("cursor", config_path, True, False, (), ())
+
+    hooks = data.get("hooks") or {}
+    hook_events: list[str] = []
+    paths: list[Path] = []
+    if isinstance(hooks, dict):
+        for event_name, entries in hooks.items():
+            if event_name not in CURSOR_EVENTS or not isinstance(entries, list):
+                continue
+            managed_entries = [
+                entry
+                for entry in entries
+                if isinstance(entry, dict)
+                and (
+                    "sidepulse.cursor_hook" in str(entry.get("command") or "")
+                    or "agent-monitor hook-log" in str(entry.get("command") or "")
+                    or "hook_entry.py" in str(entry.get("command") or "")
+                )
+            ]
+            if managed_entries:
+                hook_events.append(event_name)
+                paths.extend(_paths_from_cursor_entries(managed_entries))
+
+    return ProviderConfig(
+        "cursor",
+        config_path,
+        True,
+        bool(hook_events),
+        tuple(sorted(set(hook_events))),
+        _dedupe_paths(paths),
+    )
+
+
+def _paths_from_cursor_entries(entries: list[Any]) -> list[Path]:
+    """Cursor stores a flat ``{"command": ...}`` per entry, not a nested list."""
+    paths: list[Path] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        command = entry.get("command")
+        if isinstance(command, str):
+            paths.extend(extract_log_paths_from_command(command))
+        paths.extend(_paths_from_hook_entries([entry]))
+    return paths
+
+
 def detect_log_path(provider: str, home: Path | None = None) -> Path:
     if provider == "codex":
         config = detect_codex_config(home)
@@ -250,6 +342,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_claude_config(home)
     elif provider == "grok":
         config = detect_grok_config(home)
+    elif provider == "cursor":
+        config = detect_cursor_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
