@@ -168,6 +168,41 @@ fi
 
 kernel_predicate='process == "kernel" && (eventMessage CONTAINS[c] "AppleSDXC" || eventMessage CONTAINS[c] "Port-SD" || eventMessage CONTAINS[c] "SDXC" || eventMessage CONTAINS[c] "SD Card" || eventMessage CONTAINS[c] "IOBlockStorage" || eventMessage CONTAINS[c] "IOMedia")'
 disk_predicate='(process == "diskarbitrationd" || process == "diskmanagementd" || process == "kernel") && (eventMessage CONTAINS[c] "disk" || eventMessage CONTAINS[c] "SidePulse" || eventMessage CONTAINS[c] "Side" || eventMessage CONTAINS[c] "FAT" || eventMessage CONTAINS[c] "MS-DOS" || eventMessage CONTAINS[c] "IOMedia" || eventMessage CONTAINS[c] "eject" || eventMessage CONTAINS[c] "mount")'
+system_eject_predicate='process == "diskarbitrationd" && (eventMessage CONTAINS[c] "kind = disk eject" || eventMessage CONTAINS[c] "ejected disk" || eventMessage CONTAINS[c] "SidePulse Pro Eject Prevention" || eventMessage CONTAINS[c] "sd_eject_guard" || eventMessage CONTAINS[c] "sdejectguard")'
+
+guard_label="io.sidepulse.sdejectguard"
+guard_display_name="SidePulse Pro Eject Prevention"
+guard_user_data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
+guard_user_state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
+guard_user_plist="$HOME/Library/LaunchAgents/$guard_label.plist"
+guard_user_binary="$guard_user_data_root/sidepulse/sd-eject-guard/$guard_display_name"
+guard_user_stdout="$guard_user_state_root/sidepulse/agent-monitor/sd-eject-guard.out.log"
+guard_user_stderr="$guard_user_state_root/sidepulse/agent-monitor/sd-eject-guard.err.log"
+guard_system_plist="/Library/LaunchDaemons/$guard_label.plist"
+guard_system_binary="/Library/Application Support/SidePulse/sd-eject-guard/$guard_display_name"
+guard_system_stdout="/Library/Logs/SidePulse/sd-eject-guard.out.log"
+guard_system_stderr="/Library/Logs/SidePulse/sd-eject-guard.err.log"
+
+show_path_status() {
+  local target
+  for target in "$@"; do
+    if [[ -e "$target" ]]; then
+      run /usr/bin/stat -f '%N | mode=%Sp | owner=%Su:%Sg | size=%z | modified=%Sm | created=%SB' \
+        -t '%Y-%m-%d %H:%M:%S %z' "$target"
+    else
+      printf 'Missing: %s\n' "$target"
+    fi
+  done
+}
+
+show_log_tail() {
+  local target="$1"
+  if [[ -e "$target" ]]; then
+    run /usr/bin/tail -n 100 "$target"
+  else
+    printf 'Missing: %s\n' "$target"
+  fi
+}
 
 {
   section "Run Metadata"
@@ -219,8 +254,44 @@ disk_predicate='(process == "diskarbitrationd" || process == "diskmanagementd" |
   section "Power Assertions"
   run_timeout "$cmd_timeout" pmset -g assertions
 
+  section "SidePulse Eject Prevention State"
+  printf 'The launchctl checks show whether the guard is running at report collection time.\n'
+  printf 'The process start time helps determine whether it was alive during an earlier eject event.\n\n'
+  run_timeout "$cmd_timeout" launchctl print "gui/$(id -u)/$guard_label"
+  run_timeout "$cmd_timeout" launchctl print "system/$guard_label"
+  run_timeout_shell "$cmd_timeout" '/bin/ps -axo user=,pid=,ppid=,lstart=,etime=,state=,command= | /usr/bin/grep -E "[S]idePulse Pro Eject Prevention|[s]d_eject_guard" || true'
+
+  section "SidePulse Eject Prevention Files"
+  show_path_status \
+    "$guard_user_plist" \
+    "$guard_user_binary" \
+    "$guard_user_stdout" \
+    "$guard_user_stderr" \
+    "$guard_system_plist" \
+    "$guard_system_binary" \
+    "$guard_system_stdout" \
+    "$guard_system_stderr"
+
+  section "SidePulse Eject Prevention Logs"
+  printf '%s\n' "--- User stdout: $guard_user_stdout ---"
+  show_log_tail "$guard_user_stdout"
+  printf '%s\n' "--- User stderr: $guard_user_stderr ---"
+  show_log_tail "$guard_user_stderr"
+  printf '%s\n' "--- System stdout: $guard_system_stdout ---"
+  show_log_tail "$guard_system_stdout"
+  printf '%s\n' "--- System stderr: $guard_system_stderr ---"
+  show_log_tail "$guard_system_stderr"
+
   section "Kernel SD Logs"
   run_timeout "$log_timeout" log show --style syslog --info --debug "${log_window_args[@]}" --predicate "$kernel_predicate"
+
+  section "Focused System Eject And Guard Logs"
+  printf '%s\n' 'Interpretation:'
+  printf '%s\n' '- "loginwindow ... queued solicitation ... kind = disk eject" means macOS initiated the eject.'
+  printf '%s\n' '- "kind = disk eject approval ... dissented" means a registered client prevented it.'
+  printf '%s\n' '- "ejected disk ... success" means the eject completed and was not prevented.'
+  printf '%s\n\n' '- A SidePulse callback/response plus "prevented eject" in the guard stdout confirms the project guard handled it.'
+  run_timeout "$log_timeout" log show --style syslog --info --debug "${log_window_args[@]}" --predicate "$system_eject_predicate"
 
   section "Disk Arbitration And Mount Logs"
   run_timeout "$log_timeout" log show --style syslog --info --debug "${log_window_args[@]}" --predicate "$disk_predicate"
