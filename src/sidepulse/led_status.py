@@ -11,6 +11,7 @@ from .device_writer import (
     DEFAULT_FILE_NAME,
     DeviceWriteError,
     normalize_led_text,
+    read_led_program,
     resolve_target_path,
     write_led_program,
 )
@@ -356,7 +357,7 @@ class AgentLedController:
         if self.last_target is None or self.last_program is None:
             return False
         try:
-            return self.last_target.read_text(encoding="utf-8") == self.last_program
+            return read_led_program(self.last_target) == self.last_program
         except (OSError, UnicodeError):
             return False
 

@@ -9,6 +9,7 @@ LED_FILE_NAMES = (DEFAULT_FILE_NAME,)
 KNOWN_LED_FILE_NAMES = frozenset(name.upper() for name in LED_FILE_NAMES)
 MAX_LED_BYTES = 512
 MAX_LED_LINES = 20
+LED_RECORD_PADDING_BYTE = b" "
 MOUNT_ROOT = Path("/Volumes")
 DEVICE_NAME_HINTS = (
     "sidepulsepro",
@@ -43,8 +44,43 @@ def write_led_program(
         return target
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(program, encoding="utf-8")
+    _write_led_record_in_place(target, program.encode("utf-8"))
     return target
+
+
+def _write_led_record_in_place(target: Path, program: bytes) -> None:
+    """Overwrite the fixed-size LED record without truncating the file first."""
+    if len(program) > MAX_LED_BYTES:
+        raise DeviceWriteError(
+            f"LED program is {len(program)} bytes; max is {MAX_LED_BYTES}."
+        )
+    record = program.ljust(MAX_LED_BYTES, LED_RECORD_PADDING_BYTE)
+
+    try:
+        handle = target.open("r+b", buffering=0)
+    except FileNotFoundError:
+        # Creation is only a recovery path. Firmware normally provides LEDS.LED.
+        handle = target.open("x+b", buffering=0)
+
+    with handle:
+        handle.seek(0)
+        written = handle.write(record)
+        if written != len(record):
+            raise DeviceWriteError(
+                f"Only wrote {written} of {len(record)} bytes to {target}."
+            )
+
+        # Repair an unexpectedly oversized file once. Normal writes stay at the
+        # fixed size and therefore never release/reallocate the data cluster.
+        handle.seek(0, 2)
+        if handle.tell() > MAX_LED_BYTES:
+            handle.truncate(MAX_LED_BYTES)
+
+
+def read_led_program(path: Path) -> str:
+    """Read a fixed-size LED record as its logical, unpadded program text."""
+    data = path.read_bytes().rstrip(b" \x00\xff")
+    return data.decode("utf-8")
 
 
 def normalize_led_text(text: str) -> str:

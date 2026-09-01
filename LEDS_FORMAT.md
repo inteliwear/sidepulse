@@ -28,6 +28,11 @@ or
 To recap, write to LEDS.LED what you want displayed.
 That's all you have to know.
 
+SidePulse's host software keeps `LEDS.LED` as one fixed 512-byte record and
+space-pads the unused tail. It overwrites that record in place so repeated status
+updates reuse the same filesystem cluster instead of truncating and reallocating
+the file. The firmware ignores the trailing whitespace.
+
 ## Initial state.
 
 The content in INIT.LED is played on power up. It can be anything supported by LEDS.LED.
