@@ -45,7 +45,6 @@ from sidepulse.device_writer import (
     DeviceWriteError,
     discover_devices,
     normalize_led_text,
-    read_led_program,
     validate_led_text,
     write_led_program,
 )
@@ -1969,7 +1968,7 @@ class AgentMonitorTests(unittest.TestCase):
                     17,
                 )
 
-            program = read_led_program(root / "LEDS.LED")
+            program = (root / "LEDS.LED").read_text()
             self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
             self.assertEqual(
                 restore_calls,
@@ -3643,26 +3642,7 @@ class AgentMonitorTests(unittest.TestCase):
             )
 
             self.assertEqual(target, device / "LEDS.LED")
-            self.assertEqual(read_led_program(target), "off\n#FF00FF pulse")
-            self.assertEqual(target.stat().st_size, 512)
-
-    def test_sidepulse_write_reuses_fixed_record_and_clears_old_tail(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            device = Path(tmp) / "SidePulsePro"
-            device.mkdir()
-            target = device / "LEDS.LED"
-            target.write_bytes(b"old")
-
-            write_led_program("off\n#FF00FF pulse", device_path=device)
-            first_inode = target.stat().st_ino
-            write_led_program("off", device_path=device)
-
-            data = target.read_bytes()
-            self.assertEqual(target.stat().st_ino, first_inode)
-            self.assertEqual(len(data), 512)
-            self.assertEqual(data[:3], b"off")
-            self.assertEqual(data[3:], b" " * 509)
-            self.assertEqual(read_led_program(target), "off")
+            self.assertEqual(target.read_text(), "off\n#FF00FF pulse")
 
     def test_sidepulse_write_uses_leds_led_even_when_old_file_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3676,7 +3656,7 @@ class AgentMonitorTests(unittest.TestCase):
             )
 
             self.assertEqual(target, device / "LEDS.LED")
-            self.assertEqual(read_led_program(target), "off\n#FF00FF pulse")
+            self.assertEqual(target.read_text(), "off\n#FF00FF pulse")
             self.assertEqual((device / "LEDS.TXT").read_text(), "off")
 
     def test_sidepulse_write_discovers_sidepulse_dot_volume(self) -> None:
@@ -3752,7 +3732,7 @@ class AgentMonitorTests(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(read_led_program(device / "LEDS.LED"), "off\n#FF00FF pulse")
+            self.assertEqual((device / "LEDS.LED").read_text(), "off\n#FF00FF pulse")
 
     def test_led_status_maps_agent_modes_to_programs(self) -> None:
         self.assertEqual(
@@ -4074,7 +4054,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(result.state, LedDisplayState.WORKING)
             self.assertEqual(result.target, device / "LEDS.LED")
             self.assertEqual(
-                read_led_program(device / "LEDS.LED"),
+                (device / "LEDS.LED").read_text(),
                 "off 320ms cosine\n"
                 "0:#00E5FF 760ms pulse 0ms; 1:#00E5FF 760ms pulse 260ms\n"
                 "repeat",
@@ -4083,14 +4063,14 @@ class AgentMonitorTests(unittest.TestCase):
             write_mode_to_leds(AgentMode.IDLE_READY, device_path=device)
 
             self.assertEqual(
-                read_led_program(device / "LEDS.LED"),
+                (device / "LEDS.LED").read_text(),
                 "off 2s\n0:#006060 1:#006060 2s ease\nrepeat",
             )
 
             write_mode_to_leds(AgentMode.COMPLETED, device_path=device, brightness=64)
 
             self.assertEqual(
-                read_led_program(device / "LEDS.LED"),
+                (device / "LEDS.LED").read_text(),
                 "brightness 64\n#00FF66 320ms cosine",
             )
 
@@ -4106,7 +4086,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             write_mode_to_leds(AgentMode.WORKING, device_path=device)
 
-            lines = read_led_program(device / "LEDS.LED").splitlines()
+            lines = (device / "LEDS.LED").read_text().splitlines()
             self.assertEqual(len(lines), 3)
             self.assertEqual(lines[0], "off 320ms cosine")
             self.assertIn("0:#00E5FF 760ms pulse 0ms", lines[1])
@@ -4127,7 +4107,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(first.changed)
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
-            self.assertIn("#FF3A00 1.6s pulse", read_led_program(device / "LEDS.LED"))
+            self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
 
     def test_agent_led_controller_repairs_externally_changed_program(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4148,7 +4128,7 @@ class AgentMonitorTests(unittest.TestCase):
             )
 
             self.assertTrue(repaired.changed)
-            self.assertEqual(read_led_program(target), first.program)
+            self.assertEqual(target.read_text(), first.program)
 
     def test_agent_led_controller_tracks_mode_and_animation_choice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4178,7 +4158,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(kitt.changed)
             self.assertTrue(custom_tool.changed)
             self.assertFalse(unchanged.changed)
-            self.assertEqual(read_led_program(device / "LEDS.LED"), "#123456")
+            self.assertEqual((device / "LEDS.LED").read_text(), "#123456")
 
     def test_battery_parser_uses_adapter_watts_and_raw_capacity(self) -> None:
         payload = plistlib.dumps(
