@@ -3595,6 +3595,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=False,
             backup_path=None,
         )
+        cursor_result = SimpleNamespace(
+            provider="cursor",
+            config_path=Path("/tmp/cursor-hooks.json"),
+            log_path=Path("/tmp/cursor.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         grok_result = SimpleNamespace(
             provider="grok",
             config_path=Path("/tmp/grok-hook.json"),
@@ -3621,6 +3628,11 @@ class AgentMonitorTests(unittest.TestCase):
         with (
             patch.object(cli_module, "install_codex_hooks", return_value=codex_result) as codex,
             patch.object(cli_module, "install_claude_hooks", return_value=claude_result) as claude,
+            patch.object(
+                cli_module,
+                "install_cursor_hooks",
+                return_value=cursor_result,
+            ) as cursor,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
@@ -3636,6 +3648,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         codex.assert_called_once()
         claude.assert_called_once()
+        cursor.assert_called_once()
         grok.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
