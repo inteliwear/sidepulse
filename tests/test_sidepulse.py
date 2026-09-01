@@ -3830,7 +3830,9 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
-            "off 2s\n3:#006060 4:#006060 2s ease\nrepeat",
+            "off 2s\n"
+            "2:#006060 3:#006060 4:#006060 5:#006060 2s ease\n"
+            "repeat",
         )
         self.assertEqual(
             program_for_display_state(LedDisplayState.DONE),
@@ -3910,7 +3912,9 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(builtin_animation_file_name("idle-pulse", 8), "idle-pulse-8.LED")
         self.assertEqual(
             builtin_animation_program("idle-pulse", 8),
-            "off 2s\n3:#006060 4:#006060 2s ease\nrepeat",
+            "off 2s\n"
+            "2:#006060 3:#006060 4:#006060 5:#006060 2s ease\n"
+            "repeat",
         )
         self.assertEqual(
             builtin_animation_program("idle-pulse", 2),
@@ -3977,16 +3981,15 @@ class AgentMonitorTests(unittest.TestCase):
                 ),
                 cyan_idle_shape,
             )
-            if led_count == 2:
-                self.assertEqual(
-                    without_colors(
-                        builtin_animation_program(
-                            AGENT_ANIMATION_PURPLE_IDLE,
-                            led_count,
-                        )
-                    ),
-                    cyan_idle_shape,
-                )
+            self.assertEqual(
+                without_colors(
+                    builtin_animation_program(
+                        AGENT_ANIMATION_PURPLE_IDLE,
+                        led_count,
+                    )
+                ),
+                cyan_idle_shape,
+            )
 
         corresponding_animations = (
             (
