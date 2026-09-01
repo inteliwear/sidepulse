@@ -1,0 +1,18 @@
+include LEDS_FORMAT.md
+include LICENSE
+include README.md
+include pyproject.toml
+recursive-include src *.c *.LED *.py *.wasm
+recursive-include tests *.py
+
+prune .github
+prune data
+prune examples
+prune experiments
+prune ios
+prune media
+prune packaging
+prune profiles
+prune scripts
+global-exclude .DS_Store
+global-exclude *.py[cod]

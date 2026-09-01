@@ -372,25 +372,22 @@ class EntryPointTests(unittest.TestCase):
 
 
 class VersionTests(unittest.TestCase):
-    """The version is declared twice and must not drift.
+    """Tag-derived package metadata and the runtime version must not drift.
 
     A published wheel whose metadata disagrees with ``sidepulse.__version__``
     makes bug reports impossible to place.
     """
 
-    def test_pyproject_and_dunder_version_agree(self):
-        import sidepulse
+    def test_version_is_dynamic(self):
+        project = load_pyproject()["project"]
+        self.assertIn("version", project["dynamic"])
+        self.assertNotIn("version", project)
 
-        declared = load_pyproject()["project"]["version"]
-        self.assertEqual(
-            declared,
-            sidepulse.__version__,
-            "pyproject.toml version and sidepulse.__version__ disagree; "
-            "update both when releasing",
-        )
-
-    def test_installed_metadata_matches_source(self):
-        """Guards against testing a stale install of the package."""
+    def test_metadata_and_dunder_version_agree(self):
+        try:
+            import sidepulse
+        except ModuleNotFoundError:
+            self.skipTest("sidepulse is not installed in this environment")
         from importlib.metadata import version
 
         try:
@@ -398,10 +395,9 @@ class VersionTests(unittest.TestCase):
         except PackageNotFoundError:
             self.skipTest("sidepulse is not installed in this environment")
         self.assertEqual(
-            load_pyproject()["project"]["version"],
             installed,
-            "the installed sidepulse is a different version than this "
-            "source tree; reinstall with `pip install -e .`",
+            sidepulse.__version__,
+            "installed metadata and sidepulse.__version__ disagree",
         )
 
 

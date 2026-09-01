@@ -64,4 +64,9 @@ __all__ = [
     "write_mode_to_leds",
 ]
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+
+    __version__ = version("sidepulse")
+except Exception:  # pragma: no cover - only an unpackaged source tree.
+    __version__ = "0+unknown"

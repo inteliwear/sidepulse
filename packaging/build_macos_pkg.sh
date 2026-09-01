@@ -2,20 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT_DIR/pyproject.toml" | head -1)"
 ARCH="$(uname -m)"
 BUILD_DIR="$ROOT_DIR/build/macos-pkg"
 DIST_DIR="$ROOT_DIR/dist"
 VENV_DIR="$BUILD_DIR/venv"
 APP_PATH="$BUILD_DIR/pyinstaller/SidePulse.app"
 COMPONENT_PKG="$BUILD_DIR/SidePulse-component.pkg"
-OUTPUT_PKG="$DIST_DIR/SidePulse-${VERSION}-${ARCH}.pkg"
 APP_ID="${APP_ID:-io.sidepulse.cli}"
 
 APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:-}"
 INSTALLER_SIGN_IDENTITY="${INSTALLER_SIGN_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 ALLOW_UNSIGNED="${ALLOW_UNSIGNED:-0}"
+SIDEPULSE_VERSION="${SIDEPULSE_VERSION:-}"
 
 if { [ -z "$APP_SIGN_IDENTITY" ] || [ -z "$INSTALLER_SIGN_IDENTITY" ]; } && [ "$ALLOW_UNSIGNED" != "1" ]; then
     echo "Set APP_SIGN_IDENTITY to a Developer ID Application identity and" >&2
@@ -27,7 +26,12 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
+if [ -n "$SIDEPULSE_VERSION" ]; then
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SIDEPULSE="$SIDEPULSE_VERSION"
+fi
 "$VENV_DIR/bin/python" -m pip install 'pyinstaller>=6.10' "$ROOT_DIR"
+VERSION="$("$VENV_DIR/bin/python" -c 'from importlib.metadata import version; print(version("sidepulse"))')"
+OUTPUT_PKG="$DIST_DIR/SidePulse-${VERSION}-${ARCH}.pkg"
 
 "$VENV_DIR/bin/pyinstaller" \
     --noconfirm --clean --windowed \

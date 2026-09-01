@@ -18,8 +18,38 @@ The device mounts as a disk drive. You can control the LEDs by writing to `LEDS.
 
 The LED control DSL is described in [`LEDS_FORMAT.md`](LEDS_FORMAT.md).
 
-### TLDR
+## Installation
+
+Choose the level that fits how you want to use SidePulse.
+
+### 1. One-command setup
+
 ```sh
+curl -fsSL https://sidepulse.io/setup.sh | bash
+```
+
+The [setup script](scripts/setup.sh) creates an isolated environment under
+`~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
+at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. Run the same command
+again to upgrade to the newest version.
+
+### 2. Install into your own Python environment
+
+If you already manage your own Python 3.10+ environment:
+
+```sh
+python3 -m pip install --upgrade \
+  "git+https://github.com/inteliwear/sidepulse.git"
+sidepulse setup
+```
+
+### 3. Clone it for development
+
+Use an editable installation when you want to modify or hack on SidePulse:
+
+```sh
+git clone https://github.com/inteliwear/sidepulse.git
+cd sidepulse
 python3 -m pip install -e .
 sidepulse setup
 ```
@@ -612,15 +642,30 @@ iterating; CI always runs them.
 
 ### Releasing
 
-`git tag v0.1.0 && git push --tags` runs the full suite, checks the tag against
-the version in `pyproject.toml`, builds, publishes, and then reinstalls the
-release **from PyPI** on clean macOS and Linux runners to re-run the clean-room
-tests against the artifact users actually download.
-
-Bump the version in both `pyproject.toml` and `src/sidepulse/__init__.py` — a
-test fails if they disagree, and the tag guard fails if the tag disagrees with
-either. To point the clean-room tests at any other build:
+Build and verify the wheel and source archive locally:
 
 ```sh
-SIDEPULSE_INSTALL_SPEC='sidepulse==0.1.0' python3 -m pytest tests/test_environment.py -v
+./scripts/release.sh
+```
+
+The script generates a sortable calendar version such as `1.20260901.67530`:
+major version `1`, UTC date `20260901`, and seconds since UTC midnight `67530`.
+It runs the test suite in an isolated environment, builds the wheel and source
+archive, checks their package metadata, installs the wheel into a clean
+environment for a smoke test, and writes SHA-256 checksums beside the artifacts
+in `dist/`. It prints the exact tag to push, but never tags, publishes, or
+pushes itself. Use `--skip-tests` only when the suite has already passed in the
+same checkout.
+
+Pushing the printed tag, for example
+`git tag v1.20260901.67530 && git push origin v1.20260901.67530`, runs the full
+suite, uses the tag as the package version, builds, publishes, and then
+reinstalls the release **from PyPI** on a clean macOS runner to re-run the
+clean-room tests against the artifact users actually download.
+
+The version comes from the tag, so no source files need a version bump. To
+point the clean-room tests at any published build:
+
+```sh
+SIDEPULSE_INSTALL_SPEC='sidepulse==1.20260901.67530' python3 -m pytest tests/test_environment.py -v
 ```

@@ -1,7 +1,7 @@
 name: Publish to PyPI
 
 # Publishes to PyPI via OIDC trusted publishing (no API token stored).
-# Triggers when a version tag is pushed, e.g. `git tag v0.1.0 && git push --tags`.
+# Triggers when a calendar-version tag is pushed, for example v1.20260901.67530.
 on:
   push:
     tags:
@@ -21,17 +21,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Publishing v0.2.0 from a tree that still says 0.1.0 produces a release
-      # nobody can reference correctly, and PyPI uploads cannot be replaced.
-      - name: Verify tag matches package version
+      # Calendar-version tags are both the release identifier and Python version.
+      # Passing the validated value explicitly also keeps shallow checkouts
+      # independent of Git tag-discovery behavior.
+      - name: Validate calendar version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag $GITHUB_REF_NAME implies version $tag, but pyproject.toml declares $pkg"
-            exit 1
-          fi
-          echo "tag and package version agree: $pkg"
+          version="${GITHUB_REF_NAME#v}"
+          python - "$version" <<'PY'
+          from datetime import datetime
+          import sys
+
+          value = sys.argv[1]
+          try:
+              major, date, seconds = value.split(".")
+              if major != "1" or len(date) != 8 or not date.isdigit():
+                  raise ValueError
+              datetime.strptime(date, "%Y%m%d")
+              if not seconds.isdigit() or str(int(seconds)) != seconds:
+                  raise ValueError
+              if not 0 <= int(seconds) < 86400:
+                  raise ValueError
+          except (TypeError, ValueError):
+              raise SystemExit(f"tag must be v1.YYYYMMDD.SECONDS, got v{value}")
+          PY
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SIDEPULSE=$version" >> "$GITHUB_ENV"
+          echo "release version: $version"
       - name: Build sdist and wheel
         run: |
           python -m pip install --upgrade build

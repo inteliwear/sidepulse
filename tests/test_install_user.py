@@ -26,6 +26,25 @@ class UserInstallerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_curl_setup_installs_github_checkout_in_local_venv(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts" / "setup.sh"
+        text = script.read_text()
+        self.assertIn('$HOME/.local/share/sidepulse/venv', text)
+        self.assertIn('git+https://github.com/inteliwear/sidepulse.git', text)
+        self.assertIn('"$VENV/bin/sidepulse" setup', text)
+        self.assertNotIn("sudo", text)
+
+    def test_curl_setup_shell_syntax(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ["sh", "-n", str(root / "scripts" / "setup.sh")],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

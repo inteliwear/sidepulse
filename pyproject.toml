@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidepulse"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Command-line and macOS tools for SidePulse Pro and SidePulse Dot."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -62,3 +62,6 @@ include = ["sidepulse*", "agent_monitor*", "sidepulse_cli*"]
 
 [tool.setuptools.package-data]
 "sidepulse.resources" = ["sd_eject_guard.c", "sdled.wasm", "animations/*.LED"]
+
+[tool.setuptools_scm]
+fallback_version = "0"
