@@ -86,7 +86,7 @@ from sidepulse.lid_sleep import (
     run_sudo_pmset_disablesleep,
     sleep_helper_sudoers_rule,
 )
-from sidepulse.models import AgentMode, AgentStatus, AggregateStatus
+from sidepulse.models import AgentMode, AgentStatus, AggregateStatus, HookEvent
 from sidepulse.origin import ProcessInfo, origin_from_processes
 from sidepulse.providers import (
     detect_grok_config,
@@ -693,6 +693,124 @@ class AgentMonitorTests(unittest.TestCase):
             )
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
+
+    def test_status_bar_startup_replay_ingests_recent_debug_logs(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            log = base / "codex.jsonl"
+            session_id = "eeeeeeee-ffff-7aaa-8bbb-cccccccccccc"
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": datetime.now(timezone.utc).isoformat(),
+                        "event": {
+                            "hook_event_name": "UserPromptSubmit",
+                            "session_id": session_id,
+                            "cwd": "/tmp/project",
+                            "prompt": "startup replay should restore this",
+                        },
+                    }
+                )
+                + "\n"
+            )
+            monitor = LiveAgentMonitor()
+
+            with patch(
+                "sidepulse.status_bar.detect_log_path",
+                return_value=log,
+            ):
+                replayed = status_bar.replay_recent_debug_logs(
+                    monitor,
+                    providers=("codex",),
+                    max_lines=20,
+                )
+
+            snapshot = monitor.snapshot()
+            self.assertEqual(replayed, 1)
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+            self.assertIn("startup replay", snapshot.statuses[0].display_name)
+
+    def test_status_bar_reconciles_missing_codex_stop_hook_from_transcript(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        now = datetime.now(timezone.utc)
+        session_id = "eeeeeeee-ffff-7aaa-8bbb-cccccccccccc"
+        live = LiveAgentMonitor()
+        live.ingest_record(
+            HookEvent(
+                provider="codex",
+                logged_at=now,
+                event_name="UserPromptSubmit",
+                raw={"prompt": "try this after the limit"},
+                session_id=session_id,
+            )
+        )
+        transcript = AgentMonitor(sources=())
+        completed = AgentStatus(
+            provider="codex",
+            agent_id=f"codex:session:{session_id}",
+            display_name="Codex limit test",
+            mode=AgentMode.COMPLETED,
+            updated_at=now + timedelta(seconds=2),
+            event_name="Stop",
+            session_id=session_id,
+            message="You've hit your usage limit.",
+        )
+
+        with patch.object(transcript, "latest_statuses", return_value=(completed,)):
+            changed = status_bar.reconcile_codex_terminal_transcripts(live, transcript)
+
+        self.assertEqual(changed, 1)
+        snapshot = live.snapshot()
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
+        self.assertIn("usage limit", snapshot.statuses[0].message)
+
+    def test_status_bar_keeps_newer_live_codex_state_during_reconciliation(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        now = datetime.now(timezone.utc)
+        session_id = "dddddddd-eeee-7fff-8aaa-bbbbbbbbbbbb"
+        live = LiveAgentMonitor()
+        live.ingest_record(
+            HookEvent(
+                provider="codex",
+                logged_at=now,
+                event_name="UserPromptSubmit",
+                raw={"prompt": "a newer request"},
+                session_id=session_id,
+            )
+        )
+        transcript = AgentMonitor(sources=())
+        stale_completion = AgentStatus(
+            provider="codex",
+            agent_id=f"codex:session:{session_id}",
+            display_name="Codex stale completion",
+            mode=AgentMode.COMPLETED,
+            updated_at=now - timedelta(seconds=2),
+            event_name="Stop",
+            session_id=session_id,
+        )
+
+        with patch.object(
+            transcript,
+            "latest_statuses",
+            return_value=(stale_completion,),
+        ):
+            changed = status_bar.reconcile_codex_terminal_transcripts(live, transcript)
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(live.snapshot().aggregate.mode, AgentMode.WORKING)
 
     def test_status_bar_session_menu_title_is_task_and_project(self) -> None:
         try:
@@ -6910,6 +7028,63 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
             self.assertEqual(snapshot.statuses[0].event_name, "Stop")
+
+    def test_codex_transcript_usage_limit_completes_without_stop_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_id = "019ff788-2e54-7f12-8d13-91b66abe029d"
+            path = root / f"rollout-2026-08-12T15-52-04-{session_id}.jsonl"
+            now = datetime.now(timezone.utc).isoformat()
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "timestamp": now,
+                                "type": "turn_context",
+                                "payload": {"cwd": "/tmp/project", "turn_id": "turn-1"},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "timestamp": now,
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": "continue"}],
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "timestamp": now,
+                                "type": "event_msg",
+                                "payload": {
+                                    "type": "task_complete",
+                                    "turn_id": "turn-1",
+                                    "last_agent_message": None,
+                                    "error": {
+                                        "message": "You've hit your usage limit.",
+                                        "codex_error_info": "usage_limit_exceeded",
+                                    },
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+
+            monitor = AgentMonitor(
+                sources=(SourceSpec("codex-transcripts", root),),
+                stale_after_seconds=3600,
+            )
+            snapshot = monitor.snapshot()
+
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
+            self.assertEqual(snapshot.statuses[0].event_name, "Stop")
+            self.assertIn("usage limit", snapshot.statuses[0].message)
 
     def test_claude_transcript_fallback_marks_tool_calls_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

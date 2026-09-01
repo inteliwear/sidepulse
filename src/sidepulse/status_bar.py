@@ -80,7 +80,13 @@ from .audit import (
     read_status_history_records,
     status_history_record,
 )
-from .collector import LiveAgentMonitor, SourceSpec
+from .collector import (
+    CODEX_TRANSCRIPT_PROVIDER,
+    AgentMonitor,
+    LiveAgentMonitor,
+    SourceSpec,
+    read_recent_lines,
+)
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -134,6 +140,7 @@ from .providers import (
     detect_claude_config,
     detect_codex_config,
     detect_grok_config,
+    detect_log_path,
     default_state_dir,
     parse_log_line,
 )
@@ -508,6 +515,40 @@ def format_percent_value(value: float | int) -> str:
     return f"{number:.1f}%"
 
 
+def reconcile_codex_terminal_transcripts(
+    monitor: LiveAgentMonitor,
+    transcript_monitor: AgentMonitor,
+) -> int:
+    """Recover terminal Codex states that can be omitted from live hooks."""
+    terminal = (
+        status
+        for status in transcript_monitor.latest_statuses()
+        if status.provider == "codex" and status.event_name == "Stop"
+    )
+    return monitor.reconcile_statuses(terminal)
+
+
+def replay_recent_debug_logs(
+    monitor: LiveAgentMonitor,
+    *,
+    providers: tuple[str, ...] = ("codex", "claude", "grok"),
+    max_lines: int = 200,
+) -> int:
+    replayed = 0
+    for provider in providers:
+        try:
+            path = detect_log_path(provider)
+            lines = read_recent_lines(path, max_lines) if path.exists() else []
+        except Exception:
+            continue
+        for line in lines:
+            record = parse_log_line(provider, line)
+            if record is not None:
+                monitor.ingest_record(record)
+                replayed += 1
+    return replayed
+
+
 class StatusBarController(NSObject):
     def init(self):
         self = objc.super(StatusBarController, self).init()
@@ -516,6 +557,7 @@ class StatusBarController(NSObject):
 
         self.settings = load_settings()
         self.monitor = self.build_monitor()
+        self.codex_terminal_monitor = self.build_codex_terminal_monitor()
         self.event_server = None
         self.status_item = None
         self.timer = None
@@ -636,6 +678,10 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def refresh_(self, _sender):
         try:
+            reconcile_codex_terminal_transcripts(
+                self.monitor,
+                self.codex_terminal_monitor,
+            )
             snapshot = self.monitor.snapshot(include_stale=False)
         except Exception as exc:
             log_status_bar(f"refresh error: {exc}")
@@ -1054,8 +1100,19 @@ class StatusBarController(NSObject):
             latest_state_path=default_latest_state_path(),
         )
 
+    def build_codex_terminal_monitor(self) -> AgentMonitor:
+        return AgentMonitor(
+            sources=(
+                SourceSpec(
+                    CODEX_TRANSCRIPT_PROVIDER,
+                    Path.home() / ".codex" / "sessions",
+                ),
+            ),
+        )
+
     def reload_monitor(self) -> None:
         self.monitor = self.build_monitor()
+        self.codex_terminal_monitor = self.build_codex_terminal_monitor()
 
     def start_event_server(self) -> None:
         self.stop_event_server()
