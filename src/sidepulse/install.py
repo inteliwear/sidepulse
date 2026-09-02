@@ -106,14 +106,17 @@ def install_claude_hooks(
 
     original = json.dumps(data, sort_keys=True)
     hooks = data.setdefault("hooks", {})
-    command = hook_command("claude", target_log, python_executable)
+    scoped_hooks = claude_hook_settings(
+        target_log,
+        python_executable=python_executable,
+    )["hooks"]
 
-    for event_name in CLAUDE_EVENTS:
+    for event_name, managed_entries in scoped_hooks.items():
         entries = hooks.get(event_name, [])
         if not isinstance(entries, list):
             entries = []
         cleaned = remove_claude_hooks_for_log(entries, target_log)
-        cleaned.append({"matcher": "*", "hooks": [{"type": "command", "command": command}]})
+        cleaned.extend(managed_entries)
         hooks[event_name] = cleaned
 
     changed = json.dumps(data, sort_keys=True) != original
@@ -126,6 +129,27 @@ def install_claude_hooks(
         target_log.touch(exist_ok=True)
 
     return InstallResult("claude", config, target_log, changed, backup, dry_run)
+
+
+def claude_hook_settings(
+    log_path: Path | None = None,
+    *,
+    python_executable: str | None = None,
+) -> dict[str, Any]:
+    """Build invocation-scoped Claude settings without touching user config."""
+    target_log = (log_path or detect_log_path("claude")).expanduser()
+    command = hook_command("claude", target_log, python_executable)
+    return {
+        "hooks": {
+            event_name: [
+                {
+                    "matcher": "*",
+                    "hooks": [{"type": "command", "command": command}],
+                }
+            ]
+            for event_name in CLAUDE_EVENTS
+        }
+    }
 
 
 def install_grok_hooks(

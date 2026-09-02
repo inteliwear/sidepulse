@@ -20,6 +20,7 @@ from .collector import AgentMonitor, SourceSpec, default_sources
 from .device_writer import DEFAULT_FILE_NAME, DeviceWriteError, write_led_program
 from .hook import hook_log_main
 from .install import (
+    claude_hook_settings,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -64,6 +65,10 @@ def sidepulse_main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["agent-monitor"]:
         return main(args[1:], prog="sidepulse agent-monitor")
+    # Claude owns all arguments after the wrapper name, including unknown
+    # options and --help, so do not make argparse interpret them first.
+    if args[:1] == ["claude"]:
+        return cmd_sidepulse_claude(argparse.Namespace(claude_args=args[1:]))
 
     parser = build_sidepulse_parser()
     if not args:
@@ -113,6 +118,21 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     )
     setup.set_defaults(func=cmd_sidepulse_setup)
 
+    claude = subparsers.add_parser(
+        "claude",
+        add_help=False,
+        help="Run one Claude session with SidePulse monitoring enabled.",
+    )
+    claude.add_argument("claude_args", nargs=argparse.REMAINDER)
+    claude.set_defaults(func=cmd_sidepulse_claude)
+
+    uninstall = subparsers.add_parser(
+        "uninstall",
+        help="Remove SidePulse agent hooks from global provider configuration.",
+    )
+    add_uninstall_arguments(uninstall)
+    uninstall.set_defaults(func=cmd_uninstall)
+
     write = subparsers.add_parser(
         "write",
         help=f"Write an LED program to {DEFAULT_FILE_NAME} on a mounted SidePulse Pro or SidePulse Dot device.",
@@ -147,6 +167,14 @@ def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
     hook_log.add_argument("--log", type=Path, required=True)
     hook_log.add_argument("--event", help="Provider-native lifecycle event name (used by cursor).")
     hook_log.set_defaults(func=cmd_hook_log)
+
+
+def add_uninstall_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
+    parser.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
+    parser.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
+    parser.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would change.")
 
 
 def add_sidepulse_status_bar_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -568,6 +596,31 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sidepulse_claude(args: argparse.Namespace) -> int:
+    """Replace this process with one invocation-scoped, monitored Claude session."""
+    executable = shutil.which("claude")
+    if executable is None:
+        print("sidepulse claude: Claude Code is not installed or is not on PATH.", file=sys.stderr)
+        return 127
+
+    log_path = detect_log_path("claude").expanduser()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.touch(exist_ok=True)
+        settings = json.dumps(
+            claude_hook_settings(log_path),
+            separators=(",", ":"),
+        )
+        passthrough = list(args.claude_args)
+        if passthrough[:1] == ["--"]:
+            passthrough = passthrough[1:]
+        os.execv(executable, [executable, "--settings", settings, *passthrough])
+    except OSError as exc:
+        print(f"sidepulse claude: could not launch Claude Code: {exc}", file=sys.stderr)
+        return 126
+    return 0
+
+
 def print_sd_eject_guard_result(result) -> None:
     from .sd_eject_guard_launch import SD_EJECT_GUARD_DISPLAY_NAME
 
@@ -652,11 +705,7 @@ def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
     install.set_defaults(func=cmd_install)
 
     uninstall = subparsers.add_parser("uninstall", help="Remove Codex, Claude, and/or Grok monitor hooks.")
-    uninstall.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
-    uninstall.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
-    uninstall.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
-    uninstall.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
-    uninstall.add_argument("--dry-run", action="store_true", help="Show what would change.")
+    add_uninstall_arguments(uninstall)
     uninstall.set_defaults(func=cmd_uninstall)
 
     add_hook_log_parser(subparsers)

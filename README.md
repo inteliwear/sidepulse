@@ -54,6 +54,19 @@ python3 -m pip install -e .
 sidepulse setup
 ```
 
+Monitor only one Claude Code session without installing global Claude hooks:
+
+```sh
+sidepulse uninstall claude
+sidepulse claude
+sidepulse claude --model sonnet
+```
+
+`sidepulse claude` passes every argument through to Claude Code and injects
+SidePulse hooks through Claude's invocation-scoped `--settings` option. It does
+not modify user or project settings. Other Claude sessions remain unmonitored
+after the global Claude hooks are removed.
+
 Write an LED program directly to a mounted SidePulse Pro or SidePulse Dot device:
 
 ```sh
@@ -429,11 +442,13 @@ back to the eight-LED SidePulse Pro layout if the name is unknown.
 Remove monitor hooks:
 
 ```sh
-sidepulse agent-monitor uninstall
-sidepulse agent-monitor uninstall codex
-sidepulse agent-monitor uninstall claude
-sidepulse agent-monitor uninstall grok
+sidepulse uninstall
+sidepulse uninstall codex
+sidepulse uninstall claude
+sidepulse uninstall grok
 ```
+
+The older `sidepulse agent-monitor uninstall ...` spelling remains supported.
 
 Install and start the macOS status-bar app:
 
