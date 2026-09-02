@@ -22,6 +22,7 @@ from sidepulse.audit import (
     export_status_audit_html,
     read_status_history_records,
     read_status_audit_records,
+    rotate_status_audit_log,
     status_history_record,
 )
 from sidepulse.battery import (
@@ -192,6 +193,7 @@ from sidepulse.status_bar_launch import (
     STATUS_BAR_DISPLAY_NAME,
     build_launch_agent_plist,
     build_status_bar_launcher_script,
+    build_status_bar_bundle_info,
     install_launch_agent,
     launch_agent_installed,
 )
@@ -488,6 +490,19 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(export_status_audit_html(html_path, source=log), 1)
             self.assertIn("hook_event,status", csv_path.read_text())
             self.assertIn("SidePulse Agent Debug Log", html_path.read_text())
+
+    def test_status_audit_log_rotation_bounds_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "event-status.jsonl"
+            log.write_text("oldest")
+            self.assertTrue(rotate_status_audit_log(log, max_bytes=1, backup_count=2))
+            self.assertFalse(log.exists())
+            self.assertEqual(log.with_name("event-status.jsonl.1").read_text(), "oldest")
+
+            log.write_text("newer")
+            self.assertTrue(rotate_status_audit_log(log, max_bytes=1, backup_count=2))
+            self.assertEqual(log.with_name("event-status.jsonl.1").read_text(), "newer")
+            self.assertEqual(log.with_name("event-status.jsonl.2").read_text(), "oldest")
 
     def test_status_history_record_includes_charger_power_and_sleep_state(self) -> None:
         record = status_history_record(
@@ -5870,8 +5885,10 @@ class AgentMonitorTests(unittest.TestCase):
     def test_status_bar_launcher_uses_background_item_name(self) -> None:
         script = build_status_bar_launcher_script(python_executable="/usr/bin/python3")
 
-        self.assertEqual(STATUS_BAR_DISPLAY_NAME, "SidePulse Status Bar")
+        self.assertEqual(STATUS_BAR_DISPLAY_NAME, "SidePulse")
         self.assertIn("exec /usr/bin/python3 -m sidepulse status-bar --foreground", script)
+        self.assertEqual(build_status_bar_bundle_info()["CFBundleIdentifier"], "io.sidepulse.statusbar")
+        self.assertTrue(build_status_bar_bundle_info()["LSUIElement"])
 
     def test_status_bar_launch_agent_installed_checks_plist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5939,7 +5956,7 @@ class AgentMonitorTests(unittest.TestCase):
             target = base / "io.sidepulse.agentstatus.plist"
             legacy = base / "com.sidepulse.agentstatus.plist"
             pixiepulse_legacy = base / "com.pixiepulse.agentstatus.plist"
-            launcher = base / "SidePulse Status Bar"
+            launcher = base / "SidePulse.app" / "Contents" / "MacOS" / "SidePulse"
             legacy.write_bytes(b"old")
             pixiepulse_legacy.write_bytes(b"old")
 
@@ -5959,6 +5976,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(result.changed)
             self.assertTrue(target.exists())
             self.assertTrue(launcher.exists())
+            self.assertTrue((base / "SidePulse.app" / "Contents" / "Info.plist").exists())
             self.assertEqual(plistlib.loads(target.read_bytes())["ProgramArguments"], [str(launcher)])
             self.assertFalse(legacy.exists())
             self.assertFalse(pixiepulse_legacy.exists())
