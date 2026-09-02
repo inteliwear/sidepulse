@@ -325,6 +325,19 @@ Check the current hook configuration:
 sidepulse agent-monitor doctor
 ```
 
+For runtime checks and a shareable diagnostics archive:
+
+```sh
+sidepulse agent-monitor doctor --verbose
+sidepulse agent-monitor doctor --preview-bundle
+sidepulse agent-monitor doctor --bundle ~/Desktop/sidepulse-diagnostics.zip
+```
+
+The bundle contains the structured health report and only the last 200 lines of
+SidePulse's own status-bar logs. Provider configs and transcripts are excluded.
+`--preview-bundle` shows the exact redacted `doctor.json`, archive metadata,
+and sensitive data categories that are excluded without writing a ZIP file.
+
 Install or refresh the monitor hooks:
 
 ```sh
