@@ -74,8 +74,11 @@ CURSOR_EVENTS = (
     "stop",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor")
-KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
+KIRO_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+KIRO_MANAGED_DESCRIPTION = "Kiro agent with SidePulse lifecycle monitoring enabled."
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "kiro")
+KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + KIRO_EVENTS))
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_claude_config(home),
         detect_grok_config(home),
         detect_cursor_config(home),
+        detect_kiro_config(home),
     ]
 
 
@@ -335,6 +339,36 @@ def _paths_from_cursor_entries(entries: list[Any]) -> list[Path]:
     return paths
 
 
+def default_kiro_agent_config_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".kiro" / "agents" / "sidepulse.json"
+
+
+def detect_kiro_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_kiro_agent_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("kiro", config_path, False, False, (), ())
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        return ProviderConfig("kiro", config_path, True, False, (), ())
+    hooks = data.get("hooks") or {}
+    events: list[str] = []
+    paths: list[Path] = []
+    if isinstance(hooks, dict):
+        for event_name, entries in hooks.items():
+            canonical = canonical_event_name(event_name)
+            if canonical not in KIRO_EVENTS or not isinstance(entries, list):
+                continue
+            events.append(canonical)
+            for entry in entries:
+                if isinstance(entry, dict) and isinstance(entry.get("command"), str):
+                    paths.extend(extract_log_paths_from_command(entry["command"]))
+    enabled = data.get("description") == KIRO_MANAGED_DESCRIPTION and bool(events)
+    return ProviderConfig(
+        "kiro", config_path, True, enabled, tuple(sorted(set(events))), _dedupe_paths(paths)
+    )
+
+
 def detect_log_path(provider: str, home: Path | None = None) -> Path:
     if provider == "codex":
         config = detect_codex_config(home)
@@ -344,6 +378,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_grok_config(home)
     elif provider == "cursor":
         config = detect_cursor_config(home)
+    elif provider == "kiro":
+        config = detect_kiro_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
@@ -442,6 +478,7 @@ def canonical_event_name(value: Any) -> str | None:
             "pre_compact": "PreCompact",
             "post_compact": "PostCompact",
             "stop_failure": "StopFailure",
+            "agent_spawn": "SessionStart",
         }
     )
     return aliases.get(normalized)
@@ -461,6 +498,8 @@ def normalize_event_payload(raw: dict[str, Any], event_name: str, logged_at: Any
     _copy_alias(normalized, "toolInput", "tool_input")
     _copy_alias(normalized, "toolResponse", "tool_response")
     _copy_alias(normalized, "lastAssistantMessage", "last_assistant_message")
+    if "last_assistant_message" not in normalized and "assistant_response" in normalized:
+        normalized["last_assistant_message"] = normalized["assistant_response"]
     _copy_alias(normalized, "notificationType", "notification_type")
     _copy_alias(normalized, "agentOrigin", "agent_origin")
     _copy_alias(normalized, "agentOriginKind", "agent_origin_kind")

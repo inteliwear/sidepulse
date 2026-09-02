@@ -196,6 +196,7 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Kiro CLI | `~/.kiro/agents/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/kiro.jsonl` |
 
 #### Local reply classifier (Apple Silicon)
 
@@ -271,11 +272,11 @@ Set up this Mac explicitly after package install:
 sidepulse setup
 ```
 
-`sidepulse setup` installs or refreshes Codex, Claude, and Grok hooks, installs
+`sidepulse setup` installs or refreshes Codex, Claude, Grok, and Kiro hooks, installs
 SidePulse Pro Eject Prevention, writes the status-bar LaunchAgent, starts both helpers
 immediately, and enables them at login. This is intentionally an explicit
 command instead of a `pip install` side effect. To set up only one provider, use
-`sidepulse setup codex`, `sidepulse setup claude`, or `sidepulse setup grok`.
+`sidepulse setup codex`, `sidepulse setup claude`, `sidepulse setup grok`, or `sidepulse setup kiro`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
 
@@ -332,7 +333,13 @@ sidepulse agent-monitor install
 sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
+sidepulse agent-monitor install kiro
 ```
+
+Kiro CLI currently scopes hooks to agent configuration files rather than a
+universal global hook file. SidePulse installs a managed global agent named
+`sidepulse`; launch it with `kiro-cli --agent sidepulse`. The installer refuses
+to overwrite an unmanaged `~/.kiro/agents/sidepulse.json`.
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
 the event to the monitor log and then makes a short best-effort local socket
@@ -433,6 +440,7 @@ sidepulse agent-monitor uninstall
 sidepulse agent-monitor uninstall codex
 sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
+sidepulse agent-monitor uninstall kiro
 ```
 
 Install and start the macOS status-bar app:
