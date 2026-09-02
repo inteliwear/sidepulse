@@ -74,7 +74,15 @@ CURSOR_EVENTS = (
     "stop",
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor")
+ANTIGRAVITY_EVENTS = (
+    "PreInvocation",
+    "PostInvocation",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+)
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "antigravity")
 KNOWN_EVENTS = tuple(dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS))
 
 
@@ -134,6 +142,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_claude_config(home),
         detect_grok_config(home),
         detect_cursor_config(home),
+        detect_antigravity_config(home),
     ]
 
 
@@ -335,6 +344,37 @@ def _paths_from_cursor_entries(entries: list[Any]) -> list[Path]:
     return paths
 
 
+def default_antigravity_hook_config_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".gemini" / "config" / "hooks.json"
+
+
+def detect_antigravity_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_antigravity_hook_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("antigravity", config_path, False, False, (), ())
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        return ProviderConfig("antigravity", config_path, True, False, (), ())
+    integration = data.get("sidepulse-agent-monitor") or {}
+    hook_events: list[str] = []
+    paths: list[Path] = []
+    if isinstance(integration, dict):
+        for event_name, entries in integration.items():
+            if event_name not in ANTIGRAVITY_EVENTS or not isinstance(entries, list):
+                continue
+            hook_events.append(event_name)
+            paths.extend(_paths_from_hook_entries(entries))
+    return ProviderConfig(
+        "antigravity",
+        config_path,
+        True,
+        bool(hook_events),
+        tuple(sorted(set(hook_events))),
+        _dedupe_paths(paths),
+    )
+
+
 def detect_log_path(provider: str, home: Path | None = None) -> Path:
     if provider == "codex":
         config = detect_codex_config(home)
@@ -344,6 +384,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_grok_config(home)
     elif provider == "cursor":
         config = detect_cursor_config(home)
+    elif provider == "antigravity":
+        config = detect_antigravity_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
@@ -488,6 +530,18 @@ def _paths_from_hook_entries(entries: list[Any]) -> list[Path]:
             command = hook.get("command")
             if isinstance(command, str):
                 paths.extend(extract_log_paths_from_command(command))
+    return paths
+
+
+def _paths_from_antigravity_entries(entries: list[Any]) -> list[Path]:
+    paths: list[Path] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        command = entry.get("command")
+        if isinstance(command, str):
+            paths.extend(extract_log_paths_from_command(command))
+        paths.extend(_paths_from_hook_entries([entry]))
     return paths
 
 

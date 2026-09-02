@@ -3722,6 +3722,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        antigravity_result = SimpleNamespace(
+            provider="antigravity",
+            config_path=Path("/tmp/antigravity-hooks.json"),
+            log_path=Path("/tmp/antigravity.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3747,6 +3754,11 @@ class AgentMonitorTests(unittest.TestCase):
                 return_value=cursor_result,
             ) as cursor,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
+            patch.object(
+                cli_module,
+                "install_antigravity_hooks",
+                return_value=antigravity_result,
+            ) as antigravity,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3763,6 +3775,7 @@ class AgentMonitorTests(unittest.TestCase):
         claude.assert_called_once()
         cursor.assert_called_once()
         grok.assert_called_once()
+        antigravity.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
 
