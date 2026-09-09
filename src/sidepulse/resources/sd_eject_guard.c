@@ -5,7 +5,8 @@
 // hibernate wake). The eject goes through the same DiskArbitration approval
 // mechanism, so a registered client can dissent it right back. This tool does
 // that, then retries the mount every few seconds; the retries are dissented
-// while locked and succeed after unlock.
+// while locked and succeed after unlock. Retries stop once the disk mounts,
+// when it disappears, or after MOUNT_RETRY_MAX_ATTEMPTS.
 //
 // Build: clang -o "SidePulse Pro Eject Prevention" sd_eject_guard.c \
 //          -framework DiskArbitration -framework CoreFoundation
@@ -20,10 +21,22 @@
 #include <unistd.h>
 
 #define MOUNT_RETRY_SECONDS 5.0
+#define MOUNT_RETRY_MAX_ATTEMPTS 240
+#define MAX_TRACKED_DISKS 8
 #define LOG_TRUNCATE_BYTES (10 * 1024 * 1024)
 
 static DASessionRef g_session;
 static bool g_no_mount = false;
+
+// One retry timer per disk; a repeat eject must not stack another.
+typedef struct {
+    char bsd[32];
+    DADiskRef disk;
+    CFRunLoopTimerRef timer;
+    int attempts;
+} MountRetry;
+
+static MountRetry g_retries[MAX_TRACKED_DISKS];
 
 static void truncate_stdout_if_large(void) {
     fflush(stdout);
@@ -65,16 +78,19 @@ static bool is_mounted(DADiskRef disk) {
     return mounted;
 }
 
-static void mount_done(DADiskRef disk, DADissenterRef dissenter, void *ctx);
+static MountRetry *find_retry(const char *bsd) {
+    for (int i = 0; i < MAX_TRACKED_DISKS; i++)
+        if (g_retries[i].timer && strcmp(g_retries[i].bsd, bsd) == 0)
+            return &g_retries[i];
+    return NULL;
+}
 
-static void retry_mount(CFRunLoopTimerRef timer, void *info) {
-    DADiskRef disk = (DADiskRef)info;
-    if (is_mounted(disk)) {
-        CFRunLoopTimerInvalidate(timer);
-        CFRelease(disk);
-        return;
-    }
-    DADiskMount(disk, NULL, kDADiskMountOptionDefault, mount_done, NULL);
+static void stop_retry(MountRetry *r) {
+    if (!r || !r->timer) return;
+    CFRunLoopTimerInvalidate(r->timer);
+    CFRelease(r->timer);
+    CFRelease(r->disk);
+    memset(r, 0, sizeof(*r));
 }
 
 static void mount_done(DADiskRef disk, DADissenterRef dissenter, void *ctx) {
@@ -83,30 +99,59 @@ static void mount_done(DADiskRef disk, DADissenterRef dissenter, void *ctx) {
     (void)ctx;
 }
 
-static void start_mount_retries(DADiskRef disk) {
-    CFRetain(disk);
-    CFRunLoopTimerContext tctx = { 0, (void *)disk, NULL, NULL, NULL };
-    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(
+static void retry_mount(CFRunLoopTimerRef timer, void *info) {
+    (void)timer;
+    MountRetry *r = (MountRetry *)info;
+    if (is_mounted(r->disk) || ++r->attempts > MOUNT_RETRY_MAX_ATTEMPTS) {
+        stop_retry(r);
+        return;
+    }
+    DADiskMount(r->disk, NULL, kDADiskMountOptionDefault, mount_done, NULL);
+}
+
+static void start_mount_retries(DADiskRef disk, const char *bsd) {
+    if (find_retry(bsd)) return;
+
+    MountRetry *slot = NULL;
+    for (int i = 0; i < MAX_TRACKED_DISKS; i++)
+        if (!g_retries[i].timer) { slot = &g_retries[i]; break; }
+    if (!slot) return;
+
+    strlcpy(slot->bsd, bsd, sizeof(slot->bsd));
+    slot->disk = (DADiskRef)CFRetain(disk);
+    slot->attempts = 0;
+
+    CFRunLoopTimerContext tctx = { 0, slot, NULL, NULL, NULL };
+    slot->timer = CFRunLoopTimerCreate(
         kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + MOUNT_RETRY_SECONDS,
         MOUNT_RETRY_SECONDS, 0, 0, retry_mount, &tctx);
-    CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, kCFRunLoopDefaultMode);
-    CFRelease(timer);
+    if (!slot->timer) {
+        CFRelease(slot->disk);
+        memset(slot, 0, sizeof(*slot));
+        return;
+    }
+    CFRunLoopAddTimer(CFRunLoopGetCurrent(), slot->timer, kCFRunLoopDefaultMode);
+}
+
+static void disk_disappeared(DADiskRef disk, void *ctx) {
+    (void)ctx;
+    const char *bsd = DADiskGetBSDName(disk);
+    if (bsd) stop_retry(find_retry(bsd));
 }
 
 static DADissenterRef eject_approval(DADiskRef disk, void *ctx) {
     (void)ctx;
     if (!is_builtin_sd(disk))
         return NULL;  // not ours, allow
-    const char *disk_name = DADiskGetBSDName(disk);
-    if (!disk_name) disk_name = "?";
+    const char *bsd = DADiskGetBSDName(disk);
     CFDictionaryRef desc = DADiskCopyDescription(disk);
     CFStringRef vol = desc ? CFDictionaryGetValue(desc, kDADiskDescriptionVolumeNameKey) : NULL;
     truncate_stdout_if_large();
-    printf("prevented eject of %s", disk_name);
+    printf("prevented eject of %s", bsd ? bsd : "?");
     log_msg(" (volume: %s)\n", vol);
     if (desc) CFRelease(desc);
-    if (!g_no_mount)
-        start_mount_retries(disk);
+    if (!g_no_mount && bsd)
+        start_mount_retries(disk, bsd);
     return DADissenterCreate(kCFAllocatorDefault, kDAReturnNotPermitted,
                              CFSTR("SidePulse Pro Eject Prevention: keeping SD card attached"));
 }
@@ -126,6 +171,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     DARegisterDiskEjectApprovalCallback(g_session, NULL, eject_approval, NULL);
+    DARegisterDiskDisappearedCallback(g_session, NULL, disk_disappeared, NULL);
     DASessionScheduleWithRunLoop(g_session, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     CFRunLoopRun();
     return 0;
