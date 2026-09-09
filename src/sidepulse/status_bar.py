@@ -348,6 +348,12 @@ STATE_IDLE = StatusBarState("Idle", "circle", 4)
 STATE_WORKING = StatusBarState("Working", "arrow.triangle.2.circlepath", 2)
 STATE_DONE = StatusBarState("Done", "checkmark.circle", 3)
 STATE_ASK = StatusBarState("Ask", "questionmark.circle", 1)
+
+
+def menu_bar_title(label: str, *, enabled: bool) -> str:
+    return f" {label}" if enabled else ""
+
+
 STATUS_BAR_DEVICE_PRIORITY = ("sidepulsepro", "sidepulsedot", "pulsedot")
 STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
     "SidePulsePro",
@@ -615,7 +621,7 @@ class StatusBarController(NSObject):
             NSVariableStatusItemLength
         )
         button = self.status_item.button()
-        button.setTitle_(" Idle")
+        button.setTitle_(self.status_bar_title(STATE_IDLE.label))
         button.setImage_(image_for_symbol(STATE_IDLE.symbol, STATE_IDLE.label))
         button.setToolTip_("SidePulse Agent Monitor: Idle")
         log_status_bar("status item created")
@@ -1017,6 +1023,14 @@ class StatusBarController(NSObject):
         self.set_device_brightness(str(device_id), sender.doubleValue())
 
     @objc.IBAction
+    def toggleStatusBarLabel_(self, _sender):
+        self.set_status_bar_label(not self.settings.status_bar_label_enabled)
+
+    @objc.IBAction
+    def setStatusBarLabelFromCheckbox_(self, sender):
+        self.set_status_bar_label(sender.state() == NSOnState)
+
+    @objc.IBAction
     def toggleVirtualStatusDevice_(self, _sender):
         if not SIDEPULSE_NOTCH_FEATURE_ENABLED:
             self.set_virtual_status_device(False)
@@ -1067,6 +1081,9 @@ class StatusBarController(NSObject):
         self.closed_lid_awake.release()
         self.keep_awake.release()
 
+    def status_bar_title(self, label: str) -> str:
+        return menu_bar_title(label, enabled=self.settings.status_bar_label_enabled)
+
     def set_status(self, state: StatusBarState) -> None:
         previous = self.current_state
         self.current_state = state
@@ -1075,7 +1092,7 @@ class StatusBarController(NSObject):
         button = self.status_item.button()
         if button is None:
             return
-        button.setTitle_(f" {state.label}")
+        button.setTitle_(self.status_bar_title(state.label))
         button.setImage_(image_for_symbol(state.symbol, state.label))
         button.setToolTip_(f"SidePulse Agent Monitor: {state.label}")
         if previous != state:
@@ -1409,6 +1426,10 @@ class StatusBarController(NSObject):
         set_checkbox_state(
             self.settings_buttons.get("battery_power_preview"),
             self.settings.battery_show_on_power_change,
+        )
+        set_checkbox_state(
+            self.settings_buttons.get("status_bar_label"),
+            self.settings.status_bar_label_enabled,
         )
         for mode_value in ANIMATION_UI_STATES:
             popup = self.settings_fields.get(f"agent_animation_{mode_value}")
@@ -2025,6 +2046,25 @@ class StatusBarController(NSObject):
                 menu.cancelTracking()
         except Exception:
             pass
+
+    def set_status_bar_label(self, enabled: bool) -> None:
+        try:
+            self.settings = self.settings.with_status_bar_label(enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save settings: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+
+        if self.status_item is not None:
+            button = self.status_item.button()
+            if button is not None:
+                button.setTitle_(self.status_bar_title(self.current_state.label))
+        self.set_settings_message(
+            f"Menu bar label {'shown' if enabled else 'hidden'}."
+        )
+        self.refresh_settings_window()
 
     def set_battery_power_preview(self, enabled: bool) -> None:
         try:
@@ -4653,6 +4693,19 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "%", 328, 196, 24, 22)
     add_button(behavior_tab, "Save", 32, 112, 90, 28, target, "saveAgentListTiming:")
 
+    add_separator(behavior_tab, 24, 78, tab_width - 48)
+    add_label(behavior_tab, "Menu Bar", 24, 50, 240, 24)
+    status_bar_label = add_checkbox(
+        behavior_tab,
+        "Show status text next to the icon",
+        32,
+        18,
+        300,
+        24,
+        target,
+        "setStatusBarLabelFromCheckbox:",
+    )
+
     add_label(history_tab, "Status History", 24, 398, 240, 24)
     add_label(history_tab, "Timeframe", 430, 398, 76, 22)
     history_timeframe = add_history_timeframe_popup(history_tab, 508, 394, target)
@@ -4714,6 +4767,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_transcripts": claude_transcripts,
         "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
+        "status_bar_label": status_bar_label,
         "delete_agent_animation_profile": delete_animation_profile,
     }
     return window

@@ -978,6 +978,20 @@ class PureUiLogicTests(unittest.TestCase):
                 self.assertTrue(text)
                 self.assertRegex(text, r"\d")
 
+    def test_menu_bar_title_tracks_the_label_setting(self):
+        for state in (sb.STATE_IDLE, sb.STATE_WORKING, sb.STATE_DONE, sb.STATE_ASK):
+            with self.subTest(state=state.label):
+                self.assertEqual(
+                    sb.menu_bar_title(state.label, enabled=True), f" {state.label}"
+                )
+                self.assertEqual(sb.menu_bar_title(state.label, enabled=False), "")
+
+    def test_status_bar_label_setting_defaults_to_shown(self):
+        self.assertTrue(AgentMonitorSettings().status_bar_label_enabled)
+        self.assertFalse(
+            AgentMonitorSettings().with_status_bar_label(False).status_bar_label_enabled
+        )
+
     def test_terminal_app_labels_exist_for_every_choice(self):
         for app in sb.TERMINAL_APP_CHOICES:
             with self.subTest(app=app):

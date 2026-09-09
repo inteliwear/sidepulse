@@ -331,6 +331,7 @@ class AgentMonitorSettings:
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
+    status_bar_label_enabled: bool = True
 
     def transcript_enabled(self, provider: str) -> bool:
         if provider == "codex":
@@ -770,6 +771,9 @@ class AgentMonitorSettings:
     def with_virtual_status_device(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, virtual_status_device_enabled=bool(enabled))
 
+    def with_status_bar_label(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, status_bar_label_enabled=bool(enabled))
+
     def with_agent_list_timing(
         self,
         *,
@@ -803,6 +807,7 @@ class AgentMonitorSettings:
             "devices": [device.to_dict() for device in self.devices],
             "sleep_prevention_policy": self.sleep_prevention_policy,
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
+            "status_bar_label_enabled": self.status_bar_label_enabled,
             "closed_lid_system_override_enabled": self.closed_lid_system_override_enabled,
             "lid_closed_animation": self.lid_closed_animation.to_dict(),
             "lid_open_animation": self.lid_open_animation.to_dict(),
@@ -952,6 +957,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         virtual_status_device_enabled=_bool_setting(
             data.get("virtual_status_device_enabled"), False
         ),
+        status_bar_label_enabled=_bool_setting(data.get("status_bar_label_enabled"), True),
         closed_lid_system_override_enabled=_bool_setting(
             data.get("closed_lid_system_override_enabled"),
             False,

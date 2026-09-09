@@ -5932,6 +5932,27 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(reloaded.session_terminal_app, TERMINAL_APP_ITERM)
             self.assertEqual(reloaded.custom_terminal_path, "/Applications/WezTerm.app")
 
+    def test_settings_round_trip_status_bar_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+
+            self.assertTrue(AgentMonitorSettings().status_bar_label_enabled)
+
+            hidden = AgentMonitorSettings().with_status_bar_label(False)
+            save_settings(hidden, settings_path)
+            self.assertFalse(load_settings(settings_path).status_bar_label_enabled)
+
+            shown = load_settings(settings_path).with_status_bar_label(True)
+            save_settings(shown, settings_path)
+            self.assertTrue(load_settings(settings_path).status_bar_label_enabled)
+
+    def test_settings_without_status_bar_label_key_defaults_to_shown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(json.dumps({"led_display": "agent"}))
+
+            self.assertTrue(load_settings(settings_path).status_bar_label_enabled)
+
     def test_settings_round_trip_grok_session_opening_is_split_from_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
