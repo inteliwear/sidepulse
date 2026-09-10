@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -36,6 +38,21 @@ def write_led_program(
     dry_run: bool = False,
 ) -> Path:
     program = normalize_led_text(text)
+    return write_normalized_led_program(
+        program,
+        device_path=device_path,
+        file_name=file_name,
+        dry_run=dry_run,
+    )
+
+
+def write_normalized_led_program(
+    program: str,
+    *,
+    device_path: Path | None = None,
+    file_name: str = DEFAULT_FILE_NAME,
+    dry_run: bool = False,
+) -> Path:
     validate_led_text(program)
     target = resolve_target_path(device_path=device_path, file_name=file_name)
 
@@ -109,7 +126,7 @@ def resolve_target_path(
     if not candidates:
         raise DeviceWriteError(
             "No SidePulse Pro or SidePulse Dot device found. "
-            "Mount the device, or pass --device /Volumes/SidePulseDot."
+            "Mount the device, or pass --device /path/to/SidePulseDot."
         )
     if len(candidates) > 1:
         lines = "\n".join(f"  {candidate.root}" for candidate in candidates)
@@ -127,22 +144,68 @@ def target_from_device_path(path: Path, file_name: str) -> Path:
 
 def discover_devices(
     *,
-    mount_root: Path = MOUNT_ROOT,
+    mount_root: Path | None = None,
     file_name: str = DEFAULT_FILE_NAME,
 ) -> list[DeviceCandidate]:
-    if not mount_root.exists():
-        return []
-
     candidates: list[DeviceCandidate] = []
-    for volume in sorted(iter_mounts(mount_root), key=lambda path: path.name.lower()):
-        target = target_from_device_path(volume, file_name)
-        name_matches = is_device_name(volume.name)
-        file_exists = path_exists(target)
-        if file_exists:
-            candidates.append(DeviceCandidate(volume, target, f"contains {target.name}"))
-        elif name_matches:
-            candidates.append(DeviceCandidate(volume, target, "name matches device"))
+    seen: set[Path] = set()
+    roots = (mount_root,) if mount_root is not None else default_mount_roots()
+    for root in roots:
+        if not root.exists():
+            continue
+        for volume in sorted(iter_mounts(root), key=lambda path: path.name.lower()):
+            if volume in seen:
+                continue
+            seen.add(volume)
+            target = target_from_device_path(volume, file_name)
+            name_matches = is_device_name(volume.name)
+            file_exists = path_exists(target)
+            if file_exists:
+                candidates.append(
+                    DeviceCandidate(volume, target, f"contains {target.name}")
+                )
+            elif name_matches:
+                candidates.append(DeviceCandidate(volume, target, "name matches device"))
     return candidates
+
+
+def default_mount_roots(
+    *,
+    platform: str | None = None,
+    home: Path | None = None,
+) -> tuple[Path, ...]:
+    configured = os.environ.get("SIDEPULSE_MOUNT_ROOTS")
+    if configured is not None:
+        return tuple(
+            Path(value).expanduser()
+            for value in configured.split(os.pathsep)
+            if value.strip()
+        )
+
+    current_platform = platform or sys.platform
+    if current_platform == "darwin":
+        return (MOUNT_ROOT,)
+    if current_platform.startswith("linux"):
+        username = (home or Path.home()).name
+        return unique_paths(
+            (
+                Path("/media") / username,
+                Path("/run/media") / username,
+                Path("/media"),
+                Path("/run/media"),
+                Path("/mnt"),
+            )
+        )
+    return (MOUNT_ROOT,)
+
+
+def unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
+    result: list[Path] = []
+    for path in paths:
+        if path not in result:
+            result.append(path)
+    return tuple(result)
+
 
 def iter_mounts(mount_root: Path) -> Iterable[Path]:
     try:

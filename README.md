@@ -28,10 +28,18 @@ Choose the level that fits how you want to use SidePulse.
 curl -fsSL https://sidepulse.io/setup.sh | bash
 ```
 
-The [setup script](scripts/setup.sh) creates an isolated environment under
+The command works on macOS and Linux with Python 3.10 or newer. The
+[setup script](scripts/setup.sh) creates an isolated environment under
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
-at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. Run the same command
-again to upgrade to the newest version.
+at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. On macOS, setup also
+installs the menu-bar app and hardware helpers. On Linux, it automatically
+uses CLI-only mode for mounted SidePulse devices and iPhone linking/push. Run
+the same command again to upgrade to the newest version.
+
+Setup also installs a headless SidePulse service. It runs through a LaunchAgent
+on macOS and a user systemd service on Linux. If a Linux session has no systemd
+user manager, setup still installs the unit and prints that it could not start;
+`sidepulse service run` remains available as a foreground fallback.
 
 ### 2. Install into your own Python environment
 
@@ -54,23 +62,100 @@ python3 -m pip install -e .
 sidepulse setup
 ```
 
-Write an LED program directly to a mounted SidePulse Pro or SidePulse Dot device:
+Send an LED program to SidePulse:
 
 ```sh
 sidepulse write "off\n#ff3a00 1.6s pulse\nrepeat"
 ```
 
-The CLI auto-detects mounted devices under `/Volumes` by looking for a
-SidePulse Pro/SidePulse Dot-style volume name or an existing `LEDS.LED`. If more than
-one device is possible, pass the mounted folder or file explicitly:
+`sidepulse write` prefers mounted hardware and falls back to a linked phone.
+`sidepulse push` accepts the same options but prefers a linked phone, which is
+useful for hooks and remote notifications:
+
+```sh
+sidepulse push "off\n#00ff66 pulse\nrepeat" \
+  --title "Build complete" \
+  --message "All tests passed"
+```
+
+The LED program is optional when a title or message is present:
+
+```sh
+sidepulse push --title "Agent needs input" --message "Choose a deployment region"
+```
+
+Choose a destination by its displayed name or short ID. If multiple compatible
+destinations are available, SidePulse asks for `--to` instead of silently
+broadcasting. Use `--all` when broadcasting is intentional:
+
+```sh
+sidepulse write "off" --to "Peter's iPhone"
+sidepulse push "off" --to a1b2c3d4
+sidepulse write "off" --all
+```
+
+Both commands accept `-` for stdin. `sidepulse write` also reads piped stdin when
+no LED argument or notification text was supplied:
+
+```sh
+printf 'off\n#ff3a00 pulse\nrepeat' | sidepulse write
+sidepulse push - --title "Deploying" < deploy.LED
+```
+
+The CLI auto-detects mounted devices by looking for a SidePulse Pro/SidePulse
+Dot-style volume name or an existing `LEDS.LED`. It checks `/Volumes` on macOS
+and common removable-media locations such as `/media/$USER`,
+`/run/media/$USER`, and `/mnt` on Linux. For a specific local path, the
+existing `--device` option remains available:
 
 ```sh
 sidepulse write "off\n#ff3a00 1.6s pulse\nrepeat" --device /Volumes/SidePulsePro
 sidepulse write "off" --device /Volumes/SidePulsePro/LEDS.LED
+# Linux example:
+sidepulse write "off" --device /media/$USER/SidePulseDot
 ```
 
 The writer decodes simple escapes such as `\n`, then enforces the controller's
 512-byte and 20-line limits before writing the LED control file.
+
+### Link an iPhone
+
+Run one command and either scan the terminal QR code with the SidePulse iOS app
+or paste the 64-character push token shown by the app:
+
+```sh
+sidepulse link
+```
+
+Linked phones are stored locally. Remote LED-only writes are silent. Adding
+`--title` or `--message` produces one visible notification containing the same
+LED program and event metadata. Remote payloads also include the sending
+computer's name and available battery state. Set `SIDEPULSE_SERVER` to use
+another bridge origin.
+
+### Link a remote VM or computer (WIP)
+
+The receiving Mac gets a persistent, random relay channel during setup. Run
+`sidepulse link` on the Mac to see the short command for another computer, then
+paste that command into the VM. It looks like this:
+
+```sh
+sidepulse link AbCdEfGhIjKlMnOpQrStUv
+```
+
+The VM stores that channel locally. Its agent hooks hand events to the
+background SidePulse service, which publishes them to the Mac. The Mac records
+the remote events alongside its local agent history and updates its connected
+SidePulse hardware or linked iPhone. The VM is an event source, so it does not
+appear in the Devices menu.
+
+The channel is a 128-bit capability token: possession grants access, so treat
+the command like a password. There is no separate one-time code. Check the
+service on either computer with:
+
+```sh
+sidepulse service status
+```
 
 ## Battery LEDs
 
@@ -107,7 +192,7 @@ sidepulse battery configure --full-watts auto
 sidepulse battery configure --show-on-power-change yes --power-change-preview-seconds 7
 ```
 
-## sidepulse
+## macOS companion app
 
 `sidepulse` includes a companion menu-bar app for macOS that controls
 SidePulse Pro and SidePulse Dot.
@@ -116,7 +201,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, and Grok through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, and Junie through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -143,7 +228,7 @@ that depend on the hardware layout have only `-2.LED` and `-8.LED` variants.
 Custom programs are stored in the `animations/` folder beside `settings.json`.
 An animation may set its own `brightness`, which is multiplied by the device's
 brightness setting so the device setting remains the overall limit. The tab shows a
-live Screen Bar-rendered preview for every state;
+live SidePulse Notch-rendered preview for every state;
 **Show** sends that pattern to connected agent-display devices for three
 seconds, then restores live status. **Current** appears whenever individual
 state selections no longer match one of the built-in or saved profiles.
@@ -272,12 +357,11 @@ Set up this Mac explicitly after package install:
 sidepulse setup
 ```
 
-`sidepulse setup` installs or refreshes Codex, Claude, Grok, and Antigravity hooks, installs
-SidePulse Pro Eject Prevention, writes the status-bar LaunchAgent, starts both helpers
-immediately, and enables them at login. This is intentionally an explicit
-command instead of a `pip install` side effect. To set up only one provider, use
-`sidepulse setup codex`, `sidepulse setup claude`, `sidepulse setup grok`, or
-`sidepulse setup antigravity`.
+`sidepulse setup` installs or refreshes all supported agent hooks, including
+Antigravity and Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
+LaunchAgent, starts both helpers immediately, and enables them at login. This is
+intentionally an explicit command instead of a `pip install` side effect. To set
+up only one provider, pass its name, for example `sidepulse setup antigravity`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
 
@@ -335,6 +419,8 @@ sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
 sidepulse agent-monitor install antigravity
+sidepulse agent-monitor install cursor
+sidepulse agent-monitor install junie
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -401,7 +487,7 @@ Codex `PermissionRequest` events are treated as Ask and remain sticky until the
 matching tool command finishes. This prevents unrelated same-session activity
 from hiding an approval prompt that is still waiting on the user.
 
-For Codex, Claude, or Grok projects that should report this reliably, add
+For Codex, Claude, Grok, Cursor, or Junie projects that should report this reliably, add
 guidance like this to the relevant agent instructions:
 
 ```text
@@ -437,6 +523,8 @@ sidepulse agent-monitor uninstall codex
 sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
 sidepulse agent-monitor uninstall antigravity
+sidepulse agent-monitor uninstall cursor
+sidepulse agent-monitor uninstall junie
 ```
 
 Install and start the macOS status-bar app:
@@ -487,22 +575,29 @@ battery status. When agent status is selected, `Show Battery on Plug/Unplug`
 can briefly show the battery animation for seven seconds after the power source
 changes.
 
-The Devices section also offers **Add Screen Bar**, an optional virtual
+The Devices section also offers **Add SidePulse Notch**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers
 the camera island/notch footprint and adds a straight 5 px LED band along the
 bottom edge, or the corresponding top-center position on a display without a
 notch. Each virtual LED blends across a three-LED footprint: centered on the
 target LED, fading one LED width left and right. It shares the physical
 device's status animations, display-mode selection, and per-device brightness
-control. The Screen Bar evaluates the same `LEDS.LED` programs with the
+control. SidePulse Notch evaluates the same `LEDS.LED` programs with the
 firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, and Grok hooks. The transcript
+window can install or uninstall Codex, Claude, Grok, and Junie hooks. The transcript
 checkboxes control the file-based CLI/debug fallback; the status-bar app gets
 live updates from the local hook event socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.
+
+Junie support uses its user-level `~/.junie/config.json` hooks. Junie currently
+emits hooks from its interactive and batch CLI hosts, including CLI sessions
+connected to a JetBrains IDE; Junie hosted directly through IDE/ACP does not yet
+emit hooks. SidePulse intentionally does not register a Junie `PermissionRequest`
+hook because a successful observer hook would automatically approve the requested
+action. Junie's normal approval prompts therefore remain unchanged.
 
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`

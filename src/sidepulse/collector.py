@@ -379,6 +379,7 @@ class LiveAgentMonitor:
         self,
         *,
         sources: Iterable[SourceSpec] = (),
+        recovery_sources: Iterable[SourceSpec] = (),
         stale_after_seconds: float = 3600.0,
         tool_running_timeout_seconds: float = 0.0,
         completed_visible_seconds: float = COMPLETED_VISIBLE_SECONDS,
@@ -387,6 +388,7 @@ class LiveAgentMonitor:
         latest_state_path: Path | None = None,
     ) -> None:
         self.sources = tuple(sources)
+        self.recovery_sources = tuple(recovery_sources)
         self.stale_after_seconds = stale_after_seconds
         self.tool_running_timeout_seconds = tool_running_timeout_seconds
         self.completed_visible_seconds = completed_visible_seconds
@@ -399,6 +401,7 @@ class LiveAgentMonitor:
         self.metadata_by_status: dict[str, StatusMetadata] = {}
         self.pending_permissions_by_key: dict[str, set[str]] = {}
         self.load_latest_state()
+        self.reconcile_recovery_sources()
 
     def ingest_record(self, record: HookEvent) -> None:
         with self.lock:
@@ -455,6 +458,32 @@ class LiveAgentMonitor:
                 loaded[status.agent_id] = status
         self.statuses_by_key.update(loaded)
 
+    def reconcile_recovery_sources(self) -> None:
+        """Merge events missed while the live event socket was unavailable."""
+        if not self.recovery_sources:
+            return
+
+        recovery_monitor = AgentMonitor(
+            sources=self.recovery_sources,
+            stale_after_seconds=self.stale_after_seconds,
+            tool_running_timeout_seconds=self.tool_running_timeout_seconds,
+            completed_visible_seconds=self.completed_visible_seconds,
+            idle_visible_seconds=self.idle_visible_seconds,
+            post_tool_working_visible_seconds=self.post_tool_working_visible_seconds,
+        )
+        recovered_statuses = recovery_monitor._latest_statuses()
+        changed = False
+        for agent_id, recovered in recovered_statuses.items():
+            previous = self.statuses_by_key.get(agent_id)
+            if previous is not None and recovered.updated_at < previous.updated_at:
+                continue
+            if recovered != previous:
+                self.statuses_by_key[agent_id] = recovered
+                changed = True
+
+        if changed:
+            self.write_latest_state()
+
     def write_latest_state(self) -> None:
         if self.latest_state_path is None:
             return
@@ -486,6 +515,7 @@ def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[Sourc
         sources.append(SourceSpec(CLAUDE_TRANSCRIPT_PROVIDER, Path.home() / ".claude" / "projects"))
     sources.append(SourceSpec("grok", detect_log_path("grok")))
     sources.append(SourceSpec("antigravity", detect_log_path("antigravity")))
+    sources.append(SourceSpec("junie", detect_log_path("junie")))
     return unique_sources(sources)
 
 

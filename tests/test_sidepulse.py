@@ -43,6 +43,7 @@ from sidepulse.collector import (
 from sidepulse.cli import build_parser, visible_watch_statuses
 from sidepulse.device_writer import (
     DeviceWriteError,
+    default_mount_roots,
     discover_devices,
     normalize_led_text,
     validate_led_text,
@@ -694,6 +695,114 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(reloaded.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
             self.assertEqual(reloaded.snapshot().statuses[0].origin, "Codex UI")
 
+    def test_live_sidepulse_recovers_stop_missed_during_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            codex_log = base / "codex.jsonl"
+            session_id = "codex-session"
+            prompt_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+            stop_at = prompt_at + timedelta(seconds=5)
+            latest.write_text(
+                json.dumps(
+                    {
+                        "updated_at": prompt_at.isoformat(),
+                        "statuses": [
+                            {
+                                "provider": "codex",
+                                "agent_id": f"codex:session:{session_id}",
+                                "display_name": "project: Restart recovery",
+                                "mode": "working",
+                                "updated_at": prompt_at.isoformat(),
+                                "event_name": "UserPromptSubmit",
+                                "session_id": session_id,
+                                "cwd": "/tmp/project",
+                            }
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            codex_log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": stop_at.isoformat(),
+                        "event": {
+                            "hook_event_name": "Stop",
+                            "session_id": session_id,
+                            "cwd": "/tmp/project",
+                            "last_assistant_message": "Finished.",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            monitor = LiveAgentMonitor(
+                sources=(SourceSpec("event-bus", base / "events.sock"),),
+                recovery_sources=(SourceSpec("codex", codex_log),),
+                stale_after_seconds=3600,
+                latest_state_path=latest,
+            )
+
+            status = monitor.snapshot().statuses[0]
+            self.assertEqual(status.mode, AgentMode.COMPLETED)
+            self.assertEqual(status.event_name, "Stop")
+            persisted = json.loads(latest.read_text())["statuses"][0]
+            self.assertEqual(persisted["mode"], AgentMode.COMPLETED.value)
+            self.assertEqual(persisted["event_name"], "Stop")
+
+    def test_live_sidepulse_recovery_does_not_replace_newer_cached_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            codex_log = base / "codex.jsonl"
+            session_id = "codex-session"
+            prompt_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+            stop_at = prompt_at + timedelta(seconds=5)
+            latest.write_text(
+                json.dumps(
+                    {
+                        "updated_at": stop_at.isoformat(),
+                        "statuses": [
+                            {
+                                "provider": "codex",
+                                "agent_id": f"codex:session:{session_id}",
+                                "display_name": "project: Restart recovery",
+                                "mode": "completed",
+                                "updated_at": stop_at.isoformat(),
+                                "event_name": "Stop",
+                                "session_id": session_id,
+                                "cwd": "/tmp/project",
+                            }
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            codex_log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": prompt_at.isoformat(),
+                        "event": {
+                            "hook_event_name": "UserPromptSubmit",
+                            "session_id": session_id,
+                            "cwd": "/tmp/project",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+            monitor = LiveAgentMonitor(
+                recovery_sources=(SourceSpec("codex", codex_log),),
+                latest_state_path=latest,
+            )
+
+            status = monitor.snapshot().statuses[0]
+            self.assertEqual(status.mode, AgentMode.COMPLETED)
+            self.assertEqual(status.event_name, "Stop")
+
     def test_status_bar_session_menu_title_is_task_and_project(self) -> None:
         try:
             from sidepulse import status_bar
@@ -806,7 +915,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertGreater(image.size().width, 38)
         self.assertEqual(image.size().height, 18)
 
-    def test_virtual_screen_bar_frame_covers_notch_plus_led_band(self) -> None:
+    def test_virtual_sidepulse_notch_frame_covers_notch_plus_led_band(self) -> None:
         try:
             from sidepulse import virtual_device
         except (ImportError, SystemExit) as exc:
@@ -837,7 +946,7 @@ class AgentMonitorTests(unittest.TestCase):
             ((0.0, 0.0), (232.0, 5.0)),
         )
 
-    def test_virtual_screen_bar_on_notchless_display_is_led_band_only(self) -> None:
+    def test_virtual_sidepulse_notch_on_notchless_display_is_led_band_only(self) -> None:
         try:
             from sidepulse import virtual_device
         except (ImportError, SystemExit) as exc:
@@ -865,7 +974,7 @@ class AgentMonitorTests(unittest.TestCase):
             ((850.0, 1075.0), (220.0, 5.0)),
         )
 
-    def test_virtual_screen_bar_redraws_at_60fps(self) -> None:
+    def test_virtual_sidepulse_notch_redraws_at_60fps(self) -> None:
         try:
             from sidepulse import virtual_device
         except (ImportError, SystemExit) as exc:
@@ -967,7 +1076,7 @@ class AgentMonitorTests(unittest.TestCase):
         )
         self.assertEqual(controller.step(1320), [black] * 8)
 
-    def test_virtual_screen_bar_led_blend_spans_three_leds(self) -> None:
+    def test_virtual_sidepulse_notch_led_blend_spans_three_leds(self) -> None:
         try:
             from sidepulse import virtual_device
         except (ImportError, SystemExit) as exc:
@@ -1529,7 +1638,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(by_title["Manual"].state(), 1)
 
-    def test_status_bar_screen_bar_remove_lives_in_screen_bar_submenu(self) -> None:
+    def test_status_bar_sidepulse_notch_remove_lives_in_sidepulse_notch_submenu(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
@@ -1537,7 +1646,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         device = status_bar.StatusBarDevice(
             device_id=status_bar.VIRTUAL_DEVICE_ID,
-            name="Screen Bar",
+            name=status_bar.VIRTUAL_DEVICE_NAME,
             root=Path(status_bar.VIRTUAL_DEVICE_ID),
             target=Path(status_bar.VIRTUAL_DEVICE_ID),
             connected=True,
@@ -1555,17 +1664,18 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
         menu = status_bar.build_menu(snapshot, status_bar.STATE_IDLE, target)
+        self.assertEqual(status_bar.VIRTUAL_DEVICE_NAME, "SidePulse Notch")
         titles = [
             menu.itemAtIndex_(index).title()
             for index in range(menu.numberOfItems())
             if menu.itemAtIndex_(index).title()
         ]
-        screen_bar_item = next(
+        sidepulse_notch_item = next(
             menu.itemAtIndex_(index)
             for index in range(menu.numberOfItems())
-            if menu.itemAtIndex_(index).title() == "Screen Bar"
+            if menu.itemAtIndex_(index).title() == "SidePulse Notch"
         )
-        submenu = screen_bar_item.submenu()
+        submenu = sidepulse_notch_item.submenu()
         submenu_titles = [
             submenu.itemAtIndex_(index).title()
             for index in range(submenu.numberOfItems())
@@ -1577,8 +1687,8 @@ class AgentMonitorTests(unittest.TestCase):
             if submenu.itemAtIndex_(index).view() is not None
         )
 
-        self.assertNotIn("Remove Screen Bar", titles)
-        self.assertIn("Remove Screen Bar", submenu_titles)
+        self.assertNotIn("Remove SidePulse Notch", titles)
+        self.assertIn("Remove SidePulse Notch", submenu_titles)
         self.assertNotIn("Brightness 100%", submenu_titles)
         self.assertEqual(submenu_view_count, 0)
 
@@ -1591,7 +1701,7 @@ class AgentMonitorTests(unittest.TestCase):
             if menu.itemAtIndex_(index).title()
         ]
 
-        self.assertIn("Add Screen Bar", titles)
+        self.assertIn("Add SidePulse Notch", titles)
 
     def test_status_bar_observe_connected_device_resets_on_new_mount(self) -> None:
         try:
@@ -1643,6 +1753,115 @@ class AgentMonitorTests(unittest.TestCase):
         status_bar.StatusBarController.poll_devices_once(target)
 
         self.assertEqual(calls, [None])
+
+    def test_status_bar_poll_devices_refreshes_on_remote_device_change(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        calls: list[object] = []
+        target = SimpleNamespace(
+            observe_connected_devices=lambda: True,
+            last_snapshot=object(),
+            refresh_=lambda sender: calls.append(sender),
+        )
+
+        status_bar.StatusBarController.poll_devices_once(target)
+
+        self.assertEqual(calls, [None])
+
+    def test_status_bar_syncs_agent_status_to_linked_phone_once(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        link = status_bar.IOSLink("Peter's iPhone", "a" * 64)
+        device = status_bar.StatusBarDevice(
+            device_id=status_bar.linked_phone_device_id(link),
+            name=link.name,
+            root=Path("ios/aaaaaaaaaaaa"),
+            target=Path("ios/aaaaaaaaaaaa"),
+            connected=True,
+            display=status_bar.LED_DISPLAY_AGENT,
+            remote_link=link,
+        )
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(),
+            status_bar_devices=lambda remember=True: [device],
+            ensure_device_selection=lambda: None,
+            last_led_error=None,
+            device_errors={},
+            remote_led_program_by_device={},
+            last_led_display_kind_by_device={},
+            reset_led_controllers_for_device=lambda device_id: None,
+            active_led_display_kind_for_device=lambda item, battery: item.display,
+        )
+
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+            status_bar.StatusBarController.sync_leds_now(
+                fake,
+                AgentMode.WORKING,
+                None,
+                status_bar.LED_DISPLAY_AGENT,
+            )
+            status_bar.StatusBarController.sync_leds_now(
+                fake,
+                AgentMode.WORKING,
+                None,
+                status_bar.LED_DISPLAY_AGENT,
+            )
+
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[0], link)
+        self.assertIn("source", send.call_args.kwargs["data"])
+
+    def test_status_bar_syncs_battery_level_to_linked_phone(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        link = status_bar.IOSLink("Peter's iPhone", "b" * 64)
+        device = status_bar.StatusBarDevice(
+            device_id=status_bar.linked_phone_device_id(link),
+            name=link.name,
+            root=Path("ios/bbbbbbbbbbbb"),
+            target=Path("ios/bbbbbbbbbbbb"),
+            connected=True,
+            display=status_bar.LED_DISPLAY_BATTERY,
+            remote_link=link,
+        )
+        snapshot = BatterySnapshot(percent=57, is_plugged=False)
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(),
+            status_bar_devices=lambda remember=True: [device],
+            ensure_device_selection=lambda: None,
+            last_led_error=None,
+            device_errors={},
+            remote_led_program_by_device={},
+            last_led_display_kind_by_device={},
+            reset_led_controllers_for_device=lambda device_id: None,
+            active_led_display_kind_for_device=lambda item, battery: item.display,
+        )
+
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+            status_bar.StatusBarController.sync_leds_now(
+                fake,
+                AgentMode.IDLE_READY,
+                snapshot,
+                status_bar.LED_DISPLAY_BATTERY,
+            )
+
+        self.assertEqual(
+            send.call_args.args[1],
+            status_bar.program_for_battery(snapshot, led_count=8, brightness=255),
+        )
+        self.assertEqual(
+            send.call_args.kwargs["data"]["source"]["battery"]["level"],
+            57,
+        )
 
     def test_status_bar_sync_skips_custom_device_display(self) -> None:
         try:
@@ -1731,6 +1950,39 @@ class AgentMonitorTests(unittest.TestCase):
         write.assert_called_once_with("off", device_path=device.target)
         self.assertEqual(fake.settings.display_for_device(device.device_id), LED_DISPLAY_CUSTOM)
         self.assertEqual(messages[-1], "SidePulse Dot: Manual, LEDs cleared.")
+
+    def test_status_bar_manual_linked_phone_clears_remote_leds(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        link = status_bar.IOSLink("Peter's iPhone", "c" * 64)
+        device = status_bar.StatusBarDevice(
+            device_id=status_bar.linked_phone_device_id(link),
+            name=link.name,
+            root=Path("ios/cccccccccccc"),
+            target=Path("ios/cccccccccccc"),
+            connected=True,
+            display=LED_DISPLAY_CUSTOM,
+            remote_link=link,
+        )
+        fake = SimpleNamespace(
+            last_battery_snapshot=BatterySnapshot(percent=49, is_plugged=False),
+            device_errors={},
+            last_led_error=None,
+        )
+
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+            error = status_bar.StatusBarController.clear_manual_device_display(fake, device)
+
+        self.assertIsNone(error)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[:2], (link, "off"))
+        self.assertEqual(
+            send.call_args.kwargs["data"]["source"]["battery"]["level"],
+            49,
+        )
 
     def test_status_bar_menu_has_sleep_prevention_title_and_policy_choices(self) -> None:
         try:
@@ -2152,6 +2404,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.skipTest(str(exc))
 
         with tempfile.TemporaryDirectory() as tmp:
+            recovery_source = SourceSpec("codex", Path(tmp) / "codex.jsonl")
             fake = SimpleNamespace(
                 settings=AgentMonitorSettings(idle_timeout_seconds=1234)
             )
@@ -2164,10 +2417,15 @@ class AgentMonitorTests(unittest.TestCase):
                     "sidepulse.status_bar.default_latest_state_path",
                     return_value=Path(tmp) / "latest.json",
                 ),
+                patch(
+                    "sidepulse.status_bar.default_sources",
+                    return_value=(recovery_source,),
+                ),
             ):
                 monitor = status_bar.StatusBarController.build_monitor(fake)
 
         self.assertEqual(monitor.stale_after_seconds, 1234)
+        self.assertEqual(monitor.recovery_sources, (recovery_source,))
 
     def test_status_bar_setup_window_has_first_launch_controls(self) -> None:
         try:
@@ -3490,7 +3748,6 @@ class AgentMonitorTests(unittest.TestCase):
             cleanup_removed=None,
             cleanup_skipped=None,
         )
-
         with patch(
             "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
             return_value=guard_result,
@@ -3615,6 +3872,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        junie_result = SimpleNamespace(
+            provider="junie",
+            config_path=Path("/tmp/junie-config.json"),
+            log_path=Path("/tmp/junie.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3630,8 +3894,21 @@ class AgentMonitorTests(unittest.TestCase):
             cleanup_removed=None,
             cleanup_skipped=None,
         )
+        service_result = SimpleNamespace(
+            path=Path("/tmp/io.sidepulse.service.plist"),
+            changed=True,
+            started=True,
+            detail="",
+        )
+        relay_config = SimpleNamespace(
+            receiver_channel="receiver-code",
+            server="https://bridge.sidepulse.io",
+        )
 
         with (
+            patch.object(cli_module.sys, "platform", "darwin"),
+            patch.object(cli_module, "ensure_receiver_config", return_value=relay_config),
+            patch("sidepulse.service_launch.install_service", return_value=service_result) as service,
             patch.object(cli_module, "install_codex_hooks", return_value=codex_result) as codex,
             patch.object(cli_module, "install_claude_hooks", return_value=claude_result) as claude,
             patch.object(
@@ -3645,6 +3922,7 @@ class AgentMonitorTests(unittest.TestCase):
                 "install_antigravity_hooks",
                 return_value=antigravity_result,
             ) as antigravity,
+            patch.object(cli_module, "install_junie_hooks", return_value=junie_result) as junie,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3662,8 +3940,10 @@ class AgentMonitorTests(unittest.TestCase):
         cursor.assert_called_once()
         grok.assert_called_once()
         antigravity.assert_called_once()
+        junie.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
+        service.assert_called_once_with(start=True, dry_run=False)
 
     def test_sidepulse_setup_no_status_bar_still_installs_guard(self) -> None:
         parser = cli_module.build_sidepulse_parser()
@@ -3685,8 +3965,21 @@ class AgentMonitorTests(unittest.TestCase):
             cleanup_removed=None,
             cleanup_skipped=None,
         )
+        service_result = SimpleNamespace(
+            path=Path("/tmp/io.sidepulse.service.plist"),
+            changed=False,
+            started=True,
+            detail="",
+        )
+        relay_config = SimpleNamespace(
+            receiver_channel="receiver-code",
+            server="https://bridge.sidepulse.io",
+        )
 
         with (
+            patch.object(cli_module.sys, "platform", "darwin"),
+            patch.object(cli_module, "ensure_receiver_config", return_value=relay_config),
+            patch("sidepulse.service_launch.install_service", return_value=service_result),
             patch.object(cli_module, "install_hook_results", return_value=[hook_result]),
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
@@ -3699,6 +3992,41 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(result, 0)
         guard.assert_called_once_with(scope="user", dry_run=False)
         launch.assert_not_called()
+
+    def test_sidepulse_setup_is_cli_only_on_linux(self) -> None:
+        parser = cli_module.build_sidepulse_parser()
+        args = parser.parse_args(["setup"])
+        hook_result = SimpleNamespace(
+            provider="codex",
+            config_path=Path("/tmp/codex.toml"),
+            log_path=Path("/tmp/codex.jsonl"),
+            changed=False,
+            backup_path=None,
+        )
+        service_result = SimpleNamespace(
+            path=Path("/tmp/sidepulse.service"),
+            changed=True,
+            started=False,
+            detail="systemd user manager unavailable",
+        )
+
+        with (
+            patch.object(cli_module.sys, "platform", "linux"),
+            patch.object(cli_module, "install_hook_results", return_value=[hook_result]),
+            patch("sidepulse.service_launch.install_service", return_value=service_result) as service,
+            patch("sidepulse.sd_eject_guard_launch.install_sd_eject_guard") as guard,
+            patch("sidepulse.status_bar_launch.install_launch_agent") as launch,
+            patch("builtins.print") as output,
+        ):
+            result = cli_module.cmd_sidepulse_setup(args)
+
+        self.assertEqual(result, 0)
+        guard.assert_not_called()
+        launch.assert_not_called()
+        service.assert_called_once_with(start=True, dry_run=False)
+        rendered = "\n".join(" ".join(map(str, call.args)) for call in output.call_args_list)
+        self.assertIn("CLI-only setup", rendered)
+        self.assertIn("linked phones and mounted SidePulse devices", rendered)
 
     def test_sidepulse_write_decodes_escaped_newlines_and_writes_leds_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3739,6 +4067,36 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0].root, device)
             self.assertEqual(candidates[0].target, device / "LEDS.LED")
+
+    def test_linux_mount_roots_cover_common_desktop_locations(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SIDEPULSE_MOUNT_ROOTS", None)
+            roots = default_mount_roots(
+                platform="linux",
+                home=Path("/home/alice"),
+            )
+
+        self.assertIn(Path("/media/alice"), roots)
+        self.assertIn(Path("/run/media/alice"), roots)
+        self.assertIn(Path("/mnt"), roots)
+
+    def test_sidepulse_discovers_dot_across_default_mount_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            first = base / "media"
+            second = base / "run-media"
+            first.mkdir()
+            second.mkdir()
+            device = second / "SidePulseDot"
+            device.mkdir()
+
+            with patch(
+                "sidepulse.device_writer.default_mount_roots",
+                return_value=(first, second),
+            ):
+                candidates = discover_devices()
+
+        self.assertEqual([candidate.root for candidate in candidates], [device])
 
     def test_sidepulse_write_prefers_leds_led_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5490,6 +5848,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("codex", providers)
         self.assertIn("claude", providers)
         self.assertIn("grok", providers)
+        self.assertIn("junie", providers)
         self.assertNotIn("codex-transcripts", providers)
         self.assertNotIn("claude-transcripts", providers)
 

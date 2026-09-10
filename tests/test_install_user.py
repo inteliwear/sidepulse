@@ -30,8 +30,10 @@ class UserInstallerTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         script = root / "scripts" / "setup.sh"
         text = script.read_text()
-        self.assertIn('$HOME/.local/share/sidepulse/venv', text)
+        self.assertIn('$HOME/.local/share/sidepulse', text)
         self.assertIn('git+https://github.com/inteliwear/sidepulse.git', text)
+        self.assertIn('SIDEPULSE_INSTALL_SPEC', text)
+        self.assertIn("sys.version_info < (3, 10)", text)
         self.assertIn('"$VENV/bin/sidepulse" setup', text)
         self.assertNotIn("sudo", text)
 

@@ -25,7 +25,7 @@ from .led_wasm import LedWasmUnavailableError, SdLedWasmController
 
 
 VIRTUAL_DEVICE_ID = "virtual:status-bar"
-VIRTUAL_DEVICE_NAME = "Screen Bar"
+VIRTUAL_DEVICE_NAME = "SidePulse Notch"
 LED_COUNT = 8
 WINDOW_WIDTH = 220.0
 FALLBACK_NOTCH_DEPTH = 32.0

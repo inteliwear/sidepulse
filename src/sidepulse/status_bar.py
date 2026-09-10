@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import socket
 import subprocess
 import threading
 import time
@@ -15,6 +16,8 @@ try:
         NSApp,
         NSApplication,
         NSApplicationActivationPolicyAccessory,
+        NSAlert,
+        NSAlertFirstButtonReturn,
         NSBackingStoreBuffered,
         NSBezierPath,
         NSBezelStyleRounded,
@@ -80,7 +83,7 @@ from .audit import (
     read_status_history_records,
     status_history_record,
 )
-from .collector import LiveAgentMonitor, SourceSpec
+from .collector import LiveAgentMonitor, SourceSpec, default_sources
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -98,10 +101,14 @@ from .ipc import HookEventServer, default_event_socket_path, default_latest_stat
 from .install import (
     install_claude_hooks,
     install_codex_hooks,
+    install_cursor_hooks,
     install_grok_hooks,
+    install_junie_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
+    uninstall_cursor_hooks,
     uninstall_grok_hooks,
+    uninstall_junie_hooks,
 )
 from .led_status import (
     AgentLedController,
@@ -112,6 +119,7 @@ from .led_status import (
     program_for_agent_mode,
     write_mode_to_leds,
 )
+from .links import IOSLink, load_ios_links, remove_ios_link, send_ios_program
 from .virtual_device import (
     FRAME_INTERVAL,
     VIRTUAL_DEVICE_ID,
@@ -133,7 +141,9 @@ from .providers import (
     ProviderConfig,
     detect_claude_config,
     detect_codex_config,
+    detect_cursor_config,
     detect_grok_config,
+    detect_junie_config,
     default_state_dir,
     parse_log_line,
 )
@@ -232,6 +242,9 @@ class StatusBarState:
     priority: int
 
 
+LINKED_PHONE_DEVICE_PREFIX = "ios/"
+
+
 @dataclass(frozen=True)
 class StatusBarDevice:
     device_id: str
@@ -242,6 +255,7 @@ class StatusBarDevice:
     display: str
     brightness: int = 255
     reason: str = ""
+    remote_link: IOSLink | None = None
 
 
 class AnimationProgramTextView(NSTextView):
@@ -263,7 +277,7 @@ class AnimationProgramTextView(NSTextView):
 
 
 class AgentAnimationMenuItemView(NSView):
-    """Interactive menu row with a Screen Bar-rendered animation preview."""
+    """Interactive menu row with a SidePulse Notch-rendered animation preview."""
 
     def initWithFrame_(self, frame):
         self = objc.super(AgentAnimationMenuItemView, self).initWithFrame_(frame)
@@ -343,7 +357,7 @@ STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
 STATUS_BAR_REFRESH_SECONDS = 15.0
 STATUS_BAR_DEVICE_POLL_SECONDS = 2.0
 STATUS_BAR_SESSION_HISTORY_LIMIT = 10
-SCREEN_BAR_FEATURE_ENABLED = True
+SIDEPULSE_NOTCH_FEATURE_ENABLED = True
 STATUS_BAR_MAX_LINES_PER_SOURCE = 500
 SETTINGS_WINDOW_WIDTH = 680
 SETTINGS_WINDOW_HEIGHT = 560
@@ -551,6 +565,7 @@ class StatusBarController(NSObject):
         self.battery_led_controller = BatteryLedController()
         self.agent_led_controllers_by_device = {}
         self.battery_led_controllers_by_device = {}
+        self.remote_led_program_by_device = {}
         self.last_led_display_kind_by_device = {}
         self.device_errors = {}
         self.leds_enabled = True
@@ -628,7 +643,7 @@ class StatusBarController(NSObject):
             True,
         )
         self.show_setup_window_if_needed()
-        if SCREEN_BAR_FEATURE_ENABLED and self.settings.virtual_status_device_enabled:
+        if SIDEPULSE_NOTCH_FEATURE_ENABLED and self.settings.virtual_status_device_enabled:
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
@@ -864,6 +879,22 @@ class StatusBarController(NSObject):
         self.update_hooks("grok", install=False)
 
     @objc.IBAction
+    def installCursorHooks_(self, _sender):
+        self.update_hooks("cursor", install=True)
+
+    @objc.IBAction
+    def uninstallCursorHooks_(self, _sender):
+        self.update_hooks("cursor", install=False)
+
+    @objc.IBAction
+    def installJunieHooks_(self, _sender):
+        self.update_hooks("junie", install=True)
+
+    @objc.IBAction
+    def uninstallJunieHooks_(self, _sender):
+        self.update_hooks("junie", install=False)
+
+    @objc.IBAction
     def toggleCodexTranscripts_(self, sender):
         self.set_transcript_monitoring("codex", sender.state() == NSOnState)
 
@@ -987,7 +1018,7 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def toggleVirtualStatusDevice_(self, _sender):
-        if not SCREEN_BAR_FEATURE_ENABLED:
+        if not SIDEPULSE_NOTCH_FEATURE_ENABLED:
             self.set_virtual_status_device(False)
             return
         self.set_virtual_status_device(not self.settings.virtual_status_device_enabled)
@@ -1021,6 +1052,10 @@ class StatusBarController(NSObject):
         self.remove_remembered_device(sender.representedObject())
 
     @objc.IBAction
+    def removeLinkedPhone_(self, sender):
+        self.remove_linked_phone(sender.representedObject())
+
+    @objc.IBAction
     def quit_(self, _sender):
         self.closed_lid_awake.release()
         self.keep_awake.release()
@@ -1050,6 +1085,7 @@ class StatusBarController(NSObject):
         socket_path = default_event_socket_path()
         return LiveAgentMonitor(
             sources=(SourceSpec("event-bus", socket_path),),
+            recovery_sources=default_sources(self.settings),
             stale_after_seconds=self.settings.idle_timeout_seconds,
             latest_state_path=default_latest_state_path(),
         )
@@ -1328,6 +1364,8 @@ class StatusBarController(NSObject):
         codex = detect_codex_config()
         claude = detect_claude_config()
         grok = detect_grok_config()
+        cursor = detect_cursor_config()
+        junie = detect_junie_config()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1339,6 +1377,14 @@ class StatusBarController(NSObject):
         set_field_value(
             self.settings_fields.get("grok_hook_status"),
             hook_status_text(grok),
+        )
+        set_field_value(
+            self.settings_fields.get("cursor_hook_status"),
+            hook_status_text(cursor),
+        )
+        set_field_value(
+            self.settings_fields.get("junie_hook_status"),
+            hook_status_text(junie),
         )
         set_field_value(
             self.settings_fields.get("settings_path"),
@@ -1544,10 +1590,20 @@ class StatusBarController(NSObject):
                 result = install_claude_hooks()
             elif provider == "claude":
                 result = uninstall_claude_hooks()
-            elif install:
+            elif provider == "grok" and install:
                 result = install_grok_hooks()
-            else:
+            elif provider == "grok":
                 result = uninstall_grok_hooks()
+            elif provider == "cursor" and install:
+                result = install_cursor_hooks()
+            elif provider == "cursor":
+                result = uninstall_cursor_hooks()
+            elif provider == "junie" and install:
+                result = install_junie_hooks()
+            elif provider == "junie":
+                result = uninstall_junie_hooks()
+            else:
+                raise ValueError(f"Unsupported hook provider: {provider}")
         except Exception as exc:
             self.set_settings_message(f"{provider.title()} hooks failed: {exc}")
             self.refresh_settings_window()
@@ -1682,7 +1738,15 @@ class StatusBarController(NSObject):
             self.virtual_status_device.hide()
             return None
         try:
-            target = write_led_program("off", device_path=device.target)
+            if device.remote_link is not None:
+                send_ios_program(
+                    device.remote_link,
+                    "off",
+                    data=remote_event_data(getattr(self, "last_battery_snapshot", None)),
+                )
+                target = f"linked phone {device.remote_link.link_id}"
+            else:
+                target = write_led_program("off", device_path=device.target)
         except Exception as exc:
             error = str(exc)
             self.device_errors[device.device_id] = error
@@ -1733,15 +1797,15 @@ class StatusBarController(NSObject):
             )
 
     def set_virtual_status_device(self, enabled: bool) -> None:
-        if not SCREEN_BAR_FEATURE_ENABLED:
+        if not SIDEPULSE_NOTCH_FEATURE_ENABLED:
             try:
                 self.settings = self.settings.with_virtual_status_device(False)
                 save_settings(self.settings)
             except Exception as exc:
-                self.set_settings_message(f"Could not disable Screen Bar: {exc}")
+                self.set_settings_message(f"Could not disable SidePulse Notch: {exc}")
                 return
             self.virtual_status_device.hide()
-            self.set_settings_message("Screen Bar is disabled for now.")
+            self.set_settings_message("SidePulse Notch is disabled for now.")
             self.refresh_(None)
             return
 
@@ -1755,7 +1819,7 @@ class StatusBarController(NSObject):
                 )
             save_settings(self.settings)
         except Exception as exc:
-            self.set_settings_message(f"Could not save Screen Bar: {exc}")
+            self.set_settings_message(f"Could not save SidePulse Notch: {exc}")
             return
         if enabled:
             self.virtual_status_device.show()
@@ -1876,6 +1940,38 @@ class StatusBarController(NSObject):
 
         self.reset_led_controllers_for_device(str(device_id))
         self.set_settings_message(f"{device.name if device else device_id}: removed.")
+        self.refresh_settings_window()
+        self.refresh_(None)
+
+    def remove_linked_phone(self, token: str | None) -> None:
+        if not token:
+            return
+        link = next(
+            (entry for entry in self.linked_phone_links() if entry.token == str(token)),
+            None,
+        )
+        if link is None:
+            self.set_settings_message("That iPhone is no longer linked.")
+            self.refresh_(None)
+            return
+        if not confirm_linked_phone_removal(link.name):
+            return
+
+        device_id = linked_phone_device_id(link)
+        try:
+            removed = remove_ios_link(link.token)
+            if removed is None:
+                self.set_settings_message("That iPhone is no longer linked.")
+            else:
+                self.settings = self.settings.without_device(device_id)
+                save_settings(self.settings)
+                self.set_settings_message(f"{link.name}: unlinked.")
+        except Exception as exc:
+            self.set_settings_message(f"Could not remove {link.name}: {exc}")
+            self.settings = load_settings()
+            return
+
+        self.reset_led_controllers_for_device(device_id)
         self.refresh_settings_window()
         self.refresh_(None)
 
@@ -2133,6 +2229,7 @@ class StatusBarController(NSObject):
             if (
                 device.connected
                 and device.device_id != VIRTUAL_DEVICE_ID
+                and device.remote_link is None
                 and device.display != LED_DISPLAY_CUSTOM
             )
         ]
@@ -2274,6 +2371,7 @@ class StatusBarController(NSObject):
                 if (
                     device.connected
                     and device.device_id != VIRTUAL_DEVICE_ID
+                    and device.remote_link is None
                     and device.display != LED_DISPLAY_CUSTOM
                 )
             ]
@@ -2482,6 +2580,7 @@ class StatusBarController(NSObject):
             controller.reset()
         for controller in self.battery_led_controllers_by_device.values():
             controller.reset()
+        self.remote_led_program_by_device.clear()
         self.last_led_display_kind_by_device.clear()
         self.last_led_error = None
 
@@ -2492,6 +2591,7 @@ class StatusBarController(NSObject):
         battery_controller = self.battery_led_controllers_by_device.get(device_id)
         if battery_controller is not None:
             battery_controller.reset()
+        self.remote_led_program_by_device.pop(device_id, None)
         self.last_led_display_kind_by_device.pop(device_id, None)
         self.device_errors.pop(device_id, None)
         self.last_led_error = None
@@ -2536,10 +2636,28 @@ class StatusBarController(NSObject):
                 reason=candidate.reason,
             )
 
+        for link in self.linked_phone_links():
+            device_id = linked_phone_device_id(link)
+            saved_display = self.settings.display_for_device(device_id)
+            entries_by_id[device_id] = StatusBarDevice(
+                device_id=device_id,
+                name=link.name,
+                root=Path(device_id),
+                target=Path(device_id),
+                connected=True,
+                display=(
+                    LED_DISPLAY_CUSTOM
+                    if saved_display == LED_DISPLAY_CUSTOM
+                    else LED_DISPLAY_AGENT
+                ),
+                reason=f"linked through {link.server}",
+                remote_link=link,
+            )
+
         for device in self.settings.devices:
             if device.device_id == VIRTUAL_DEVICE_ID:
                 if (
-                    SCREEN_BAR_FEATURE_ENABLED
+                    SIDEPULSE_NOTCH_FEATURE_ENABLED
                     and self.settings.virtual_status_device_enabled
                 ):
                     entries_by_id[device.device_id] = StatusBarDevice(
@@ -2552,6 +2670,8 @@ class StatusBarController(NSObject):
                         brightness=device.brightness,
                         reason="on-screen device",
                     )
+                continue
+            if device.device_id.startswith(LINKED_PHONE_DEVICE_PREFIX):
                 continue
             if device.device_id in entries_by_id:
                 continue
@@ -2575,6 +2695,13 @@ class StatusBarController(NSObject):
         if remember:
             self.remember_connected_devices(entries)
         return entries
+
+    def linked_phone_links(self) -> tuple[IOSLink, ...]:
+        try:
+            return load_ios_links()
+        except Exception as exc:
+            log_status_bar(f"linked phone discovery error: {exc}")
+            return ()
 
     def observe_connected_devices(self) -> bool:
         devices = self.status_bar_devices()
@@ -2610,7 +2737,7 @@ class StatusBarController(NSObject):
     def remember_connected_devices(self, devices: list[StatusBarDevice]) -> None:
         settings = self.settings
         for device in devices:
-            if not device.connected:
+            if not device.connected or device.remote_link is not None:
                 continue
             settings = settings.with_remembered_device(
                 device_id=device.device_id,
@@ -2672,7 +2799,7 @@ class StatusBarController(NSObject):
         mode: AgentMode,
         battery_snapshot: BatterySnapshot | None,
     ) -> None:
-        if not SCREEN_BAR_FEATURE_ENABLED:
+        if not SIDEPULSE_NOTCH_FEATURE_ENABLED:
             self.virtual_status_device.hide()
             return
         if not self.settings.virtual_status_device_enabled:
@@ -2759,6 +2886,53 @@ class StatusBarController(NSObject):
                 self.device_errors.pop(device.device_id, None)
                 continue
 
+            if device.remote_link is not None:
+                if device_display_kind == LED_DISPLAY_BATTERY and battery_snapshot is not None:
+                    program = program_for_battery(
+                        battery_snapshot,
+                        led_count=8,
+                        brightness=255,
+                    )
+                    label = f"{device.name} Battery {battery_snapshot.percent}%"
+                else:
+                    animation = self.settings.agent_animation(mode)
+                    try:
+                        program = program_for_agent_mode(
+                            mode,
+                            led_count=8,
+                            brightness=255,
+                            animation_style=animation.style,
+                            custom_program=animation.custom_program,
+                        )
+                    except DeviceWriteError as exc:
+                        active_errors[device.device_id] = str(exc)
+                        continue
+                    label = f"{device.name} {MODE_LABELS[mode]}"
+
+                if self.remote_led_program_by_device.get(device.device_id) == program:
+                    self.device_errors.pop(device.device_id, None)
+                    continue
+                try:
+                    send_ios_program(
+                        device.remote_link,
+                        program,
+                        data=remote_event_data(battery_snapshot),
+                    )
+                except Exception as exc:
+                    error = str(exc)
+                    active_errors[device.device_id] = error
+                    previous_error = self.device_errors.get(device.device_id)
+                    if error != previous_error:
+                        log_status_bar(f"linked phone error {device.name}: {error}")
+                    continue
+
+                self.remote_led_program_by_device[device.device_id] = program
+                self.device_errors.pop(device.device_id, None)
+                log_status_bar(
+                    f"leds={label} target=linked phone {device.remote_link.link_id}"
+                )
+                continue
+
             if device_display_kind == LED_DISPLAY_BATTERY and battery_snapshot is not None:
                 result = self.battery_controller_for_device(device).sync_snapshot(battery_snapshot)
                 label = (
@@ -2826,6 +3000,7 @@ class StatusBarController(NSObject):
             if (
                 device.connected
                 and device.device_id != VIRTUAL_DEVICE_ID
+                and device.remote_link is None
                 and device.display != LED_DISPLAY_CUSTOM
             )
         ]
@@ -2904,7 +3079,11 @@ class StatusBarController(NSObject):
         if not targets:
             targets = [
                 device.target for device in self.status_bar_devices()
-                if device.connected and device.device_id != VIRTUAL_DEVICE_ID
+                if (
+                    device.connected
+                    and device.device_id != VIRTUAL_DEVICE_ID
+                    and device.remote_link is None
+                )
             ]
         for target in targets:
             try:
@@ -3167,7 +3346,11 @@ class StatusBarController(NSObject):
         connected_targets = [
             device.target
             for device in self.status_bar_devices(remember=False)
-            if device.connected and device.device_id != VIRTUAL_DEVICE_ID
+            if (
+                device.connected
+                and device.device_id != VIRTUAL_DEVICE_ID
+                and device.remote_link is None
+            )
         ]
         if connected_targets:
             return connected_targets
@@ -3200,14 +3383,13 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Devices"))
     devices = target.status_bar_devices()
-    if devices:
-        for device in devices:
-            menu.addItem_(build_device_menu_item(device, target))
-    else:
+    for device in devices:
+        menu.addItem_(build_device_menu_item(device, target))
+    if not devices:
         menu.addItem_(disabled_menu_item("No devices"))
-    if SCREEN_BAR_FEATURE_ENABLED and not target.settings.virtual_status_device_enabled:
+    if SIDEPULSE_NOTCH_FEATURE_ENABLED and not target.settings.virtual_status_device_enabled:
         virtual_toggle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Add Screen Bar",
+            "Add SidePulse Notch",
             "toggleVirtualStatusDevice:",
             "",
         )
@@ -3274,15 +3456,16 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
     agent.setState_(1 if device.display == LED_DISPLAY_AGENT else 0)
     submenu.addItem_(agent)
 
-    battery = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Battery Level",
-        "setDeviceDisplayBattery:",
-        "",
-    )
-    battery.setTarget_(target)
-    battery.setRepresentedObject_(device.device_id)
-    battery.setState_(1 if device.display == LED_DISPLAY_BATTERY else 0)
-    submenu.addItem_(battery)
+    if device.remote_link is None:
+        battery = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Battery Level",
+            "setDeviceDisplayBattery:",
+            "",
+        )
+        battery.setTarget_(target)
+        battery.setRepresentedObject_(device.device_id)
+        battery.setState_(1 if device.display == LED_DISPLAY_BATTERY else 0)
+        submenu.addItem_(battery)
 
     custom = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         "Manual",
@@ -3294,20 +3477,34 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
     custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
     submenu.addItem_(custom)
 
-    if device.device_id != VIRTUAL_DEVICE_ID:
+    if device.device_id != VIRTUAL_DEVICE_ID and device.remote_link is None:
         submenu.addItem_(NSMenuItem.separatorItem())
         submenu.addItem_(disabled_menu_item(f"Brightness {brightness_percent(device.brightness)}%"))
         submenu.addItem_(build_brightness_slider_item(device, target))
 
+    if device.remote_link is not None:
+        submenu.addItem_(NSMenuItem.separatorItem())
+        submenu.addItem_(disabled_menu_item("Linked iPhone"))
+        submenu.addItem_(disabled_menu_item(f"ID {device.remote_link.link_id}"))
+        submenu.addItem_(disabled_menu_item(device.remote_link.server))
+        remove_phone = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Remove iPhone...",
+            "removeLinkedPhone:",
+            "",
+        )
+        remove_phone.setTarget_(target)
+        remove_phone.setRepresentedObject_(device.remote_link.token)
+        submenu.addItem_(remove_phone)
+
     if device.device_id == VIRTUAL_DEVICE_ID:
         submenu.addItem_(NSMenuItem.separatorItem())
-        remove_screen_bar = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Remove Screen Bar",
+        remove_sidepulse_notch = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Remove SidePulse Notch",
             "toggleVirtualStatusDevice:",
             "",
         )
-        remove_screen_bar.setTarget_(target)
-        submenu.addItem_(remove_screen_bar)
+        remove_sidepulse_notch.setTarget_(target)
+        submenu.addItem_(remove_sidepulse_notch)
 
     if not device.connected:
         submenu.addItem_(NSMenuItem.separatorItem())
@@ -3424,6 +3621,18 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "sleep_helper": sleep_helper,
     }
     return window
+
+
+def confirm_linked_phone_removal(name: str) -> bool:
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_(f"Remove {name}?")
+    alert.setInformativeText_(
+        "This Mac will stop sending SidePulse updates to this iPhone. "
+        "You can link it again later."
+    )
+    alert.addButtonWithTitle_("Remove")
+    alert.addButtonWithTitle_("Cancel")
+    return alert.runModal() == NSAlertFirstButtonReturn
 
 
 def choose_debug_export_path(format_name: str) -> Path | None:
@@ -4177,43 +4386,102 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
 
     agent_animations_tab = animations_tab
 
-    add_label(agents_tab, "Agent Hooks", 24, 398, 200, 24)
-    add_label(agents_tab, "Codex", 32, 360, 80, 22)
-    codex_status = add_label(agents_tab, "", 130, 360, 240, 22)
-    add_button(agents_tab, "Install", 400, 356, 90, 28, target, "installCodexHooks:")
-    add_button(agents_tab, "Uninstall", 500, 356, 100, 28, target, "uninstallCodexHooks:")
+    section_x = 24
+    label_x = 32
+    value_x = 130
+    primary_action_x = 400
+    secondary_action_x = 500
+    value_width = primary_action_x - value_x - 5
 
-    add_label(agents_tab, "Claude", 32, 326, 80, 22)
-    claude_status = add_label(agents_tab, "", 130, 326, 240, 22)
-    add_button(agents_tab, "Install", 400, 322, 90, 28, target, "installClaudeHooks:")
-    add_button(agents_tab, "Uninstall", 500, 322, 100, 28, target, "uninstallClaudeHooks:")
+    add_label(agents_tab, "Agent Hooks", section_x, 398, 200, 24)
 
-    add_label(agents_tab, "Grok", 32, 292, 80, 22)
-    grok_status = add_label(agents_tab, "", 130, 292, 240, 22)
-    add_button(agents_tab, "Install", 400, 288, 90, 28, target, "installGrokHooks:")
-    add_button(agents_tab, "Uninstall", 500, 288, 100, 28, target, "uninstallGrokHooks:")
+    def add_hook_row(
+        title: str,
+        y: int,
+        install_selector: str,
+        uninstall_selector: str,
+    ):
+        add_label(agents_tab, title, label_x, y, 80, 22)
+        status = add_label(agents_tab, "", value_x, y, value_width, 22)
+        add_button(
+            agents_tab,
+            "Install",
+            primary_action_x,
+            y - 4,
+            90,
+            28,
+            target,
+            install_selector,
+        )
+        add_button(
+            agents_tab,
+            "Uninstall",
+            secondary_action_x,
+            y - 4,
+            100,
+            28,
+            target,
+            uninstall_selector,
+        )
+        return status
 
-    add_separator(agents_tab, 24, 258, tab_width - 48)
-    add_label(agents_tab, "Session Opening", 24, 224, 240, 24)
-    add_label(agents_tab, "Codex", 32, 188, 100, 22)
-    codex_opener = add_provider_opener_popup(agents_tab, "codex", 160, 186, target)
-    add_label(agents_tab, "Claude", 32, 154, 100, 22)
-    claude_opener = add_provider_opener_popup(agents_tab, "claude", 160, 152, target)
-    add_label(agents_tab, "Grok Sessions", 32, 120, 120, 22)
-    grok_opener = add_provider_opener_popup(agents_tab, "grok", 160, 118, target)
+    codex_status = add_hook_row(
+        "Codex", 364, "installCodexHooks:", "uninstallCodexHooks:"
+    )
+    claude_status = add_hook_row(
+        "Claude", 338, "installClaudeHooks:", "uninstallClaudeHooks:"
+    )
+    grok_status = add_hook_row(
+        "Grok", 312, "installGrokHooks:", "uninstallGrokHooks:"
+    )
+    cursor_status = add_hook_row(
+        "Cursor", 286, "installCursorHooks:", "uninstallCursorHooks:"
+    )
+    junie_status = add_hook_row(
+        "Junie", 260, "installJunieHooks:", "uninstallJunieHooks:"
+    )
 
-    add_label(agents_tab, "Terminal App", 376, 188, 120, 22)
-    terminal_popup = add_terminal_popup(agents_tab, 376, 156, target)
-    custom_terminal_path = add_label(agents_tab, "", 376, 128, 170, 22)
-    add_button(agents_tab, "Choose...", 500, 92, 100, 28, target, "chooseSessionTerminal:")
+    add_separator(agents_tab, section_x, 246, tab_width - 48)
+    add_label(agents_tab, "Session Opening", section_x, 220, 240, 24)
+    add_label(agents_tab, "Terminal App", primary_action_x, 220, 200, 24)
 
-    add_separator(agents_tab, 24, 80, tab_width - 48)
-    add_label(agents_tab, "Transcript Monitoring", 24, 46, 240, 24)
+    add_label(agents_tab, "Codex", label_x, 184, 90, 22)
+    codex_opener = add_provider_opener_popup(
+        agents_tab, "codex", value_x, 182, target, width=value_width
+    )
+    add_label(agents_tab, "Claude", label_x, 150, 90, 22)
+    claude_opener = add_provider_opener_popup(
+        agents_tab, "claude", value_x, 148, target, width=value_width
+    )
+    add_label(agents_tab, "Grok", label_x, 116, 90, 22)
+    grok_opener = add_provider_opener_popup(
+        agents_tab, "grok", value_x, 114, target, width=value_width
+    )
+
+    terminal_popup = add_terminal_popup(
+        agents_tab, primary_action_x, 182, target, width=200
+    )
+    custom_terminal_path = add_label(
+        agents_tab, "", primary_action_x, 150, 200, 22
+    )
+    add_button(
+        agents_tab,
+        "Choose...",
+        secondary_action_x,
+        114,
+        100,
+        28,
+        target,
+        "chooseSessionTerminal:",
+    )
+
+    add_separator(agents_tab, section_x, 78, tab_width - 48)
+    add_label(agents_tab, "Transcript Monitoring", section_x, 50, 240, 24)
     codex_transcripts = add_checkbox(
         agents_tab,
         "CLI fallback: Codex transcripts",
         32,
-        14,
+        18,
         260,
         24,
         target,
@@ -4223,7 +4491,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         agents_tab,
         "CLI fallback: Claude transcripts",
         312,
-        14,
+        18,
         260,
         24,
         target,
@@ -4415,6 +4683,8 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "codex_hook_status": codex_status,
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
+        "cursor_hook_status": cursor_status,
+        "junie_hook_status": junie_status,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,
@@ -4850,9 +5120,17 @@ def refresh_agent_animation_profile_popup(
             return
 
 
-def add_provider_opener_popup(parent, provider: str, x: int, y: int, target):
+def add_provider_opener_popup(
+    parent,
+    provider: str,
+    x: int,
+    y: int,
+    target,
+    *,
+    width: int = 180,
+):
     popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-        ((x, y), (180, 26)), False
+        ((x, y), (width, 26)), False
     )
     popup.setTarget_(target)
     popup.setAction_("setProviderOpenPreference:")
@@ -4865,9 +5143,9 @@ def add_provider_opener_popup(parent, provider: str, x: int, y: int, target):
     return popup
 
 
-def add_terminal_popup(parent, x: int, y: int, target):
+def add_terminal_popup(parent, x: int, y: int, target, *, width: int = 150):
     popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-        ((x, y), (150, 26)), False
+        ((x, y), (width, 26)), False
     )
     popup.setTarget_(target)
     popup.setAction_("setSessionTerminal:")
@@ -5207,7 +5485,7 @@ def restore_led_display(target, token_value) -> None:
 
 def hook_status_text(config: ProviderConfig) -> str:
     if not config.exists:
-        return f"Not installed - config will be created at {config.config_path}"
+        return "Not installed — config created on install"
     if config.hook_events:
         event_count = len(config.hook_events)
         suffix = "event" if event_count == 1 else "events"
@@ -5219,6 +5497,21 @@ def device_id_for_root(root: Path) -> str:
     return str(root.expanduser())
 
 
+def linked_phone_device_id(link: IOSLink) -> str:
+    return f"{LINKED_PHONE_DEVICE_PREFIX}{link.link_id}"
+
+
+def remote_event_data(snapshot: BatterySnapshot | None) -> dict[str, object]:
+    source: dict[str, object] = {"name": socket.gethostname()}
+    if snapshot is not None and snapshot.battery_present:
+        source["battery"] = {
+            "level": snapshot.percent,
+            "charging": snapshot.is_charging,
+            "plugged_in": snapshot.is_plugged,
+        }
+    return {"source": source}
+
+
 def device_connection_signature(
     devices: list[StatusBarDevice],
 ) -> tuple[tuple[str, str, str], ...]:
@@ -5227,7 +5520,11 @@ def device_connection_signature(
             (
                 device.device_id,
                 str(device.target),
-                device_mount_key(device.root),
+                (
+                    f"remote/{device.remote_link.name}:{device.remote_link.server}"
+                    if device.remote_link is not None
+                    else device_mount_key(device.root)
+                ),
             )
             for device in devices
             if device.connected
@@ -5289,6 +5586,7 @@ def disambiguate_device_names(devices: list[StatusBarDevice]) -> list[StatusBarD
                 display=device.display,
                 brightness=device.brightness,
                 reason=device.reason,
+                remote_link=device.remote_link,
             )
         )
     return result

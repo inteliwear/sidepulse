@@ -3,10 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
+import select
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 
 from .battery import (
@@ -17,7 +22,14 @@ from .battery import (
     render_battery_snapshot,
 )
 from .collector import AgentMonitor, SourceSpec, default_sources
-from .device_writer import DEFAULT_FILE_NAME, DeviceWriteError, write_led_program
+from .device_writer import (
+    DEFAULT_FILE_NAME,
+    DeviceWriteError,
+    discover_devices,
+    normalize_led_text,
+    validate_led_text,
+    write_normalized_led_program,
+)
 from .hook import hook_log_main
 from .install import (
     install_antigravity_hooks,
@@ -25,13 +37,34 @@ from .install import (
     install_codex_hooks,
     install_cursor_hooks,
     install_grok_hooks,
+    install_junie_hooks,
     uninstall_antigravity_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_cursor_hooks,
     uninstall_grok_hooks,
+    uninstall_junie_hooks,
 )
 from .led_status import AgentLedController, LedStatusWrite
+from .links import (
+    IOSLink,
+    LinkError,
+    PAIRING_TIMEOUT_SECONDS,
+    bridge_server,
+    listen_for_ios_registration,
+    load_ios_links,
+    new_pairing_channel,
+    normalize_apns_token,
+    pairing_url,
+    render_terminal_qr,
+    send_ios_program,
+    store_ios_link,
+)
+from .relay import (
+    configure_outbound_channel,
+    ensure_receiver_config,
+    relay_link_command,
+)
 from .lid_sleep import (
     install_sleep_helper,
     sleep_helper_install_command,
@@ -41,11 +74,8 @@ from .lid_sleep import (
 from .models import AgentStatus
 from .providers import (
     HOOK_PROVIDERS,
-    detect_claude_config,
-    detect_codex_config,
-    detect_grok_config,
-    detect_antigravity_config,
     detect_log_path,
+    detect_provider_configs,
     default_log_path,
 )
 from .settings import (
@@ -89,7 +119,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     )
     setup = subparsers.add_parser(
         "setup",
-        help="Install agent hooks and start the macOS status-bar app.",
+        help="Install agent hooks and, on macOS, start the status-bar app.",
     )
     setup.add_argument(
         "provider",
@@ -103,6 +133,8 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     setup.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     setup.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     setup.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
+    setup.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
+    setup.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would change.")
     setup.add_argument(
         "--sd-eject-guard-scope",
@@ -119,21 +151,36 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
 
     write = subparsers.add_parser(
         "write",
-        help=f"Write an LED program to {DEFAULT_FILE_NAME} on a mounted SidePulse Pro or SidePulse Dot device.",
+        help="Send an LED program, notification, or both to SidePulse.",
     )
-    write.add_argument("text", help=r"LED program text. Backslash escapes like \n are decoded.")
-    write.add_argument(
-        "--device",
-        type=Path,
-        help="Mounted device folder or LED program file path. Defaults to auto-detecting /Volumes.",
-    )
-    write.add_argument(
-        "--file-name",
-        default=DEFAULT_FILE_NAME,
-        help=f"Target file name when --device is a folder. Default: {DEFAULT_FILE_NAME}.",
-    )
-    write.add_argument("--dry-run", action="store_true", help="Show the target without writing.")
+    add_sidepulse_delivery_arguments(write)
     write.set_defaults(func=cmd_sidepulse_write)
+
+    push = subparsers.add_parser(
+        "push",
+        help="Send an LED program, notification, or both, preferring a linked phone.",
+    )
+    add_sidepulse_delivery_arguments(push)
+    push.set_defaults(func=cmd_sidepulse_push)
+
+    link = subparsers.add_parser(
+        "link",
+        help="Link an iPhone or connect this computer to a remote SidePulse receiver.",
+    )
+    link.add_argument("relay_code", nargs="?", help="Relay code printed by the receiving Mac.")
+    link.set_defaults(func=cmd_sidepulse_link)
+
+    service = subparsers.add_parser(
+        "service",
+        help="Manage the headless SidePulse background service.",
+    )
+    service.add_argument(
+        "service_command",
+        choices=("start", "stop", "status", "run"),
+        nargs="?",
+        default="status",
+    )
+    service.set_defaults(func=cmd_sidepulse_service)
 
     add_sidepulse_status_bar_parser(subparsers)
     add_sidepulse_sdejectguard_parser(subparsers)
@@ -143,6 +190,29 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     # accept it.
     add_hook_log_parser(subparsers)
     return parser
+
+
+def add_sidepulse_delivery_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "text",
+        nargs="?",
+        help=r"LED program text. Backslash escapes like \n are decoded. Use - to read stdin.",
+    )
+    parser.add_argument("--title", help="Notification title.")
+    parser.add_argument("--message", help="Notification message.")
+    parser.add_argument("--to", help="Destination name or ID. Use 'local' or 'phone' when unambiguous.")
+    parser.add_argument("--all", action="store_true", help="Send to every compatible destination.")
+    parser.add_argument(
+        "--device",
+        type=Path,
+        help="Mounted device folder or LED program file path. Cannot be combined with --to or --all.",
+    )
+    parser.add_argument(
+        "--file-name",
+        default=DEFAULT_FILE_NAME,
+        help=f"Target file name when --device is a folder. Default: {DEFAULT_FILE_NAME}.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Show the target without writing or sending.")
 
 
 def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -248,7 +318,7 @@ def add_sidepulse_battery_parser(subparsers: argparse._SubParsersAction) -> None
     leds.add_argument(
         "--device",
         type=Path,
-        help="Mounted device folder or LED program file path. Defaults to auto-detecting /Volumes.",
+        help="Mounted device folder or LED program file path. Defaults to auto-detection.",
     )
     leds.add_argument(
         "--file-name",
@@ -283,22 +353,398 @@ def add_sidepulse_battery_parser(subparsers: argparse._SubParsersAction) -> None
 
 
 def cmd_sidepulse_write(args: argparse.Namespace) -> int:
+    return _cmd_sidepulse_delivery(args, command="write", prefer_phone=False)
+
+
+def cmd_sidepulse_push(args: argparse.Namespace) -> int:
+    return _cmd_sidepulse_delivery(args, command="push", prefer_phone=True)
+
+
+def _cmd_sidepulse_delivery(
+    args: argparse.Namespace,
+    *,
+    command: str,
+    prefer_phone: bool,
+) -> int:
+    prefix = f"sidepulse {command}"
+    if args.to and args.all:
+        print(f"{prefix}: Use either --to or --all, not both.", file=sys.stderr)
+        return 2
+    if args.device is not None and (args.to or args.all):
+        print(f"{prefix}: --device cannot be combined with --to or --all.", file=sys.stderr)
+        return 2
+
+    title = _clean_notification_text(args.title)
+    message = _clean_notification_text(args.message)
+    has_notification = title is not None or message is not None
     try:
-        target = write_led_program(
-            args.text,
+        program = _program_from_args(args.text, allow_implicit_stdin=not has_notification)
+        if program is not None:
+            validate_led_text(program)
+    except DeviceWriteError as exc:
+        print(f"{prefix}: {exc}", file=sys.stderr)
+        return 2
+
+    if program is None and not has_notification:
+        print(
+            f"{prefix}: Provide an LED program, --title, or --message.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.device is not None:
+        if has_notification:
+            print(
+                f"{prefix}: A local SidePulse cannot display notifications. "
+                "Choose a linked phone with --to.",
+                file=sys.stderr,
+            )
+            return 2
+        return _write_explicit_local(args, program, prefix=prefix)
+
+    local_devices = discover_devices(file_name=args.file_name)
+    phone_links = load_ios_links()
+    try:
+        local_targets, phone_targets = _select_delivery_targets(
+            requested=args.to,
+            send_all=args.all,
+            program=program,
+            has_notification=has_notification,
+            prefer_phone=prefer_phone,
+            local_devices=local_devices,
+            phone_links=phone_links,
+        )
+    except DeviceWriteError as exc:
+        print(f"{prefix}: {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        for candidate in local_targets:
+            print(f"would write: {candidate.target}")
+        for link in phone_targets:
+            print(f"would send: {link.name} ({link.link_id})")
+        return 0
+
+    event_id = str(uuid.uuid4())
+    event_data = _remote_event_data(event_id) if phone_targets else None
+    failed = False
+    for candidate in local_targets:
+        try:
+            target = write_normalized_led_program(
+                program or "",
+                device_path=candidate.target,
+                file_name=args.file_name,
+            )
+            print(f"wrote: {target}")
+        except (DeviceWriteError, OSError) as exc:
+            failed = True
+            print(f"{prefix}: {candidate.root}: {exc}", file=sys.stderr)
+
+    for link in phone_targets:
+        try:
+            send_ios_program(
+                link,
+                program,
+                event_id=event_id,
+                title=title,
+                message=message,
+                data=event_data,
+            )
+            print(f"sent: {link.name} ({link.link_id})")
+        except LinkError as exc:
+            failed = True
+            print(f"{prefix}: {link.name}: {exc}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def _clean_notification_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _program_from_args(text: str | None, *, allow_implicit_stdin: bool) -> str | None:
+    if text == "-":
+        return normalize_led_text(sys.stdin.read())
+    if text is not None:
+        return normalize_led_text(text)
+    if allow_implicit_stdin:
+        piped = _read_available_stdin()
+        if piped is not None:
+            return normalize_led_text(piped)
+    return None
+
+
+def _read_available_stdin() -> str | None:
+    try:
+        if sys.stdin.isatty():
+            return None
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if readable:
+            return sys.stdin.read()
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _write_explicit_local(args: argparse.Namespace, program: str | None, *, prefix: str) -> int:
+    if program is None:
+        print(f"{prefix}: A local SidePulse requires an LED program.", file=sys.stderr)
+        return 2
+    try:
+        target = write_normalized_led_program(
+            program,
             device_path=args.device,
             file_name=args.file_name,
             dry_run=args.dry_run,
         )
     except DeviceWriteError as exc:
-        print(f"sidepulse write: {exc}", file=sys.stderr)
+        print(f"{prefix}: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
-        print(f"sidepulse write: {exc}", file=sys.stderr)
+        print(f"{prefix}: {exc}", file=sys.stderr)
         return 1
-
     action = "would write" if args.dry_run else "wrote"
     print(f"{action}: {target}")
+    return 0
+
+
+def _select_delivery_targets(
+    *,
+    requested: str | None,
+    send_all: bool,
+    program: str | None,
+    has_notification: bool,
+    prefer_phone: bool,
+    local_devices,
+    phone_links: tuple[IOSLink, ...],
+):
+    if send_all:
+        if has_notification and not phone_links:
+            raise DeviceWriteError(
+                "No linked phone can display the notification. Run `sidepulse link`."
+            )
+        local_targets = list(local_devices) if program is not None else []
+        phone_targets = list(phone_links)
+        if not local_targets and not phone_targets:
+            raise DeviceWriteError("No destinations found. Run `sidepulse link` to connect your phone.")
+        return local_targets, phone_targets
+
+    if requested:
+        matches = _matching_destinations(requested, local_devices, phone_links)
+        if not matches:
+            available = _format_destinations(local_devices, phone_links)
+            suffix = f"\nAvailable destinations:\n{available}" if available else ""
+            raise DeviceWriteError(f"No destination matches {requested!r}.{suffix}")
+        if len(matches) > 1:
+            rendered = "\n".join(f"  {label}" for _, _, label in matches)
+            raise DeviceWriteError(
+                f"Destination {requested!r} is ambiguous:\n{rendered}\nUse its ID with --to."
+            )
+        kind, target, _ = matches[0]
+        if kind == "local":
+            if has_notification:
+                raise DeviceWriteError(
+                    "A local SidePulse cannot display notifications. Choose a linked phone with --to."
+                )
+            if program is None:
+                raise DeviceWriteError("A local SidePulse requires an LED program.")
+            return [target], []
+        return [], [target]
+
+    targets_are_phones = has_notification or (prefer_phone and bool(phone_links)) or not local_devices
+    compatible = list(phone_links) if targets_are_phones else list(local_devices)
+    if not compatible:
+        if has_notification:
+            raise DeviceWriteError("No linked phone found. Run `sidepulse link`.")
+        raise DeviceWriteError("No SidePulse destination found. Run `sidepulse link` to connect your phone.")
+    if len(compatible) > 1:
+        if targets_are_phones:
+            rendered = _format_destinations([], compatible)
+        else:
+            rendered = _format_destinations(compatible, ())
+        raise DeviceWriteError(
+            "More than one destination is available:\n"
+            f"{rendered}\nChoose one with --to, or use --all."
+        )
+    if targets_are_phones:
+        return [], compatible
+    return compatible, []
+
+
+def _matching_destinations(requested: str, local_devices, phone_links: tuple[IOSLink, ...]):
+    query = requested.strip().casefold()
+    if not query:
+        return []
+    if query == "local":
+        return [("local", item, f"{item.root.name} ({item.root})") for item in local_devices]
+    if query == "phone":
+        return [("phone", item, f"{item.name} ({item.link_id})") for item in phone_links]
+
+    matches = []
+    for item in local_devices:
+        names = {item.root.name.casefold(), str(item.root).casefold(), str(item.target).casefold()}
+        if query in names:
+            matches.append(("local", item, f"{item.root.name} ({item.root})"))
+    for item in phone_links:
+        id_matches = query == item.link_id.casefold() or (
+            len(query) >= 4 and item.link_id.casefold().startswith(query)
+        )
+        if query == item.name.casefold() or id_matches:
+            matches.append(("phone", item, f"{item.name} ({item.link_id})"))
+    return matches
+
+
+def _format_destinations(local_devices, phone_links) -> str:
+    lines = [f"  {item.root.name} ({item.root})" for item in local_devices]
+    lines.extend(f"  {item.name} ({item.link_id})" for item in phone_links)
+    return "\n".join(lines)
+
+
+def _remote_event_data(event_id: str) -> dict[str, object]:
+    source: dict[str, object] = {"name": socket.gethostname()}
+    try:
+        battery = read_battery_snapshot()
+    except Exception:
+        battery = None
+    if battery is not None and battery.battery_present:
+        source["battery"] = {
+            "level": battery.percent,
+            "charging": battery.is_charging,
+            "plugged_in": battery.is_plugged,
+        }
+    return {
+        "sidepulse_event_id": event_id,
+        "source": source,
+    }
+
+
+def cmd_sidepulse_link(args: argparse.Namespace) -> int:
+    relay_code = getattr(args, "relay_code", None)
+    if relay_code:
+        try:
+            config = configure_outbound_channel(relay_code, server=bridge_server())
+        except LinkError as exc:
+            print(f"sidepulse link: {exc}", file=sys.stderr)
+            return 1
+        print(
+            "Linked this computer to the remote SidePulse receiver "
+            f"({config.outbound_channel[:12]})."
+        )
+        print("Agent events will be relayed by the SidePulse background service.")
+        return 0
+
+    try:
+        relay_config = ensure_receiver_config()
+        server = bridge_server()
+        channel = new_pairing_channel()
+        url = pairing_url(server, channel)
+        qr = render_terminal_qr(
+            url,
+            ansi=sys.stdout.isatty()
+            and os.environ.get("TERM") != "dumb"
+            and "NO_COLOR" not in os.environ,
+        )
+    except LinkError as exc:
+        print(f"sidepulse link: {exc}", file=sys.stderr)
+        return 1
+
+    print("Link a remote computer")
+    print()
+    print("Run this command on the VM or other computer:")
+    print()
+    print(f"  {relay_link_command(relay_config)}")
+    print()
+
+    results: queue.Queue[IOSLink] = queue.Queue()
+    stop = threading.Event()
+    deadline = time.monotonic() + PAIRING_TIMEOUT_SECONDS
+    listener = threading.Thread(
+        target=listen_for_ios_registration,
+        args=(server, channel, results, stop),
+        kwargs={"deadline": deadline},
+        daemon=True,
+    )
+    listener.start()
+
+    existing = load_ios_links()
+    if existing:
+        print(
+            "Linked phones: "
+            + ", ".join(f"{link.name} ({link.link_id})" for link in existing)
+        )
+        print()
+    print("Link your iPhone")
+    print()
+    print("Scan this QR code with your phone:")
+    print()
+    print(qr)
+    print()
+    print("Or paste the push token shown in the SidePulse app.")
+
+    input_enabled = True
+    prompt_visible = False
+    try:
+        while time.monotonic() < deadline:
+            try:
+                link = results.get_nowait()
+                break
+            except queue.Empty:
+                pass
+
+            if input_enabled and not prompt_visible:
+                print("Push token: ", end="", flush=True)
+                prompt_visible = True
+
+            readable = []
+            if input_enabled:
+                try:
+                    readable, _, _ = select.select([sys.stdin], [], [], 0.2)
+                except (OSError, ValueError):
+                    input_enabled = False
+            else:
+                time.sleep(0.2)
+
+            if readable:
+                value = sys.stdin.readline()
+                if not value:
+                    input_enabled = False
+                    continue
+                try:
+                    token = normalize_apns_token(value)
+                except LinkError as exc:
+                    print(f"Invalid token: {exc}")
+                    prompt_visible = False
+                    continue
+                link = IOSLink(
+                    name="iPhone",
+                    token=token,
+                    server=server,
+                    linked_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                )
+                break
+        else:
+            print("\nPairing timed out. Run `sidepulse link` to try again.", file=sys.stderr)
+            return 1
+    except KeyboardInterrupt:
+        print("\nLinking stopped.")
+        return 130
+    finally:
+        stop.set()
+
+    if prompt_visible:
+        print()
+    try:
+        store_ios_link(link)
+    except OSError as exc:
+        print(f"sidepulse link: Could not save the phone: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"Linked {link.name} ({link.link_id}). "
+        "`sidepulse write` uses it when no local device is mounted; "
+        "`sidepulse push` prefers it."
+    )
     return 0
 
 
@@ -542,6 +988,28 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     results = install_hook_results(args)
     print_install_results(results, dry_run=args.dry_run)
 
+    from .service_launch import install_service
+
+    relay_config = None
+    if sys.platform == "darwin" and not args.dry_run:
+        relay_config = ensure_receiver_config()
+    service_result = install_service(start=True, dry_run=args.dry_run)
+    service_action = "would install" if args.dry_run else "installed"
+    if service_result.started:
+        service_action += " and started"
+    elif service_result.detail and not args.dry_run:
+        service_action += f"; not started ({service_result.detail})"
+    print(f"background service: {service_action}")
+    if str(service_result.path):
+        print(f"  config: {service_result.path}")
+    if relay_config is not None:
+        print(f"remote computer: {relay_link_command(relay_config)}")
+
+    if sys.platform != "darwin":
+        print("macOS integrations: skipped (CLI-only setup on this platform)")
+        print("sidepulse: ready for linked phones and mounted SidePulse devices")
+        return 0
+
     from .sd_eject_guard_launch import SD_EJECT_GUARD_DISPLAY_NAME, SdEjectGuardInstallError, install_sd_eject_guard
 
     try:
@@ -570,6 +1038,32 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     print(f"status-bar: {action}")
     print(f"  plist: {result.plist_path}")
     return 0
+
+
+def cmd_sidepulse_service(args: argparse.Namespace) -> int:
+    from .service_launch import install_service, service_is_running, stop_service
+
+    command = args.service_command
+    if command == "run":
+        from .service import run_service
+
+        return run_service()
+    if command == "stop":
+        stopped = stop_service()
+        print(f"background service: {'stopped' if stopped else 'not running'}")
+        return 0
+    if command == "start":
+        result = install_service(start=True)
+        action = "started" if result.started else "installed but not started"
+        print(f"background service: {action}")
+        print(f"  config: {result.path}")
+        if result.detail:
+            print(f"  {result.detail}")
+        return 0 if result.started else 1
+
+    running = service_is_running()
+    print(f"background service: {'running' if running else 'not running'}")
+    return 0 if running else 1
 
 
 def print_sd_eject_guard_result(result) -> None:
@@ -646,22 +1140,26 @@ def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
     )
     status_bar.set_defaults(func=cmd_status_bar)
 
-    install = subparsers.add_parser("install", help="Install supported agent monitor hooks.")
+    install = subparsers.add_parser("install", help="Install supported AI agent monitor hooks.")
     install.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
     install.add_argument("--log-dir", type=Path, help="Directory for provider JSONL files.")
     install.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     install.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     install.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     install.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
+    install.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
+    install.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     install.add_argument("--dry-run", action="store_true", help="Show what would change.")
     install.set_defaults(func=cmd_install)
 
-    uninstall = subparsers.add_parser("uninstall", help="Remove supported agent monitor hooks.")
+    uninstall = subparsers.add_parser("uninstall", help="Remove supported AI agent monitor hooks.")
     uninstall.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
     uninstall.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     uninstall.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     uninstall.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     uninstall.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
+    uninstall.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
+    uninstall.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     uninstall.add_argument("--dry-run", action="store_true", help="Show what would change.")
     uninstall.set_defaults(func=cmd_uninstall)
 
@@ -704,15 +1202,12 @@ def add_status_args(parser: argparse.ArgumentParser, include_json: bool = True) 
     parser.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     parser.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     parser.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
+    parser.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
+    parser.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    configs = [
-        detect_codex_config(),
-        detect_claude_config(),
-        detect_grok_config(),
-        detect_antigravity_config(),
-    ]
+    configs = detect_provider_configs()
     payload = {"providers": [config.to_dict() for config in configs]}
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -835,8 +1330,10 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
-        else:
+        elif provider == "antigravity":
             results.append(install_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
+        else:
+            results.append(install_junie_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
 
 
@@ -865,8 +1362,10 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
-        else:
+        elif provider == "antigravity":
             results.append(uninstall_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
+        else:
+            results.append(uninstall_junie_hooks(log_path=log_path, dry_run=args.dry_run))
 
     for result in results:
         action = "would remove" if args.dry_run and result.changed else "removed"

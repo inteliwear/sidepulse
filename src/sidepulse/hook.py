@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit import append_status_audit_record
-from .collector import StatusMetadata, status_from_event, title_from_event
+from .collector import StatusMetadata, read_recent_lines, status_from_event, title_from_event
 from .ipc import send_hook_event
 from .origin import annotate_payload_with_origin
 from .providers import detect_log_path, infer_provider_from_payload, parse_log_line
@@ -105,6 +105,91 @@ def hook_event_socket_disabled() -> bool:
     }
 
 
+def normalize_junie_payload(
+    payload: dict[str, Any],
+    log_path: Path,
+    *,
+    process_id: int | None = None,
+) -> dict[str, Any]:
+    """Restore session context omitted by some Junie hook payloads.
+
+    Junie's Stop, StopFailure, and SessionEnd wire payloads do not include the
+    session fields sent with SessionStart/UserPromptSubmit. The Junie process id
+    lets separate CLI instances correlate independently; the most recent Junie
+    context is a fallback for launchers where ancestry cannot be identified.
+    """
+    normalized = dict(payload)
+    if process_id is None:
+        active_process_id, origin = junie_process_context()
+        if origin is not None and "agent_origin" not in normalized:
+            normalized.update(origin)
+    else:
+        active_process_id = process_id
+    if active_process_id is not None:
+        normalized.setdefault("sidepulse_junie_process_id", active_process_id)
+
+    if normalized.get("session_id") and normalized.get("cwd"):
+        return normalized
+
+    context = latest_junie_hook_context(log_path, active_process_id)
+    if context is None:
+        return normalized
+    for key in ("session_id", "cwd", "project_path"):
+        if context.get(key) is not None:
+            normalized.setdefault(key, context[key])
+    return normalized
+
+
+def junie_process_id() -> int | None:
+    return junie_process_context()[0]
+
+
+def junie_process_context() -> tuple[int | None, dict[str, str] | None]:
+    try:
+        from .origin import origin_from_processes, process_ancestry, process_basename
+
+        ancestry = process_ancestry(os.getppid())
+        origin = origin_from_processes("junie", ancestry)
+        for info in ancestry:
+            command = info.command.lower()
+            if process_basename(info) == "junie" or any(
+                marker in command
+                for marker in (
+                    "/junie.app/",
+                    "junie-release-",
+                    "matterhorn.ej.app.cli.standalone",
+                )
+            ):
+                return info.pid, origin.to_payload() if origin is not None else None
+    except Exception:
+        pass
+    return None, None
+
+
+def latest_junie_hook_context(
+    log_path: Path,
+    process_id: int | None,
+) -> dict[str, Any] | None:
+    try:
+        lines = read_recent_lines(log_path.expanduser(), 200)
+    except OSError:
+        return None
+
+    fallback = None
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(row, dict) or not row.get("session_id"):
+            continue
+        if fallback is None:
+            fallback = row
+        if process_id is not None and row.get("sidepulse_junie_process_id") == process_id:
+            return row
+    return fallback
+
+
 def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> int:
     response_text = None
     try:
@@ -123,16 +208,42 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
             payload = raw if isinstance(raw, dict) else {}
             normalized = normalize_payload(event, payload)
             payload_text = json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+        elif provider == "junie":
+            try:
+                raw = json.loads(payload_text or "{}")
+            except json.JSONDecodeError:
+                raw = {}
+            payload = raw if isinstance(raw, dict) else {}
+            normalized = normalize_junie_payload(payload, log_path)
+            payload_text = json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
 
         actual_provider, actual_log_path, line = routed_hook_payload(
             provider,
             log_path,
             payload_text,
         )
-        if not hook_event_socket_disabled():
-            send_hook_event(actual_provider, line)
-        write_hook_line(actual_log_path, line)
-        write_hook_status_audit(actual_provider, line)
+        try:
+            write_hook_line(actual_log_path, line)
+        except Exception:
+            pass
+        try:
+            write_hook_status_audit(actual_provider, line)
+        except Exception:
+            pass
+        try:
+            if not hook_event_socket_disabled():
+                send_hook_event(actual_provider, line)
+                from .relay import candidate_relay_event_socket_paths
+
+                for relay_socket in candidate_relay_event_socket_paths():
+                    if send_hook_event(
+                        actual_provider,
+                        line,
+                        socket_path=relay_socket,
+                    ):
+                        break
+        except Exception:
+            pass
     except Exception:
         if provider == "antigravity" and event and response_text is None:
             from .antigravity_hook import response_for_event

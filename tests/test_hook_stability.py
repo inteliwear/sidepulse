@@ -164,6 +164,11 @@ class FailOpenTests(HookIsolationMixin, unittest.TestCase):
                     "claude", self.log_path, '{"hook_event_name": "Stop"}'
                 )
         self.assertEqual(0, code)
+        self.assertTrue(self.log_path.exists())
+        self.assertEqual(
+            json.loads(self.log_path.read_text())["hook_event_name"],
+            "Stop",
+        )
 
 
 class StdoutPurityTests(HookIsolationMixin, unittest.TestCase):

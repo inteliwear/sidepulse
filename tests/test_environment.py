@@ -281,6 +281,13 @@ class CleanInstallTests(unittest.TestCase):
                 self.assertIn(result.returncode, (0, 2), result.stderr)
                 self.assertNotIn(DEPENDENCY_ERROR_MARKER, result.stderr)
 
+    @unittest.skipIf(sys.platform == "darwin", "Linux CLI-only setup check")
+    def test_setup_completes_without_macos_services(self):
+        result = self.run_script("sidepulse", ["setup", "--dry-run"])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CLI-only setup", result.stdout)
+        self.assertIn("linked phones and mounted SidePulse devices", result.stdout)
+
     def test_packaged_resources_are_installed(self):
         """Package data declared in pyproject must survive the wheel build."""
         result = self.run_python(

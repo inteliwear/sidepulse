@@ -90,9 +90,18 @@ def main(argv: list[str] | None = None) -> int:
             args.log.expanduser(),
             json.dumps(normalized, separators=(",", ":"), ensure_ascii=False),
         )
-        send_hook_event(provider, line)
-        write_hook_line(log_path, line)
-        write_hook_status_audit(provider, line)
+        try:
+            write_hook_line(log_path, line)
+        except Exception:
+            pass
+        try:
+            write_hook_status_audit(provider, line)
+        except Exception:
+            pass
+        try:
+            send_hook_event(provider, line)
+        except Exception:
+            pass
     except Exception:
         pass
 

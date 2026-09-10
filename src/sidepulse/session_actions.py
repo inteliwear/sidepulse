@@ -49,6 +49,8 @@ def session_resume_command(status: AgentStatus) -> str | None:
         return f"cd {cwd} && claude --resume {session_id}"
     if provider == "grok":
         return f"cd {cwd} && grok --resume {session_id}"
+    if provider == "junie":
+        return f"cd {cwd} && junie --session-id={session_id} --resume"
     return None
 
 

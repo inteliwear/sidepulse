@@ -7,6 +7,37 @@ on:
   workflow_call:  # so the release pipeline can gate on this
 
 jobs:
+  linux:
+    name: Linux CLI / Python 3.12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and test package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m pytest tests -q
+
+      - name: TLDR installer and SidePulse Dot smoke test
+        run: |
+          smoke_home="$(mktemp -d)"
+          export HOME="$smoke_home"
+          SIDEPULSE_INSTALL_SPEC="$GITHUB_WORKSPACE" \
+            PYTHON_BIN=python \
+            sh scripts/setup.sh
+          "$smoke_home/.local/bin/sidepulse" --help
+          printf '%064d\n' 0 | "$smoke_home/.local/bin/sidepulse" link >/dev/null
+          "$smoke_home/.local/bin/sidepulse" link AbCdEfGhIjKlMnOpQrStUv
+          "$smoke_home/.local/bin/sidepulse" push "off" --dry-run
+          mkdir -p "$smoke_home/media/SidePulseDot"
+          "$smoke_home/.local/bin/sidepulse" write "off" \
+            --device "$smoke_home/media/SidePulseDot"
+          test "$(cat "$smoke_home/media/SidePulseDot/LEDS.LED")" = "off"
+
   macos:
     name: macOS / Python ${{ matrix.python-version }}
     runs-on: macos-latest

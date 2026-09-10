@@ -21,9 +21,12 @@ from .providers import (
     CODEX_EVENTS,
     CURSOR_EVENTS,
     GROK_EVENTS,
+    JUNIE_EVENTS,
+    JUNIE_MONITOR_EVENTS,
     default_antigravity_hook_config_path,
     default_cursor_hook_config_path,
     default_grok_hook_config_path,
+    default_junie_hook_config_path,
     detect_log_path,
 )
 
@@ -203,6 +206,39 @@ def install_antigravity_hooks(
     return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
 
 
+def install_junie_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    config = config_path or default_junie_hook_config_path()
+    target_log = (log_path or detect_log_path("junie")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    hooks = data.setdefault("hooks", {})
+    command = hook_command("junie", target_log, python_executable)
+
+    for event_name in JUNIE_MONITOR_EVENTS:
+        entries = hooks.get(event_name, [])
+        if not isinstance(entries, list):
+            entries = []
+        cleaned = remove_json_command_hooks_for_log(entries, target_log)
+        cleaned.append({"hooks": [{"type": "command", "command": command}]})
+        hooks[event_name] = cleaned
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+
+    return InstallResult("junie", config, target_log, changed, backup, dry_run)
+
+
 def uninstall_codex_hooks(
     log_path: Path | None = None,
     config_path: Path | None = None,
@@ -314,6 +350,32 @@ def uninstall_grok_hooks(
         clean_grok_live_backup_hook_files(config)
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_junie_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_junie_hook_config_path()
+    target_log = (log_path or detect_log_path("junie")).expanduser()
+    data = read_json_config(config)
+    original = json.dumps(data, sort_keys=True)
+    cleaned = clean_json_hook_data(data, target_log, JUNIE_EVENTS)
+    changed = json.dumps(cleaned, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        if cleaned:
+            config.write_text(json.dumps(cleaned, indent=2, sort_keys=False) + "\n")
+        else:
+            try:
+                config.unlink()
+            except FileNotFoundError:
+                pass
+
+    return InstallResult("junie", config, target_log, changed, backup, dry_run)
 
 
 def install_cursor_hooks(
