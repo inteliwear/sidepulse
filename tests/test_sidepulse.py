@@ -6902,6 +6902,145 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
             self.assertEqual(snapshot.statuses[0].event_name, "PostToolUse")
 
+    def test_live_subagent_stop_clears_only_its_pending_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            monitor = LiveAgentMonitor(
+                sources=(SourceSpec("event-bus", base / "events.sock"),),
+                stale_after_seconds=3600,
+                latest_state_path=latest,
+            )
+            now = datetime.now(timezone.utc)
+            child_a = "child-a"
+            child_b = "child-b"
+
+            def ingest(
+                event_name: str,
+                agent_id: str,
+                seconds: int,
+                **event: object,
+            ) -> None:
+                record = parse_log_line(
+                    "codex",
+                    json.dumps(
+                        {
+                            "logged_at": (now + timedelta(seconds=seconds)).isoformat(),
+                            "event": {
+                                "hook_event_name": event_name,
+                                "session_id": "parent-session",
+                                "agent_id": agent_id,
+                                "cwd": "/tmp/project",
+                                **event,
+                            },
+                        }
+                    ),
+                )
+                self.assertIsNotNone(record)
+                monitor.ingest_record(record)
+
+            ingest("PermissionRequest", child_a, 0, tool_name="Bash", tool_input={"command": "one"})
+            ingest("PermissionRequest", child_a, 1, tool_name="Bash", tool_input={"command": "two"})
+            ingest("PostToolUse", child_a, 2, tool_name="Bash", tool_input={"command": "one"})
+            ingest("PermissionRequest", child_b, 3, tool_name="Bash", tool_input={"command": "other"})
+
+            before_finish = monitor.snapshot()
+            status_a = next(status for status in before_finish.statuses if status.agent_id.endswith(child_a))
+            self.assertEqual(status_a.mode, AgentMode.WAITING_FOR_INPUT)
+
+            ingest("SubagentStop", child_a, 4, last_assistant_message="Finished.")
+
+            snapshot = monitor.snapshot()
+            statuses = {
+                status.agent_id: status
+                for status in snapshot.statuses + snapshot.stale_statuses
+            }
+            self.assertEqual(statuses[f"codex:agent:{child_a}"].mode, AgentMode.COMPLETED)
+            self.assertEqual(statuses[f"codex:agent:{child_b}"].mode, AgentMode.WAITING_FOR_INPUT)
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
+
+            ingest("PermissionRequest", child_a, 5, tool_name="Bash", tool_input={"command": "three"})
+            ingest(
+                "SubagentStop",
+                child_a,
+                6,
+                last_assistant_message="Which option should I use?",
+            )
+            question_statuses = {
+                status.agent_id: status
+                for status in monitor.snapshot().statuses + monitor.snapshot().stale_statuses
+            }
+            self.assertEqual(
+                question_statuses[f"codex:agent:{child_a}"].mode,
+                AgentMode.WAITING_FOR_INPUT,
+            )
+
+    def test_live_recovery_replaces_persisted_subagent_permission_with_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            latest = base / "latest.json"
+            log = base / "codex.jsonl"
+            now = datetime.now(timezone.utc) - timedelta(seconds=10)
+            child = "child-a"
+            latest.write_text(
+                json.dumps(
+                    {
+                        "updated_at": now.isoformat(),
+                        "statuses": [
+                            {
+                                "provider": "codex",
+                                "agent_id": f"codex:agent:{child}",
+                                "display_name": "Codex agent child-a",
+                                "mode": "waiting_for_input",
+                                "updated_at": now.isoformat(),
+                                "event_name": "PermissionRequest",
+                                "session_id": "parent-session",
+                                "cwd": "/tmp/project",
+                            }
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            events = [
+                ("PermissionRequest", 0, {"tool_input": {"command": "one"}}),
+                ("PermissionRequest", 1, {"tool_input": {"command": "two"}}),
+                ("PostToolUse", 2, {"tool_input": {"command": "one"}}),
+                ("SubagentStop", 3, {"last_assistant_message": "Finished."}),
+            ]
+            log.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "logged_at": (now + timedelta(seconds=offset)).isoformat(),
+                            "event": {
+                                "hook_event_name": event_name,
+                                "session_id": "parent-session",
+                                "agent_id": child,
+                                "cwd": "/tmp/project",
+                                "tool_name": "Bash",
+                                **event,
+                            },
+                        }
+                    )
+                    for event_name, offset, event in events
+                )
+                + "\n"
+            )
+
+            monitor = LiveAgentMonitor(
+                recovery_sources=(SourceSpec("codex", log),),
+                stale_after_seconds=3600,
+                latest_state_path=latest,
+            )
+
+            status = monitor.snapshot().statuses[0]
+            self.assertEqual(status.mode, AgentMode.COMPLETED)
+            self.assertEqual(status.event_name, "SubagentStop")
+            persisted = json.loads(latest.read_text())["statuses"][0]
+            self.assertEqual(persisted["mode"], AgentMode.COMPLETED.value)
+            self.assertEqual(persisted["event_name"], "SubagentStop")
+
     def test_post_tool_use_does_not_stay_working_indefinitely(self) -> None:
         now = datetime.now(timezone.utc)
         status = AgentStatus(
