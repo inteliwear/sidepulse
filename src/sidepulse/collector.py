@@ -1378,7 +1378,7 @@ def track_pending_permissions(
                 pending_permissions_by_key.pop(record.status_key, None)
         return
 
-    if record.event_name in {"Stop", "SessionEnd", "UserPromptSubmit"}:
+    if record.event_name in {"Stop", "SubagentStop", "SessionEnd", "UserPromptSubmit"}:
         pending_permissions_by_key.pop(record.status_key, None)
 
 
