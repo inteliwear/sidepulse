@@ -126,6 +126,7 @@ from sidepulse.settings import (
     ANIMATION_STATE_LID_OPEN,
     ANIMATION_STATES,
     AGENT_ANIMATION_AMBER_PULSE,
+    AGENT_ANIMATION_BLOCKED_BLINK,
     AGENT_ANIMATION_CYAN_COMPLETE,
     AGENT_ANIMATION_CYAN_ROLL,
     AGENT_ANIMATION_CUSTOM,
@@ -4230,6 +4231,10 @@ class AgentMonitorTests(unittest.TestCase):
             display_state_for_mode(AgentMode.IDLE_READY),
             LedDisplayState.IDLE,
         )
+        self.assertEqual(
+            display_state_for_mode(AgentMode.BLOCKED_ERROR),
+            LedDisplayState.BLOCKED,
+        )
 
         self.assertEqual(
             program_for_display_state(LedDisplayState.IDLE),
@@ -4241,7 +4246,18 @@ class AgentMonitorTests(unittest.TestCase):
             program_for_display_state(LedDisplayState.DONE),
             "#00FF66 320ms cosine",
         )
-        self.assertIn("#FF3A00 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
+        self.assertIn("#FFB000 1.6s pulse", program_for_display_state(LedDisplayState.ASK))
+        self.assertEqual(
+            program_for_display_state(LedDisplayState.BLOCKED).splitlines(),
+            [
+                "off",
+                "#FF2600 140ms none",
+                "off 140ms none",
+                "#FF2600 140ms none",
+                "off 900ms none",
+                "repeat",
+            ],
+        )
         self.assertEqual(
             program_for_display_state(LedDisplayState.WORKING, led_count=2).splitlines(),
             [
@@ -4616,7 +4632,11 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(first.changed)
             self.assertFalse(second.changed)
             self.assertTrue(third.changed)
-            self.assertIn("#FF3A00 1.6s pulse", (device / "LEDS.LED").read_text())
+            self.assertIn("#FFB000 1.6s pulse", (device / "LEDS.LED").read_text())
+
+            fourth = controller.sync_mode(AgentMode.BLOCKED_ERROR)
+            self.assertTrue(fourth.changed)
+            self.assertIn("#FF2600 140ms none", (device / "LEDS.LED").read_text())
 
     def test_agent_led_controller_repairs_externally_changed_program(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5635,6 +5655,7 @@ class AgentMonitorTests(unittest.TestCase):
             AGENT_ANIMATION_CYAN_ROLL,
             AGENT_ANIMATION_CYAN_COMPLETE,
             AGENT_ANIMATION_AMBER_PULSE,
+            AGENT_ANIMATION_BLOCKED_BLINK,
             AGENT_ANIMATION_SOLID_GREEN,
             AGENT_ANIMATION_KITT,
             AGENT_ANIMATION_KITT_RED,
