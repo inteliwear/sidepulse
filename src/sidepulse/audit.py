@@ -14,6 +14,8 @@ from .providers import default_state_dir
 
 
 STATUS_AUDIT_LOG_NAME = "event-status.jsonl"
+STATUS_AUDIT_MAX_BYTES = 5 * 1024 * 1024
+STATUS_AUDIT_BACKUP_COUNT = 3
 STATUS_HISTORY_LOG_NAME = "status-history.jsonl"
 RAW_PREVIEW_LIMIT = 2000
 MESSAGE_PREVIEW_LIMIT = 240
@@ -52,6 +54,7 @@ def append_status_audit_record(
     target = path or default_status_audit_log_path()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
+        rotate_status_audit_log(target)
         with target.open("a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps(
@@ -63,6 +66,31 @@ def append_status_audit_record(
             )
     except OSError:
         pass
+
+
+def rotate_status_audit_log(
+    path: Path,
+    *,
+    max_bytes: int = STATUS_AUDIT_MAX_BYTES,
+    backup_count: int = STATUS_AUDIT_BACKUP_COUNT,
+) -> bool:
+    """Bound audit-log growth while retaining a few recent generations."""
+    if max_bytes <= 0 or backup_count <= 0:
+        return False
+    try:
+        if path.stat().st_size < max_bytes:
+            return False
+    except OSError:
+        return False
+
+    oldest = path.with_name(f"{path.name}.{backup_count}")
+    oldest.unlink(missing_ok=True)
+    for index in range(backup_count - 1, 0, -1):
+        source = path.with_name(f"{path.name}.{index}")
+        if source.exists():
+            source.replace(path.with_name(f"{path.name}.{index + 1}"))
+    path.replace(path.with_name(f"{path.name}.1"))
+    return True
 
 
 def append_status_history_record(

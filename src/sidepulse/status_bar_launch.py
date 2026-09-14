@@ -17,7 +17,8 @@ LEGACY_LAUNCH_AGENT_LABEL = "com.sidepulse.agentstatus"
 LEGACY_LAUNCH_AGENT_FILENAME = f"{LEGACY_LAUNCH_AGENT_LABEL}.plist"
 PIXIEPULSE_LEGACY_LAUNCH_AGENT_LABEL = "com.pixiepulse.agentstatus"
 PIXIEPULSE_LEGACY_LAUNCH_AGENT_FILENAME = f"{PIXIEPULSE_LEGACY_LAUNCH_AGENT_LABEL}.plist"
-STATUS_BAR_DISPLAY_NAME = "SidePulse Status Bar"
+STATUS_BAR_DISPLAY_NAME = "SidePulse"
+STATUS_BAR_BUNDLE_ID = "io.sidepulse.statusbar"
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,15 @@ def pixiepulse_legacy_launch_agent_path(home: Path | None = None) -> Path:
 
 
 def status_bar_launcher_path(home: Path | None = None) -> Path:
-    return default_user_data_dir(home) / "sidepulse" / "status-bar" / STATUS_BAR_DISPLAY_NAME
+    return (
+        default_user_data_dir(home)
+        / "sidepulse"
+        / "status-bar"
+        / f"{STATUS_BAR_DISPLAY_NAME}.app"
+        / "Contents"
+        / "MacOS"
+        / STATUS_BAR_DISPLAY_NAME
+    )
 
 
 def launch_agent_installed(plist_path: Path | None = None) -> bool:
@@ -164,7 +173,30 @@ def install_status_bar_launcher(
     if changed:
         target.write_bytes(data)
     target.chmod(0o755)
+    info_path = target.parent.parent / "Info.plist"
+    info_data = plistlib.dumps(build_status_bar_bundle_info(), sort_keys=False)
+    info_existing = info_path.read_bytes() if info_path.exists() else None
+    if info_existing != info_data:
+        info_path.write_bytes(info_data)
+        changed = True
     return changed
+
+
+def build_status_bar_bundle_info() -> dict[str, Any]:
+    return {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": STATUS_BAR_DISPLAY_NAME,
+        "CFBundleExecutable": STATUS_BAR_DISPLAY_NAME,
+        "CFBundleIdentifier": STATUS_BAR_BUNDLE_ID,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": STATUS_BAR_DISPLAY_NAME,
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleVersion": "1",
+        "LSMinimumSystemVersion": "13.0",
+        "LSUIElement": True,
+        "NSHighResolutionCapable": True,
+    }
 
 
 def build_status_bar_launcher_script(
