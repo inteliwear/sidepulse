@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 try:
@@ -17,8 +18,11 @@ try:
         NSApp,
         NSApplication,
         NSApplicationActivationPolicyAccessory,
+        NSAppearanceNameAqua,
+        NSAppearanceNameDarkAqua,
         NSAlert,
         NSAlertFirstButtonReturn,
+        NSAffineTransform,
         NSBackingStoreBuffered,
         NSBezierPath,
         NSBezelStyleRounded,
@@ -26,11 +30,13 @@ try:
         NSButtonTypeSwitch,
         NSColor,
         NSCompositingOperationSourceOver,
+        NSCompositingOperationSourceIn,
         NSEventTrackingRunLoopMode,
         NSFont,
         NSFontAttributeName,
         NSFontWeightBold,
         NSForegroundColorAttributeName,
+        NSGraphicsContext,
         NSImage,
         NSMenu,
         NSMenuItem,
@@ -39,6 +45,7 @@ try:
         NSOnState,
         NSOpenPanel,
         NSPopUpButton,
+        NSRectFillUsingOperation,
         NSScrollView,
         NSSavePanel,
         NSSlider,
@@ -76,6 +83,7 @@ from .battery import (
     program_for_battery,
     read_battery_snapshot,
 )
+from .power_source_notifications import PowerSourceNotifier
 from .audit import (
     append_status_history_record,
     default_status_audit_log_path,
@@ -129,6 +137,7 @@ from .virtual_device import (
     VirtualLedView,
     VirtualStatusDevice,
 )
+from .internal_display import InternalDisplayController
 from .lid_sleep import (
     LID_POLL_SECONDS,
     ClosedLidAwakeController,
@@ -350,6 +359,8 @@ STATE_IDLE = StatusBarState("Idle", "circle", 4)
 STATE_WORKING = StatusBarState("Working", "arrow.triangle.2.circlepath", 2)
 STATE_DONE = StatusBarState("Done", "checkmark.circle", 3)
 STATE_ASK = StatusBarState("Ask", "questionmark.circle", 1)
+STATUS_ICON_FRAME_SECONDS = 1.0 / 30.0
+STATUS_ICON_FRAME_COUNT = 48
 STATUS_BAR_DEVICE_PRIORITY = ("sidepulsepro", "sidepulsedot", "pulsedot")
 STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
     "SidePulsePro",
@@ -357,6 +368,7 @@ STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
     "PulseDot",
 )
 STATUS_BAR_REFRESH_SECONDS = 15.0
+STATUS_BAR_BATTERY_FALLBACK_POLL_SECONDS = 30.0
 STATUS_BAR_DEVICE_POLL_SECONDS = 2.0
 STATUS_BAR_SESSION_HISTORY_LIMIT = 10
 SIDEPULSE_NOTCH_FEATURE_ENABLED = True
@@ -524,6 +536,17 @@ def format_percent_value(value: float | int) -> str:
     return f"{number:.1f}%"
 
 
+def schedule_status_bar_timer(interval: float, target, selector: str):
+    """Schedule periodic work while menus and other tracking UI are active."""
+    timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        interval, target, selector, None, True,
+    )
+    run_loop = NSRunLoop.mainRunLoop()
+    for mode in (NSRunLoopCommonModes, NSEventTrackingRunLoopMode):
+        run_loop.addTimer_forMode_(timer, mode)
+    return timer
+
+
 class StatusBarController(NSObject):
     def init(self):
         self = objc.super(StatusBarController, self).init()
@@ -535,7 +558,11 @@ class StatusBarController(NSObject):
         self.monitor = self.build_monitor()
         self.event_server = None
         self.status_item = None
+        self.status_icon_timer = None
+        self.tracking_status_menu = None
         self.timer = None
+        self.battery_timer = None
+        self.power_source_notifier = PowerSourceNotifier(self.power_source_did_change)
         self.lid_timer = None
         self.device_timer = None
         self.agent_animation_preview_timer = None
@@ -561,6 +588,10 @@ class StatusBarController(NSObject):
         self.last_snapshot = None
         self.last_battery_snapshot = None
         self.last_battery_error = None
+        self.battery_poll_in_flight = False
+        self.battery_poll_pending = False
+        self.pending_battery_snapshot = None
+        self.pending_battery_error = None
         self.last_power_connected = None
         self.battery_preview_until = 0.0
         self.current_state = STATE_IDLE
@@ -577,6 +608,7 @@ class StatusBarController(NSObject):
         self.last_led_display_kind = LED_DISPLAY_AGENT
         self.last_connected_device_signature = None
         self.keep_awake = KeepAwakeController()
+        self.internal_display = InternalDisplayController()
         self.closed_lid_awake = ClosedLidAwakeController(
             use_system_disable=sleep_helper_installed(),
         )
@@ -602,6 +634,8 @@ class StatusBarController(NSObject):
         self.lid_poll_backoff_until_monotonic = 0.0
         self.pending_lid_closed = None
         self.pending_lid_error = None
+        self.pending_lid_panel_error = None
+        self.pending_lid_panel_state = None
         self.lid_closed_led_hold_active = False
         self.led_animation_until_monotonic = 0.0
         self.led_animation_token = 0
@@ -626,26 +660,30 @@ class StatusBarController(NSObject):
         log_status_bar("status item created")
 
         self.refresh_(None)
-        self.timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        self.timer = schedule_status_bar_timer(
             STATUS_BAR_REFRESH_SECONDS,
             self,
             "refresh:",
-            None,
-            True,
         )
-        self.lid_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        if not self.power_source_notifier.start():
+            log_status_bar(
+                "power notification unavailable: "
+                f"{self.power_source_notifier.last_error or 'unknown error'}"
+            )
+        self.battery_timer = schedule_status_bar_timer(
+            STATUS_BAR_BATTERY_FALLBACK_POLL_SECONDS,
+            self,
+            "pollBattery:",
+        )
+        self.lid_timer = schedule_status_bar_timer(
             LID_POLL_SECONDS,
             self,
             "pollLid:",
-            None,
-            True,
         )
-        self.device_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        self.device_timer = schedule_status_bar_timer(
             STATUS_BAR_DEVICE_POLL_SECONDS,
             self,
             "pollDevices:",
-            None,
-            True,
         )
         self.show_setup_window_if_needed()
         if SIDEPULSE_NOTCH_FEATURE_ENABLED and self.settings.virtual_status_device_enabled:
@@ -857,6 +895,7 @@ class StatusBarController(NSObject):
         self.settings = settings
         if self.status_item is not None:
             self.status_item.setVisible_(settings.show_menu_bar_icon)
+        self.update_status_icon_animation()
         self.refresh_settings_window()
 
     @objc.IBAction
@@ -1084,11 +1123,18 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def quit_(self, _sender):
+        self.internal_display.release()
         self.closed_lid_awake.release()
         self.keep_awake.release()
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
+        self.stop_status_icon_animation()
+        self.internal_display.release()
+        self.power_source_notifier.stop()
+        if self.battery_timer is not None:
+            self.battery_timer.invalidate()
+            self.battery_timer = None
         self.stop_agent_animation_preview_timer()
         self.stop_event_server()
         self.closed_lid_awake.release()
@@ -1106,8 +1152,67 @@ class StatusBarController(NSObject):
         button.setImage_(image_for_symbol(state.symbol, state.label))
         button.setToolTip_(f"SidePulse Agent Monitor: {state.label}")
         button.setAccessibilityLabel_(f"SidePulse Agent Monitor: {state.label}")
+        self.update_status_icon_animation()
         if previous != state:
             log_status_bar(f"state={state.label}")
+
+    def menuWillOpen_(self, menu):
+        self.tracking_status_menu = menu
+        self.update_status_icon_animation()
+
+    def menuDidClose_(self, menu):
+        if self.tracking_status_menu == menu:
+            self.tracking_status_menu = None
+        self.update_status_icon_animation()
+
+    def stop_status_icon_animation(self) -> None:
+        if self.status_icon_timer is not None:
+            self.status_icon_timer.invalidate()
+            self.status_icon_timer = None
+
+    @objc.IBAction
+    def animateStatusIcons_(self, _timer):
+        self.update_status_icon_animation()
+
+    def update_status_icon_animation(self) -> None:
+        visible = self.status_item is not None and self.status_item.isVisible()
+        rows = []
+        if self.tracking_status_menu is not None:
+            for item in self.tracking_status_menu.itemArray():
+                status = item.representedObject()
+                if isinstance(status, AgentStatus):
+                    rows.append((item, status))
+        motion = not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+        animated = motion and (
+            (visible and self.current_state in (STATE_WORKING, STATE_ASK))
+            or any(state_for_mode(status.mode) in (STATE_WORKING, STATE_ASK) for _, status in rows)
+        )
+        if animated and self.status_icon_timer is None:
+            self.status_icon_timer = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
+                STATUS_ICON_FRAME_SECONDS, self, "animateStatusIcons:", None, True,
+            )
+            self.status_icon_timer.setTolerance_(0.005)
+            run_loop = NSRunLoop.mainRunLoop()
+            run_loop.addTimer_forMode_(self.status_icon_timer, NSRunLoopCommonModes)
+            run_loop.addTimer_forMode_(self.status_icon_timer, NSEventTrackingRunLoopMode)
+        elif not animated:
+            self.stop_status_icon_animation()
+
+        frame = int(time.monotonic() / STATUS_ICON_FRAME_SECONDS) % STATUS_ICON_FRAME_COUNT
+        if visible:
+            state = self.current_state
+            icon = (
+                animated_status_icon(state, frame)
+                if animated and state in (STATE_WORKING, STATE_ASK)
+                else image_for_symbol(state.symbol, state.label)
+            )
+            self.status_item.button().setImage_(icon)
+        if rows:
+            dark_mode = is_dark_appearance(self.tracking_status_menu.effectiveAppearance())
+            for item, status in rows:
+                item.setImage_(session_row_icon_for_status(
+                    status, frame if animated else None, dark_mode=dark_mode,
+                ))
 
     def build_monitor(self) -> LiveAgentMonitor:
         socket_path = default_event_socket_path()
@@ -2518,10 +2623,77 @@ class StatusBarController(NSObject):
             self.last_battery_error = error
             return None
 
+        return self.accept_battery_snapshot(snapshot)
+
+    def accept_battery_snapshot(self, snapshot: BatterySnapshot) -> BatterySnapshot:
         self.last_battery_error = None
         self.last_battery_snapshot = snapshot
         self.update_battery_power_preview(snapshot)
         return snapshot
+
+    @objc.IBAction
+    def pollBattery_(self, _sender):
+        self.poll_battery_once()
+
+    def poll_battery_once(self) -> None:
+        if self.battery_poll_in_flight:
+            self.battery_poll_pending = True
+            return
+        self.battery_poll_in_flight = True
+        threading.Thread(target=self._read_battery_snapshot_async, daemon=True).start()
+
+    def power_source_did_change(self) -> None:
+        self.poll_battery_once()
+
+    def _read_battery_snapshot_async(self) -> None:
+        try:
+            self.pending_battery_snapshot = read_battery_snapshot(
+                full_charge_watts=self.settings.battery_full_charge_watts,
+            )
+            self.pending_battery_error = None
+        except Exception as exc:
+            self.pending_battery_snapshot = None
+            self.pending_battery_error = str(exc)
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "handleBatterySnapshot:",
+            None,
+            False,
+        )
+
+    def handleBatterySnapshot_(self, _payload) -> None:
+        self.handle_battery_snapshot()
+
+    def handle_battery_snapshot(self) -> None:
+        snapshot = self.pending_battery_snapshot
+        error = self.pending_battery_error
+        self.pending_battery_snapshot = None
+        self.pending_battery_error = None
+        poll_again = self.battery_poll_pending
+        self.battery_poll_pending = False
+        self.battery_poll_in_flight = False
+
+        if snapshot is None:
+            if error and error != self.last_battery_error:
+                log_status_bar(f"battery error: {error}")
+            self.last_battery_error = error
+            if poll_again:
+                self.poll_battery_once()
+            return
+
+        battery_snapshot = self.accept_battery_snapshot(snapshot)
+        mode = (
+            self.last_snapshot.aggregate.mode
+            if self.last_snapshot is not None
+            else AgentMode.IDLE_READY
+        )
+        self.sync_keep_awake(mode, battery_snapshot)
+        self.sync_leds(
+            mode,
+            battery_snapshot,
+            self.active_led_display_kind(battery_snapshot),
+        )
+        if poll_again:
+            self.poll_battery_once()
 
     def update_battery_power_preview(self, snapshot: BatterySnapshot) -> None:
         plugged = snapshot.is_plugged
@@ -3215,9 +3387,27 @@ class StatusBarController(NSObject):
         threading.Thread(target=self._read_lid_closed_async, daemon=True).start()
 
     def _read_lid_closed_async(self) -> None:
+        self.pending_lid_panel_error = None
+        self.pending_lid_panel_state = None
         try:
-            self.pending_lid_closed = read_lid_closed()
+            closed = read_lid_closed()
+            self.pending_lid_closed = closed
             self.pending_lid_error = None
+            panel = getattr(self, "internal_display", None)
+            if panel is not None:
+                previous_error = panel.last_error
+                was_off = panel.powered_off
+                panel.update(closed)
+                self.pending_lid_panel_error = (
+                    panel.last_error
+                    if panel.last_error != previous_error
+                    else None
+                )
+                self.pending_lid_panel_state = (
+                    panel.powered_off
+                    if panel.last_error is None and (was_off != panel.powered_off or previous_error)
+                    else None
+                )
         except Exception as exc:
             self.pending_lid_closed = None
             self.pending_lid_error = str(exc)
@@ -3245,6 +3435,12 @@ class StatusBarController(NSObject):
         if closed is None:
             return
         closed = bool(closed)
+        panel_error = getattr(self, "pending_lid_panel_error", None)
+        panel_state = getattr(self, "pending_lid_panel_state", None)
+        if panel_error:
+            log_status_bar(f"internal_display error: {panel_error}")
+        elif panel_state is not None:
+            log_status_bar(f"internal_display={'off' if panel_state else 'on'}")
         self.last_lid_error = None
         self.lid_poll_backoff_until_monotonic = 0.0
         if self.last_lid_closed is None:
@@ -3403,6 +3599,7 @@ class StatusBarController(NSObject):
 
 def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> NSMenu:
     menu = NSMenu.alloc().init()
+    menu.setDelegate_(target)
 
     menu.addItem_(disabled_menu_item("SidePulse"))
     menu.addItem_(NSMenuItem.separatorItem())
@@ -5754,11 +5951,21 @@ def session_open_action_title(status: AgentStatus, action: str, settings=None) -
     return session_open_action_label(status, action)
 
 
-def session_row_icon_for_status(status: AgentStatus):
+def session_row_icon_for_status(
+    status: AgentStatus, animation_frame: int | None = None, *, dark_mode: bool | None = None,
+):
+    if dark_mode is None:
+        dark_mode = is_dark_appearance()
+    state = state_for_mode(status.mode)
+    if animation_frame is not None and state in (STATE_WORKING, STATE_ASK):
+        return animated_session_row_icon(
+            state, animation_frame, session_origin_icon_for_status(status), dark_mode,
+        )
     cache_key = (
         status.mode.value,
         status.provider.lower(),
         normalized_origin_text(status.origin),
+        dark_mode,
     )
     if cache_key in _session_row_icon_cache:
         return _session_row_icon_cache[cache_key]
@@ -5770,7 +5977,7 @@ def session_row_icon_for_status(status: AgentStatus):
     elif status_icon is None:
         image = origin_icon
     else:
-        image = horizontal_icon_pair(status_icon, origin_icon)
+        image = horizontal_icon_pair(status_icon, origin_icon, dark_mode=dark_mode)
     _session_row_icon_cache[cache_key] = image
     return image
 
@@ -5778,6 +5985,47 @@ def session_row_icon_for_status(status: AgentStatus):
 def status_icon_for_status(status: AgentStatus):
     state = state_for_mode(status.mode)
     return image_for_symbol(state.symbol, state.label)
+
+
+@lru_cache(maxsize=STATUS_ICON_FRAME_COUNT * 2)
+def animated_status_icon(state: StatusBarState, frame: int):
+    source = image_for_symbol(state.symbol, state.label)
+    if source is None:
+        return None
+    phase = frame / STATUS_ICON_FRAME_COUNT
+    pulse = (1.0 + math.cos(2.0 * math.pi * phase)) / 2.0
+    scale = 1.0 if state == STATE_WORKING else 0.82 + 0.18 * pulse
+    opacity = 1.0 if state == STATE_WORKING else 0.45 + 0.55 * pulse
+    image = NSImage.alloc().initWithSize_((18.0, 18.0))
+    image.lockFocus()
+    NSGraphicsContext.saveGraphicsState()
+    try:
+        transform = NSAffineTransform.transform()
+        transform.translateXBy_yBy_(9.0, 9.0)
+        if state == STATE_WORKING:
+            transform.rotateByDegrees_(-360.0 * phase)
+        transform.scaleBy_(scale)
+        transform.concat()
+        source.drawInRect_fromRect_operation_fraction_(
+            ((-7.5, -7.5), (15.0, 15.0)), image_source_rect(source),
+            NSCompositingOperationSourceOver, opacity,
+        )
+    finally:
+        NSGraphicsContext.restoreGraphicsState()
+        image.unlockFocus()
+    image.setTemplate_(True)
+    return image
+
+
+@lru_cache(maxsize=512)
+def animated_session_row_icon(state: StatusBarState, frame: int, origin_icon, dark_mode: bool = False):
+    # Only the status glyph moves; the provider/host badge remains stationary.
+    icon = animated_status_icon(state, frame)
+    if origin_icon is None:
+        return icon
+    if icon is None:
+        return origin_icon
+    return horizontal_icon_pair(icon, origin_icon, dark_mode=dark_mode)
 
 
 def session_origin_icon_for_status(status: AgentStatus):
@@ -5896,7 +6144,16 @@ def composite_app_icons(host_icon, provider_icon):
     return image
 
 
-def horizontal_icon_pair(left_icon, right_icon):
+def is_dark_appearance(appearance=None) -> bool:
+    appearance = appearance or NSApplication.sharedApplication().effectiveAppearance()
+    return appearance.bestMatchFromAppearancesWithNames_(
+        [NSAppearanceNameAqua, NSAppearanceNameDarkAqua],
+    ) == NSAppearanceNameDarkAqua
+
+
+def horizontal_icon_pair(left_icon, right_icon, *, dark_mode: bool | None = None):
+    if dark_mode is None:
+        dark_mode = is_dark_appearance()
     left_width = 15.5
     right_width = float(right_icon.size().width)
     width = left_width + 3.0 + right_width
@@ -5909,6 +6166,12 @@ def horizontal_icon_pair(left_icon, right_icon):
             image_source_rect(left_icon),
             NSCompositingOperationSourceOver,
             1.0,
+        )
+        # The combined image contains a full-color app badge and cannot be a
+        # template. Tint only the status glyph, preserving its animated alpha.
+        (NSColor.whiteColor() if dark_mode else NSColor.blackColor()).set()
+        NSRectFillUsingOperation(
+            ((0.0, 0.0), (left_width, height)), NSCompositingOperationSourceIn,
         )
         right_icon.drawInRect_fromRect_operation_fraction_(
             ((left_width + 3.0, 0.0), (right_width, height)),

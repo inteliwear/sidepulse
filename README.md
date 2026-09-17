@@ -201,12 +201,15 @@ sidepulse battery leds --device /Volumes/SidePulsePro --full-watts 140
 
 SidePulse Pro uses all eight LEDs as a battery bar. At 50%, LEDs 0-3 are filled;
 when charging, LED 4 is the pulsing frontier LED. Live updates ease the whole
-strip into its new base state, then trigger one frontier pulse. The app owns
-the animation cadence by rewriting that one-shot pulse; the device does not run
-a repeated charging loop. Pulse length and rewrite frequency are based on
-charger wattage divided by the laptop's full-speed wattage baseline, so slow
-chargers produce occasional short blinks and full-speed chargers produce a
-steady pulse.
+strip into its new base state, then the device animation engine repeats the
+frontier pulse. Pulse length and the pause between pulses are based on charger
+wattage divided by the laptop's full-speed wattage baseline, so slow chargers
+produce occasional short blinks and full-speed chargers produce a steady pulse.
+The app only rewrites the program when the battery level, charging state,
+charger power, brightness, or selected device changes.
+Power-source changes arrive through the macOS IOKit notification run loop, so
+plug/unplug previews and charging-state changes do not wait for the general
+status refresh. A low-frequency poll remains as a fallback.
 
 Save the status-bar LED display preference:
 
@@ -639,6 +642,13 @@ and shows the path from provider hook event to interpreted SidePulse status.
 
 The `Keep Awake With Lid Closed` menu section controls the stronger sleep
 prevention policy:
+
+On supported Apple Silicon Macs, SidePulse requests built-in panel power off
+when the lid closes and restores it on opening. This targets the internal
+framebuffer only; external display power, brightness, and layout are untouched.
+The panel control uses the private macOS IOMobileFramebuffer API and logs an
+error if unavailable, without falling back to sleeping all displays. Pending
+panel restoration survives a SidePulse restart.
 
 | Choice | Behavior |
 | --- | --- |

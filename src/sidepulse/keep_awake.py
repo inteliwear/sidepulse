@@ -15,7 +15,7 @@ AWAKE_GRACE_SECONDS = 300.0
 SD_STATUS_READ_SECONDS = 60.0
 KEEPALIVE_FILE_NAME = "keepalive"
 STATUS_FILE_NAME = KEEPALIVE_FILE_NAME
-CAFFEINATE_COMMAND = ("/usr/bin/caffeinate", "-imsu")
+CAFFEINATE_COMMAND = ("/usr/bin/caffeinate", "-ims")
 
 
 class KeepAwakeController:

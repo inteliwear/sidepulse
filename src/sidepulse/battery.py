@@ -295,7 +295,12 @@ def program_for_battery(
     pulse_index = min(fill.full, count - 1)
     transition = max(0, int(transition_ms))
 
-    if not snapshot.is_plugged or snapshot.is_charged:
+    if (
+        not snapshot.is_plugged
+        or not snapshot.is_charging
+        or snapshot.is_charged
+        or percent >= 100
+    ):
         color = battery_color(percent)
         if snapshot.is_charged or percent >= 100:
             return apply_brightness(
@@ -316,6 +321,9 @@ def program_for_battery(
     color = BATTERY_CHARGING_MINT
     ratio = snapshot.charge_speed_ratio(full_charge_watts)
     pulse_ms = charging_pulse_length_ms(ratio)
+    cycle_ms = round(charging_cycle_seconds(ratio) * 1000)
+    hold_ms = max(0, cycle_ms - transition - pulse_ms)
+    frontier_color = battery_fill_color(pulse_index, fill, color)
     lines = [
         ";".join(
             battery_segment(
@@ -326,11 +334,10 @@ def program_for_battery(
             for index in range(count)
         )
     ]
-    lines.extend(
-        [
-            f"{pulse_index}:{color} {pulse_ms}ms pulse",
-        ]
-    )
+    lines.append(f"{pulse_index}:{color} {pulse_ms}ms pulse")
+    if hold_ms > 0:
+        lines.append(f"{pulse_index}:{frontier_color} {hold_ms}ms none")
+    lines.append("repeat")
     return apply_brightness("\n".join(lines), brightness)
 
 
@@ -423,14 +430,12 @@ class BatteryLedController:
         self.last_error: str | None = None
         self.last_target: Path | None = None
         self.last_attempt_monotonic = 0.0
-        self.last_write_monotonic = 0.0
 
     def reset(self) -> None:
         self.last_program = None
         self.last_error = None
         self.last_target = None
         self.last_attempt_monotonic = 0.0
-        self.last_write_monotonic = 0.0
 
     def sync_snapshot(self, snapshot: BatterySnapshot) -> BatteryLedWrite:
         now = time.monotonic()
@@ -450,11 +455,7 @@ class BatteryLedController:
                 error=self.last_error,
             )
 
-        if (
-            program == self.last_program
-            and self.last_error is None
-            and not should_rewrite_battery_program(snapshot, now - self.last_write_monotonic)
-        ):
+        if program == self.last_program and self.last_error is None:
             return BatteryLedWrite(
                 target=self.last_target,
                 program="",
@@ -493,7 +494,6 @@ class BatteryLedController:
         self.last_program = program
         self.last_error = None
         self.last_target = written_target
-        self.last_write_monotonic = now
         return BatteryLedWrite(
             target=written_target,
             program=program,
@@ -549,15 +549,9 @@ def charging_pulse_length_ms(ratio: float) -> int:
     return round(180 + (1220 * speed))
 
 
-def charging_update_interval_seconds(ratio: float) -> float:
+def charging_cycle_seconds(ratio: float) -> float:
     speed = clamp(ratio)
     return max(0.9, 3.0 - (2.1 * speed))
-
-
-def should_rewrite_battery_program(snapshot: BatterySnapshot, elapsed_seconds: float) -> bool:
-    if not snapshot.is_plugged or snapshot.is_charged:
-        return False
-    return elapsed_seconds >= charging_update_interval_seconds(snapshot.charge_speed_ratio())
 
 
 def parse_full_watts(value: str | float | int | None) -> float | None:

@@ -1805,6 +1805,67 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(calls, [None])
 
+    def test_status_bar_battery_poll_does_not_overlap_reads(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        target = SimpleNamespace(
+            battery_poll_in_flight=False,
+            battery_poll_pending=False,
+            _read_battery_snapshot_async=lambda: None,
+        )
+
+        with patch("sidepulse.status_bar.threading.Thread") as thread:
+            status_bar.StatusBarController.poll_battery_once(target)
+            status_bar.StatusBarController.poll_battery_once(target)
+
+        self.assertTrue(target.battery_poll_in_flight)
+        self.assertTrue(target.battery_poll_pending)
+        thread.assert_called_once_with(
+            target=target._read_battery_snapshot_async,
+            daemon=True,
+        )
+        thread.return_value.start.assert_called_once_with()
+
+    def test_status_bar_battery_poll_result_syncs_leds_immediately(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        snapshot = BatterySnapshot(percent=55, is_plugged=True, is_charging=True)
+        calls: list[tuple[str, object]] = []
+        target = SimpleNamespace(
+            pending_battery_snapshot=snapshot,
+            pending_battery_error=None,
+            battery_poll_in_flight=True,
+            battery_poll_pending=False,
+            last_battery_error=None,
+            last_snapshot=SimpleNamespace(
+                aggregate=SimpleNamespace(mode=AgentMode.WORKING),
+            ),
+            accept_battery_snapshot=lambda value: value,
+            sync_keep_awake=lambda mode, value: calls.append(
+                ("awake", (mode, value))
+            ),
+            active_led_display_kind=lambda value: "battery",
+            sync_leds=lambda mode, value, display: calls.append(
+                ("leds", (mode, value, display))
+            ),
+        )
+
+        status_bar.StatusBarController.handle_battery_snapshot(target)
+
+        self.assertFalse(target.battery_poll_in_flight)
+        self.assertIsNone(target.pending_battery_snapshot)
+        self.assertEqual(calls[0], ("awake", (AgentMode.WORKING, snapshot)))
+        self.assertEqual(
+            calls[1],
+            ("leds", (AgentMode.WORKING, snapshot, "battery")),
+        )
+
     def test_status_bar_syncs_agent_status_to_linked_phone_once(self) -> None:
         try:
             from sidepulse import status_bar
@@ -2256,6 +2317,46 @@ class AgentMonitorTests(unittest.TestCase):
             status_bar.StatusBarController.start_agent_animation_preview_timer(fake)
 
         self.assertEqual(fake.agent_animation_preview_timer, timer)
+        self.assertEqual(
+            modes,
+            [
+                (timer, status_bar.NSRunLoopCommonModes),
+                (timer, status_bar.NSEventTrackingRunLoopMode),
+            ],
+        )
+
+    def test_status_bar_timers_run_while_menu_tracks_input(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        timer = object()
+        modes = []
+        run_loop = SimpleNamespace(
+            addTimer_forMode_=lambda added_timer, mode: modes.append(
+                (added_timer, mode)
+            )
+        )
+        with (
+            patch(
+                "sidepulse.status_bar.NSTimer",
+                SimpleNamespace(
+                    scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_=(
+                        lambda *args: timer
+                    )
+                ),
+            ),
+            patch(
+                "sidepulse.status_bar.NSRunLoop",
+                SimpleNamespace(mainRunLoop=lambda: run_loop),
+            ),
+        ):
+            self.assertIs(
+                status_bar.schedule_status_bar_timer(1, object(), "pollLid:"),
+                timer,
+            )
+
         self.assertEqual(
             modes,
             [
@@ -4726,8 +4827,9 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn(f"3:{BATTERY_CHARGING_MINT} 360ms ease", lines[0])
         self.assertIn("4:#000000 360ms ease", lines[0])
         self.assertEqual(lines[1], f"4:{BATTERY_CHARGING_MINT} 790ms pulse")
-        self.assertEqual(len(lines), 2)
-        self.assertNotIn("repeat", program)
+        self.assertEqual(lines[2], "4:#000000 800ms none")
+        self.assertEqual(lines[3], "repeat")
+        self.assertEqual(len(lines), 4)
         self.assertNotIn("\noff", program)
 
     def test_unplugged_battery_program_eases_to_static_level(self) -> None:
@@ -4775,10 +4877,26 @@ class AgentMonitorTests(unittest.TestCase):
 
         validate_led_text(program)
         self.assertIn(f"6:{BATTERY_CHARGING_MINT} 1400ms pulse", program)
-        self.assertNotIn("repeat", program)
+        self.assertTrue(program.endswith("repeat"))
         self.assertNotIn("none", program)
 
-    def test_battery_led_controller_animates_charging_on_cadence(self) -> None:
+    def test_plugged_but_not_charging_uses_static_battery_display(self) -> None:
+        snapshot = BatterySnapshot(
+            percent=80,
+            is_plugged=True,
+            is_charging=False,
+            adapter_watts=140,
+            full_charge_watts=140,
+        )
+
+        program = program_for_battery(snapshot, led_count=8)
+
+        validate_led_text(program)
+        self.assertNotIn("pulse", program)
+        self.assertNotIn("repeat", program)
+        self.assertIn("0:#00FF66 360ms ease", program)
+
+    def test_battery_led_controller_only_rewrites_when_program_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             device = Path(tmp) / "SidePulsePro"
             device.mkdir()
@@ -4790,6 +4908,13 @@ class AgentMonitorTests(unittest.TestCase):
                 adapter_watts=70,
                 full_charge_watts=140,
             )
+            faster_snapshot = BatterySnapshot(
+                percent=50,
+                is_plugged=True,
+                is_charging=True,
+                adapter_watts=96,
+                full_charge_watts=140,
+            )
 
             with patch(
                 "sidepulse.battery.time.monotonic",
@@ -4797,7 +4922,7 @@ class AgentMonitorTests(unittest.TestCase):
             ):
                 first = controller.sync_snapshot(snapshot)
                 second = controller.sync_snapshot(snapshot)
-                third = controller.sync_snapshot(snapshot)
+                third = controller.sync_snapshot(faster_snapshot)
 
             self.assertTrue(first.changed)
             self.assertFalse(second.changed)
