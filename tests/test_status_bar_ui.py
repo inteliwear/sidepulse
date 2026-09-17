@@ -190,6 +190,116 @@ class StatusBarTestCase(unittest.TestCase):
             raise unittest.SkipTest("StatusBarController could not be created")
 
 
+class MenuBarVisibilityTests(StatusBarTestCase):
+    def test_status_updates_keep_only_icon_with_accessible_state(self):
+        controller = sb.StatusBarController.alloc().init()
+        controller.status_item = Mock()
+        button = controller.status_item.button.return_value
+        for state in (sb.STATE_IDLE, sb.STATE_WORKING, sb.STATE_DONE, sb.STATE_ASK):
+            controller.set_status(state)
+            button.setTitle_.assert_called_with("")
+            self.assertIsNotNone(button.setImage_.call_args.args[0])
+            button.setToolTip_.assert_called_with(f"SidePulse Agent Monitor: {state.label}")
+            button.setAccessibilityLabel_.assert_called_with(f"SidePulse Agent Monitor: {state.label}")
+
+    def test_hide_and_restore_preserve_controller_and_settings_window(self):
+        controller = sb.StatusBarController.alloc().init()
+        controller.status_item = Mock()
+        controller.settings_window = sb.build_settings_window(controller)
+        checkbox = controller.settings_buttons["show_menu_bar_icon"]
+        monitor = controller.monitor
+        with (
+            patch.object(sb, "save_settings") as save,
+            patch.object(sb.StatusBarController, "refresh_settings_window"),
+        ):
+            for visible in (False, True):
+                checkbox.setState_(sb.NSOnState if visible else sb.NSOffState)
+                controller.setMenuBarIconFromCheckbox_(checkbox)
+                controller.status_item.setVisible_.assert_called_with(visible)
+                self.assertEqual(save.call_args.args[0].show_menu_bar_icon, visible)
+                self.assertEqual(controller.settings.show_menu_bar_icon, visible)
+                self.assertIs(controller.monitor, monitor)
+                self.assertIsNotNone(controller.settings_window)
+
+    def test_external_settings_request_is_dispatched_to_main_thread(self):
+        controller = Mock()
+        sb.StatusBarController.schedule_open_settings(controller)
+        controller.performSelectorOnMainThread_withObject_waitUntilDone_.assert_called_once_with(
+            "openSettings:", None, False,
+        )
+
+    def test_finder_reopen_opens_settings(self):
+        controller = sb.StatusBarController.alloc().init()
+        with patch.object(sb.StatusBarController, "show_settings_window") as show:
+            self.assertTrue(controller.applicationShouldHandleReopen_hasVisibleWindows_(
+                None, False,
+            ))
+            show.assert_called_once_with()
+
+
+class AdvancedAutosaveTests(StatusBarTestCase):
+    def setUp(self):
+        self.target = sb.StatusBarController.alloc().init()
+        self.target.settings_window = sb.build_settings_window(self.target)
+        self.window = self.target.settings_window
+        self.tabs = next(
+            view for view in self.window.contentView().subviews()
+            if hasattr(view, "numberOfTabViewItems")
+        )
+        self.tabs.selectTabViewItemWithIdentifier_("behavior")
+        for key, value in (
+            ("recent_session_retention_hours", "48"),
+            ("idle_timeout_minutes", "60"),
+            ("sleep_prevention_min_battery_percent", "20"),
+        ):
+            self.target.settings_fields[key].setStringValue_(value)
+        self.saved = []
+        for context in (
+            patch.object(sb, "save_settings", side_effect=self.saved.append),
+            patch.object(sb.StatusBarController, "reload_monitor"),
+            patch.object(sb.StatusBarController, "refresh_settings_window"),
+            patch.object(sb.StatusBarController, "refresh_"),
+        ):
+            context.start()
+            self.addCleanup(context.stop)
+
+    def edit(self, key, value):
+        field = self.target.settings_fields[key]
+        field.selectText_(None)
+        editor = field.currentEditor()
+        self.assertIsNotNone(editor)
+        editor.setString_(value)
+
+    def test_leaving_each_numeric_field_saves_without_a_button(self):
+        for key, value, attribute, expected in (
+            ("recent_session_retention_hours", "24", "recent_session_retention_seconds", 86400),
+            ("idle_timeout_minutes", "15", "idle_timeout_seconds", 900),
+            ("sleep_prevention_min_battery_percent", "30", "sleep_prevention_min_battery_percent", 30),
+        ):
+            self.edit(key, value)
+            self.window.makeFirstResponder_(None)
+            self.assertEqual(getattr(self.saved[-1], attribute), expected)
+        self.assertEqual(len(self.saved), 3)
+
+    def test_switching_tabs_commits_the_active_field(self):
+        self.edit("idle_timeout_minutes", "10")
+        self.tabs.selectTabViewItemWithIdentifier_("agents")
+        self.assertEqual(self.saved[-1].idle_timeout_seconds, 600)
+
+    def test_closing_window_commits_the_active_field(self):
+        self.edit("idle_timeout_minutes", "5")
+        self.assertTrue(self.target.windowShouldClose_(self.window))
+        self.assertEqual(self.saved[-1].idle_timeout_seconds, 300)
+
+    def test_invalid_input_keeps_last_saved_setting(self):
+        original = self.target.settings
+        for value in ("oops", "nan", "inf"):
+            self.edit("idle_timeout_minutes", value)
+            self.window.makeFirstResponder_(None)
+            self.assertEqual(self.target.settings, original)
+        self.assertEqual(self.saved, [])
+
+
 class SelectorWiringTests(StatusBarTestCase):
     """Menu and button actions are strings; a rename must not go unnoticed."""
 

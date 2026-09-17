@@ -331,6 +331,7 @@ class AgentMonitorSettings:
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
+    show_menu_bar_icon: bool = True
 
     def transcript_enabled(self, provider: str) -> bool:
         if provider == "codex":
@@ -767,6 +768,9 @@ class AgentMonitorSettings:
     def with_setup_screen_completed(self, completed: bool = True) -> "AgentMonitorSettings":
         return replace(self, setup_screen_completed=bool(completed))
 
+    def with_menu_bar_icon(self, visible: bool) -> "AgentMonitorSettings":
+        return replace(self, show_menu_bar_icon=bool(visible))
+
     def with_virtual_status_device(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, virtual_status_device_enabled=bool(enabled))
 
@@ -800,6 +804,7 @@ class AgentMonitorSettings:
     def to_dict(self) -> dict[str, Any]:
         return {
             "led_display": self.led_display,
+            "show_menu_bar_icon": self.show_menu_bar_icon,
             "devices": [device.to_dict() for device in self.devices],
             "sleep_prevention_policy": self.sleep_prevention_policy,
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
@@ -944,6 +949,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         }
     )
     return AgentMonitorSettings(
+        show_menu_bar_icon=_bool_setting(data.get("show_menu_bar_icon"), True),
         codex_transcripts_enabled=_bool_setting(transcript.get("codex"), False),
         claude_transcripts_enabled=_bool_setting(transcript.get("claude"), False),
         led_display=led_display,

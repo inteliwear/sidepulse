@@ -130,6 +130,12 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
     version.set_defaults(func=cmd_version)
+    update = subparsers.add_parser("update", help="Update using the one-command setup installer.")
+    update.add_argument(
+        "--dry-run", action="store_true",
+        help="Show the setup command without downloading or changing anything.",
+    )
+    update.set_defaults(func=cmd_sidepulse_update)
     subparsers.add_parser(
         "agent-monitor",
         help="Install hooks and show live AI agent statuses.",
@@ -199,6 +205,11 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     service.set_defaults(func=cmd_sidepulse_service)
 
     add_sidepulse_status_bar_parser(subparsers)
+    settings = subparsers.add_parser(
+        "settings",
+        help="Open SidePulse settings, even when the menu bar icon is hidden.",
+    )
+    settings.set_defaults(func=cmd_sidepulse_settings)
     add_sidepulse_sdejectguard_parser(subparsers)
     add_sidepulse_battery_parser(subparsers)
     # Agent configs written by older installs invoke `sidepulse hook-log`
@@ -242,7 +253,7 @@ def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
 def add_sidepulse_status_bar_parser(subparsers: argparse._SubParsersAction) -> None:
     status_bar = subparsers.add_parser(
         "status-bar",
-        help="Start or stop the macOS SidePulse menu-bar app.",
+        help="Show and start the macOS SidePulse menu-bar app, or stop it.",
     )
     status_bar.add_argument(
         "status_bar_command",
@@ -1305,6 +1316,31 @@ def cmd_leds(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_sidepulse_update(args: argparse.Namespace) -> int:
+    from .update import update_installation
+
+    return update_installation(dry_run=args.dry_run)
+
+
+def cmd_sidepulse_settings(_args: argparse.Namespace) -> int:
+    if sys.platform != "darwin":
+        print("SidePulse settings requires macOS.", file=sys.stderr)
+        return 1
+    from .ipc import request_settings_window
+    from .status_bar_launch import install_launch_agent
+
+    if request_settings_window():
+        return 0
+    install_launch_agent(start=True)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if request_settings_window():
+            return 0
+        time.sleep(0.1)
+    print("Could not open SidePulse settings. Check the status-bar logs.", file=sys.stderr)
+    return 1
+
+
 def cmd_status_bar(args: argparse.Namespace) -> int:
     if args.foreground:
         from .status_bar import main as status_bar_main
@@ -1320,6 +1356,12 @@ def cmd_status_bar(args: argparse.Namespace) -> int:
         print(f"  plist: {result.plist_path}")
         return 0
 
+    # Explicit starts restore the icon. LaunchAgent starts use --foreground
+    # above, so login and automatic restarts keep the saved visibility choice.
+    if not args.no_start:
+        settings = load_settings()
+        if not settings.show_menu_bar_icon:
+            save_settings(settings.with_menu_bar_icon(True))
     result = install_launch_agent(start=not args.no_start)
     action = "installed" if result.changed else "already installed"
     if result.started:

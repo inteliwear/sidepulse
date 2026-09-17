@@ -26,6 +26,23 @@ def default_latest_state_path() -> Path:
     return default_state_dir() / "latest.json"
 
 
+def request_settings_window(*, socket_path: Path | None = None) -> bool:
+    """Ask a running UI to open settings, requiring an acknowledgement."""
+    targets = (socket_path,) if socket_path is not None else candidate_event_socket_paths()
+    for target in targets:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.5)
+            try:
+                client.connect(str(target.expanduser()))
+                client.sendall(b'{"command":"open-settings"}')
+                client.shutdown(socket.SHUT_WR)
+                if client.recv(2) == b"ok":
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def send_hook_event(
     provider: str,
     line: dict,
@@ -70,8 +87,10 @@ class HookEventServer:
         on_event: Callable[[str, dict], None],
         *,
         socket_path: Path | None = None,
+        on_open_settings: Callable[[], None] | None = None,
     ) -> None:
         self.on_event = on_event
+        self.on_open_settings = on_open_settings
         self.socket_path = (socket_path or default_event_socket_path()).expanduser()
         self.socket: socket.socket | None = None
         self.thread: threading.Thread | None = None
@@ -146,6 +165,14 @@ class HookEventServer:
             return
 
         if not isinstance(message, dict):
+            return
+        if message.get("command") == "open-settings":
+            if self.on_open_settings is not None:
+                self.on_open_settings()
+                try:
+                    connection.sendall(b"ok")
+                except OSError:
+                    pass
             return
         provider = message.get("provider")
         line = message.get("line")

@@ -34,7 +34,7 @@ The command works on macOS and Linux with Python 3.10 or newer. The
 at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. On macOS, setup also
 installs the menu-bar app and hardware helpers. On Linux, it automatically
 uses CLI-only mode for mounted SidePulse devices and iPhone linking/push. Run
-the same command again to upgrade to the newest version.
+`sidepulse update` to upgrade to the newest version from GitHub.
 
 Setup also installs a headless SidePulse service. It runs through a LaunchAgent
 on macOS and a user systemd service on Linux. Setup restarts the service, so an
@@ -63,6 +63,29 @@ cd sidepulse
 python3 -m pip install -e .
 sidepulse setup
 ```
+
+### Updating
+
+```sh
+sidepulse update
+sidepulse update --dry-run
+```
+
+`update` runs the same installer as `curl -fsSL https://sidepulse.io/setup.sh | bash`.
+It downloads the script completely before executing it, so curl failures do not
+run a partial installer. The website script forwards to `scripts/setup.sh` on
+GitHub, keeping both entry points on one implementation.
+
+The installer updates `~/.local/share/sidepulse/venv` from GitHub, refreshes the
+CLI links, and runs `sidepulse setup` to configure hooks and restart services.
+It replaces the installed code even when the package version has not changed.
+Settings and linked devices are retained. Downloads and builds finish before
+the background service and menu-bar app are paused; if installation fails,
+the installer attempts to restart them. Restart manually started processes yourself.
+
+Both commands honor `PYTHON_BIN`, `SIDEPULSE_INSTALL_SPEC`,
+`SIDEPULSE_INSTALL_ROOT`, and `SIDEPULSE_BIN_DIR`. They use the managed install
+path above, even when invoked from a development checkout or bundled app.
 
 Send an LED program to SidePulse:
 
@@ -554,7 +577,7 @@ On first launch, the status-bar app shows a SidePulse Setup window. It can:
 
 The Setup window can be reopened from the dropdown with `Setup...`.
 
-The status-bar item shows one of four collapsed states:
+The status-bar item uses a single icon, with the current state in its tooltip:
 
 | Label | Meaning |
 | --- | --- |
@@ -562,6 +585,13 @@ The status-bar item shows one of four collapsed states:
 | Working | One or more agents are thinking, running tools, or progressing. |
 | Done | The most recent active agent completed successfully. |
 | Ask | An agent needs input, permission, or attention. |
+
+To hide the icon, open **Settings → Advanced** and uncheck **Show menu bar icon**.
+Monitoring and LEDs continue running. Reopen settings with `sidepulse settings`
+in Terminal (it starts the app if needed), or open the installed SidePulse app
+from Finder or Spotlight. Check **Show menu bar icon** to restore it.
+Running `sidepulse status-bar` (or `sidepulse status-bar start`) also restores
+the icon immediately. Automatic starts at login retain your visibility preference.
 
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
@@ -574,10 +604,10 @@ If both devices are mounted, the status-bar app prefers SidePulse Pro, then
 SidePulse Dot. Click the item to disconnect and turn the LEDs off; click it again to
 reconnect.
 
-The dropdown and Settings window can switch the LEDs between agent status and
-battery status. When agent status is selected, `Show Battery on Plug/Unplug`
-can briefly show the battery animation for seven seconds after the power source
-changes.
+The menu-bar dropdown can switch the LEDs between agent status and battery
+status. In **Settings → Advanced**, `Show battery for 7s on plug/unplug` can
+briefly show the battery animation for seven seconds after the power source
+changes when agent status is selected.
 
 The Devices section also offers **Add SidePulse Notch**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers

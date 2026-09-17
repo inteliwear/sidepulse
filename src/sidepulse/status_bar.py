@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shlex
 import socket
 import subprocess
@@ -28,6 +29,7 @@ try:
         NSEventTrackingRunLoopMode,
         NSFont,
         NSFontAttributeName,
+        NSFontWeightBold,
         NSForegroundColorAttributeName,
         NSImage,
         NSMenu,
@@ -53,9 +55,9 @@ try:
         NSWindowStyleMaskClosable,
         NSWindowStyleMaskMiniaturizable,
         NSWindowStyleMaskTitled,
-        NSVariableStatusItemLength,
+        NSSquareStatusItemLength,
     )
-    from Foundation import NSRunLoop, NSRunLoopCommonModes, NSObject, NSString, NSTimer, NSURL
+    from Foundation import NSMutableAttributedString, NSRunLoop, NSRunLoopCommonModes, NSObject, NSString, NSTimer, NSURL
 except ImportError as exc:  # pragma: no cover - only exercised on non-macOS setups.
     raise SystemExit(
         f"The status-bar app requires PyObjC/AppKit ({exc}):\n"
@@ -529,6 +531,7 @@ class StatusBarController(NSObject):
             return None
 
         self.settings = load_settings()
+        self.open_settings_on_launch = False
         self.monitor = self.build_monitor()
         self.event_server = None
         self.status_item = None
@@ -612,12 +615,14 @@ class StatusBarController(NSObject):
         self.start_event_server()
 
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
-            NSVariableStatusItemLength
+            NSSquareStatusItemLength
         )
         button = self.status_item.button()
-        button.setTitle_(" Idle")
+        button.setTitle_("")
         button.setImage_(image_for_symbol(STATE_IDLE.symbol, STATE_IDLE.label))
         button.setToolTip_("SidePulse Agent Monitor: Idle")
+        button.setAccessibilityLabel_("SidePulse Agent Monitor: Idle")
+        self.status_item.setVisible_(self.settings.show_menu_bar_icon)
         log_status_bar("status item created")
 
         self.refresh_(None)
@@ -647,6 +652,13 @@ class StatusBarController(NSObject):
             self.virtual_status_device.show()
         else:
             self.virtual_status_device.hide()
+
+        if self.open_settings_on_launch:
+            self.show_settings_window()
+
+    def applicationShouldHandleReopen_hasVisibleWindows_(self, _application, _visible):
+        self.show_settings_window()
+        return True
 
     @objc.IBAction
     def refresh_(self, _sender):
@@ -839,6 +851,15 @@ class StatusBarController(NSObject):
         self.show_settings_window()
 
     @objc.IBAction
+    def setMenuBarIconFromCheckbox_(self, sender):
+        settings = self.settings.with_menu_bar_icon(sender.state() == NSOnState)
+        save_settings(settings)
+        self.settings = settings
+        if self.status_item is not None:
+            self.status_item.setVisible_(settings.show_menu_bar_icon)
+        self.refresh_settings_window()
+
+    @objc.IBAction
     def openSetup_(self, _sender):
         self.show_setup_window()
 
@@ -905,10 +926,6 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def toggleBatteryLedDisplay_(self, _sender):
         self.set_battery_led_display(self.settings.led_display != LED_DISPLAY_BATTERY)
-
-    @objc.IBAction
-    def setBatteryLedDisplayFromCheckbox_(self, sender):
-        self.set_battery_led_display(sender.state() == NSOnState)
 
     @objc.IBAction
     def toggleBatteryPowerPreview_(self, _sender):
@@ -997,6 +1014,16 @@ class StatusBarController(NSObject):
     def saveAgentListTiming_(self, _sender):
         self.save_agent_list_timing_from_fields()
 
+    def windowShouldClose_(self, window):
+        if window == self.settings_window:
+            window.makeFirstResponder_(None)
+        return True
+
+    def tabView_shouldSelectTabViewItem_(self, _tab_view, _tab_item):
+        if self.settings_window is not None:
+            self.settings_window.makeFirstResponder_(None)
+        return True
+
     @objc.IBAction
     def setDeviceDisplayAgent_(self, sender):
         self.set_device_display(sender.representedObject(), LED_DISPLAY_AGENT)
@@ -1075,9 +1102,10 @@ class StatusBarController(NSObject):
         button = self.status_item.button()
         if button is None:
             return
-        button.setTitle_(f" {state.label}")
+        button.setTitle_("")
         button.setImage_(image_for_symbol(state.symbol, state.label))
         button.setToolTip_(f"SidePulse Agent Monitor: {state.label}")
+        button.setAccessibilityLabel_(f"SidePulse Agent Monitor: {state.label}")
         if previous != state:
             log_status_bar(f"state={state.label}")
 
@@ -1095,7 +1123,10 @@ class StatusBarController(NSObject):
 
     def start_event_server(self) -> None:
         self.stop_event_server()
-        self.event_server = HookEventServer(self.handle_hook_event_message)
+        self.event_server = HookEventServer(
+            self.handle_hook_event_message,
+            on_open_settings=self.schedule_open_settings,
+        )
         try:
             socket_path = self.event_server.start()
             log_status_bar(f"event_server listening={socket_path}")
@@ -1107,6 +1138,11 @@ class StatusBarController(NSObject):
         if self.event_server is not None:
             self.event_server.stop()
             self.event_server = None
+
+    def schedule_open_settings(self) -> None:
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "openSettings:", None, False,
+        )
 
     def handle_hook_event_message(self, provider: str, line: dict) -> None:
         try:
@@ -1361,6 +1397,11 @@ class StatusBarController(NSObject):
         if self.settings_window is None:
             return
 
+        set_checkbox_state(
+            self.settings_buttons.get("show_menu_bar_icon"),
+            self.settings.show_menu_bar_icon,
+        )
+
         codex = detect_codex_config()
         claude = detect_claude_config()
         grok = detect_grok_config()
@@ -1401,10 +1442,6 @@ class StatusBarController(NSObject):
         set_checkbox_state(
             self.settings_buttons.get("claude_transcripts"),
             self.settings.claude_transcripts_enabled,
-        )
-        set_checkbox_state(
-            self.settings_buttons.get("battery_leds"),
-            self.settings.led_display == LED_DISPLAY_BATTERY,
         )
         set_checkbox_state(
             self.settings_buttons.get("battery_power_preview"),
@@ -1653,26 +1690,33 @@ class StatusBarController(NSObject):
                 DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
             )
         except ValueError:
-            self.set_settings_message("Behavior settings must be numeric.")
+            self.set_settings_message("Advanced settings must be numeric.")
+            return
+
+        if not all(math.isfinite(value) for value in (retention_hours * 3600, idle_minutes * 60, min_battery_percent)):
+            self.set_settings_message("Advanced settings must be finite numbers.")
             return
 
         try:
-            self.settings = self.settings.with_agent_list_timing(
+            settings = self.settings.with_agent_list_timing(
                 recent_session_retention_seconds=retention_hours * 3600,
                 idle_timeout_seconds=idle_minutes * 60,
             )
-            self.settings = self.settings.with_sleep_prevention_battery_safeguard(
+            settings = settings.with_sleep_prevention_battery_safeguard(
                 min_battery_percent
             )
-            save_settings(self.settings)
+            if settings == self.settings:
+                return
+            save_settings(settings)
+            self.settings = settings
         except Exception as exc:
-            self.set_settings_message(f"Could not save behavior settings: {exc}")
+            self.set_settings_message(f"Could not save advanced settings: {exc}")
             self.settings = load_settings()
             self.refresh_settings_window()
             return
 
         self.reload_monitor()
-        self.set_settings_message("Behavior settings saved.")
+        self.set_settings_message("Advanced settings saved.")
         self.refresh_settings_window()
         self.refresh_(None)
 
@@ -4336,6 +4380,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         False,
     )
     window.setTitle_("SidePulse Settings")
+    window.setDelegate_(target)
     window.setReleasedWhenClosed_(False)
     window.center()
     content = window.contentView()
@@ -4347,13 +4392,6 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     )
     tab_view.setDelegate_(target)
     agents_tab = add_settings_tab(tab_view, "agents", "Agents", tab_width, tab_height)
-    devices_tab = add_settings_tab(
-        tab_view,
-        "devices",
-        "Devices",
-        tab_width,
-        tab_height,
-    )
     animations_tab = add_settings_tab(
         tab_view,
         "animations",
@@ -4364,7 +4402,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     behavior_tab = add_settings_tab(
         tab_view,
         "behavior",
-        "Behavior",
+        "Advanced",
         tab_width,
         tab_height,
     )
@@ -4498,28 +4536,6 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "toggleClaudeTranscripts:",
     )
 
-    add_label(devices_tab, "LED Display", 24, 398, 240, 24)
-    battery_leds = add_checkbox(
-        devices_tab,
-        "Show battery on LEDs",
-        32,
-        356,
-        260,
-        24,
-        target,
-        "setBatteryLedDisplayFromCheckbox:",
-    )
-    battery_power_preview = add_checkbox(
-        devices_tab,
-        "Show battery for 7s on plug/unplug",
-        32,
-        318,
-        320,
-        24,
-        target,
-        "setBatteryPowerPreviewFromCheckbox:",
-    )
-
     add_label(agent_animations_tab, "Profile", 32, 360, 56, 24)
     animation_profile = add_agent_animation_profile_popup(
         agent_animations_tab,
@@ -4651,7 +4667,47 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "Let Mac sleep on battery below", 32, 196, 210, 22)
     min_battery_percent = add_editable_field(behavior_tab, "", 260, 194, 58, 24)
     add_label(behavior_tab, "%", 328, 196, 24, 22)
-    add_button(behavior_tab, "Save", 32, 112, 90, 28, target, "saveAgentListTiming:")
+    for field in (retention_hours, idle_minutes, min_battery_percent):
+        field.setTarget_(target)
+        field.setAction_("saveAgentListTiming:")
+        field.cell().setSendsActionOnEndEditing_(True)
+    add_separator(behavior_tab, 24, 140, tab_width - 48)
+    battery_power_preview = add_checkbox(
+        behavior_tab,
+        "Show battery for 7s on plug/unplug",
+        32,
+        106,
+        320,
+        24,
+        target,
+        "setBatteryPowerPreviewFromCheckbox:",
+    )
+    add_separator(behavior_tab, 24, 96, tab_width - 48)
+    show_menu_bar_icon = add_checkbox(
+        behavior_tab, "Show menu bar icon", 32, 60, 280, 24,
+        target, "setMenuBarIconFromCheckbox:",
+    )
+    settings_hint = add_label(
+        behavior_tab, "Reopen settings anytime: run sidepulse settings in Terminal.",
+        32, 28, 588, 22,
+    )
+    hint_text = str(settings_hint.stringValue())
+    hint = NSMutableAttributedString.alloc().initWithString_attributes_(
+        hint_text,
+        {
+            NSFontAttributeName: settings_hint.font(),
+            NSForegroundColorAttributeName: NSColor.labelColor(),
+        },
+    )
+    hint.addAttribute_value_range_(
+        NSFontAttributeName,
+        NSFont.monospacedSystemFontOfSize_weight_(
+            settings_hint.font().pointSize(), NSFontWeightBold,
+        ),
+        (hint_text.index("sidepulse settings"), len("sidepulse settings")),
+    )
+    settings_hint.setAttributedStringValue_(hint)
+    settings_hint.setSelectable_(True)
 
     add_label(history_tab, "Status History", 24, 398, 240, 24)
     add_label(history_tab, "Timeframe", 430, 398, 76, 22)
@@ -4710,9 +4766,9 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         },
     }
     target.settings_buttons = {
+        "show_menu_bar_icon": show_menu_bar_icon,
         "codex_transcripts": codex_transcripts,
         "claude_transcripts": claude_transcripts,
-        "battery_leds": battery_leds,
         "battery_power_preview": battery_power_preview,
         "delete_agent_animation_profile": delete_animation_profile,
     }
@@ -6710,15 +6766,21 @@ def applescript_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def run_status_bar() -> None:
+def run_status_bar(*, show_settings: bool = False) -> None:
     app = NSApplication.sharedApplication()
     controller = StatusBarController.alloc().init()
+    controller.open_settings_on_launch = show_settings
     app.setDelegate_(controller)
     app.run()
 
 
-def main() -> int:
-    run_status_bar()
+def main(*, show_settings: bool = False) -> int:
+    if show_settings:
+        from .ipc import request_settings_window
+
+        if request_settings_window():
+            return 0
+    run_status_bar(show_settings=show_settings)
     return 0
 
 

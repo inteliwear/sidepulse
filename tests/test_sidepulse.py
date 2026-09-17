@@ -2136,7 +2136,10 @@ class AgentMonitorTests(unittest.TestCase):
             if hasattr(view, "numberOfTabViewItems")
         ]
         self.assertEqual(len(tab_views), 1)
-        self.assertEqual(tab_views[0].numberOfTabViewItems(), 6)
+        self.assertEqual(
+            [str(item.label()) for item in tab_views[0].tabViewItems()],
+            ["Agents", "Animations", "Advanced", "History", "Diagnostics"],
+        )
         animations_tab = next(
             tab_views[0].tabViewItemAtIndex_(index)
             for index in range(tab_views[0].numberOfTabViewItems())
