@@ -22,6 +22,7 @@ class LedDisplayState(str, Enum):
     WORKING = "working"
     DONE = "done"
     ASK = "ask"
+    BLOCKED = "blocked"
 
 
 LED_STATE_LABELS: dict[LedDisplayState, str] = {
@@ -29,13 +30,18 @@ LED_STATE_LABELS: dict[LedDisplayState, str] = {
     LedDisplayState.WORKING: "Working",
     LedDisplayState.DONE: "Done",
     LedDisplayState.ASK: "Ask",
+    LedDisplayState.BLOCKED: "Blocked",
 }
 
 
-ASK_AMBER = "#FF3A00"
+# Each state is separated by motion as well as hue, so the strip stays readable
+# without relying on telling red from green: rolling = working, slow breath =
+# your input is needed, sharp double-blink = failed, solid = finished.
+ASK_AMBER = "#FFB000"
 WORKING_CYAN = "#00E5FF"
 KITT_RED = "#FF1800"
 DONE_GREEN = "#00FF66"
+BLOCKED_RED = "#FF2600"
 IDLE_DIM = "#020204"
 DEVICE_LED_COUNTS = {
     "sidepulsedot": 2,
@@ -75,7 +81,9 @@ class LedStatusWrite:
 
 
 def display_state_for_mode(mode: AgentMode) -> LedDisplayState:
-    if mode in {AgentMode.WAITING_FOR_INPUT, AgentMode.BLOCKED_ERROR}:
+    if mode == AgentMode.BLOCKED_ERROR:
+        return LedDisplayState.BLOCKED
+    if mode == AgentMode.WAITING_FOR_INPUT:
         return LedDisplayState.ASK
     if mode in {
         AgentMode.WORKING,
@@ -98,6 +106,8 @@ def program_for_display_state(
         return apply_brightness(builtin_animation_program("idle-pulse", led_count), brightness)
     if state == LedDisplayState.ASK:
         return apply_brightness(builtin_animation_program("amber-pulse", led_count), brightness)
+    if state == LedDisplayState.BLOCKED:
+        return apply_brightness(builtin_animation_program("blocked-blink", led_count), brightness)
     if state == LedDisplayState.DONE:
         return apply_brightness(builtin_animation_program("solid-green", led_count), brightness)
     if state == LedDisplayState.WORKING:
@@ -134,6 +144,12 @@ def program_for_agent_mode(
     if animation_style == "amber-pulse":
         return program_for_display_state(
             LedDisplayState.ASK,
+            led_count=led_count,
+            brightness=brightness,
+        )
+    if animation_style == "blocked-blink":
+        return program_for_display_state(
+            LedDisplayState.BLOCKED,
             led_count=led_count,
             brightness=brightness,
         )

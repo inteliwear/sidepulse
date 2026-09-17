@@ -948,6 +948,7 @@ class WindowBuildTests(StatusBarTestCase):
                     "Cyan Roll",
                     "Cyan Complete",
                     "Amber Pulse",
+                    "Blocked Blink",
                     "Solid Green",
                     "KITT Scanner",
                     "KITT Scanner Red",
