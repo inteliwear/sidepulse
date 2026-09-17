@@ -33,11 +33,13 @@ from .device_writer import (
 )
 from .hook import hook_log_main
 from .install import (
+    install_antigravity_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
     install_grok_hooks,
     install_junie_hooks,
+    uninstall_antigravity_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_cursor_hooks,
@@ -155,6 +157,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     setup.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     setup.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     setup.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
+    setup.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     setup.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
     setup.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would change.")
@@ -1182,6 +1185,7 @@ def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
     install.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     install.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     install.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
+    install.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     install.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
     install.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     install.add_argument("--dry-run", action="store_true", help="Show what would change.")
@@ -1192,6 +1196,7 @@ def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
     uninstall.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     uninstall.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     uninstall.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
+    uninstall.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     uninstall.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
     uninstall.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     uninstall.add_argument("--dry-run", action="store_true", help="Show what would change.")
@@ -1235,6 +1240,7 @@ def add_status_args(parser: argparse.ArgumentParser, include_json: bool = True) 
     parser.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
     parser.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     parser.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
+    parser.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     parser.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
     parser.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
 
@@ -1394,6 +1400,8 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(install_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(install_junie_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
@@ -1424,6 +1432,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(uninstall_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(uninstall_junie_hooks(log_path=log_path, dry_run=args.dry_run))
 

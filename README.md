@@ -309,6 +309,7 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Antigravity | `~/.gemini/config/hooks.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/antigravity.jsonl` |
 
 #### Local reply classifier (Apple Silicon)
 
@@ -385,10 +386,10 @@ sidepulse setup
 ```
 
 `sidepulse setup` installs or refreshes all supported agent hooks, including
-Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
+Antigravity and Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
-up only one provider, pass its name, for example `sidepulse setup junie`.
+up only one provider, pass its name, for example `sidepulse setup antigravity`.
 To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
 `sidepulse setup --no-status-bar`.
 
@@ -445,6 +446,7 @@ sidepulse agent-monitor install
 sidepulse agent-monitor install codex
 sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
+sidepulse agent-monitor install antigravity
 sidepulse agent-monitor install cursor
 sidepulse agent-monitor install junie
 ```
@@ -553,6 +555,7 @@ sidepulse agent-monitor uninstall
 sidepulse agent-monitor uninstall codex
 sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
+sidepulse agent-monitor uninstall antigravity
 sidepulse agent-monitor uninstall cursor
 sidepulse agent-monitor uninstall junie
 ```
