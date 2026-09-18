@@ -7691,6 +7691,96 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
 
+    def test_codex_closing_question_maps_to_waiting_for_input(self) -> None:
+        """A closing question is an ask however the agent phrased it.
+
+        The phrasing allow-list was built around "Want me to ...?" and missed
+        "Do you mean ...?", so Codex turns that blocked on the user finished
+        green - indistinguishable from a completed task.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "codex.jsonl"
+            now = datetime.now(timezone.utc).isoformat()
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": now,
+                        "event": {
+                            "hook_event_name": "Stop",
+                            "session_id": "codex-session",
+                            "last_assistant_message": (
+                                "I can take this two ways.\n"
+                                "Do you mean a Blender-style 3D editor, or a model "
+                                "of a kitchen blender?"
+                            ),
+                        },
+                    }
+                )
+                + "\n"
+            )
+            monitor = AgentMonitor(
+                sources=(SourceSpec("codex", log),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+            )
+            self.assertEqual(
+                monitor.snapshot().aggregate.mode, AgentMode.WAITING_FOR_INPUT
+            )
+
+    def test_closing_statement_that_blocks_maps_to_waiting_for_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "codex.jsonl"
+            now = datetime.now(timezone.utc).isoformat()
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": now,
+                        "event": {
+                            "hook_event_name": "Stop",
+                            "session_id": "codex-session",
+                            "last_assistant_message": (
+                                "Training is paused.\n"
+                                "What I need from you: add balance at the billing "
+                                "page, then tell me it is done."
+                            ),
+                        },
+                    }
+                )
+                + "\n"
+            )
+            monitor = AgentMonitor(
+                sources=(SourceSpec("codex", log),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+            )
+            self.assertEqual(
+                monitor.snapshot().aggregate.mode, AgentMode.WAITING_FOR_INPUT
+            )
+
+    def test_subagent_stop_question_does_not_map_to_waiting_for_input(self) -> None:
+        """On SubagentStop the field holds the subagent's prompt, not its reply."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "claude.jsonl"
+            log.write_text(
+                json.dumps(
+                    {
+                        "logged_at": "2026-06-20T06:00:00Z",
+                        "hook_event_name": "SubagentStop",
+                        "session_id": "claude-session",
+                        "last_assistant_message": "did the claude review pass?",
+                    }
+                )
+                + "\n"
+            )
+            monitor = AgentMonitor(
+                sources=(SourceSpec("claude", log),),
+                stale_after_seconds=999999999,
+                tool_running_timeout_seconds=0,
+            )
+            self.assertNotEqual(
+                monitor.snapshot().aggregate.mode, AgentMode.WAITING_FOR_INPUT
+            )
+
     def test_question_examples_in_inline_code_do_not_map_to_waiting_for_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "codex.jsonl"
