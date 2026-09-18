@@ -949,7 +949,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertGreater(image.size().width, 38)
         self.assertEqual(image.size().height, 18)
 
-    def test_virtual_sidepulse_notch_frame_covers_notch_plus_led_band(self) -> None:
+    def test_virtual_sidepulse_notch_frame_sits_top_right_below_menu_bar(self) -> None:
         try:
             from sidepulse import virtual_device
         except (ImportError, SystemExit) as exc:
@@ -959,6 +959,10 @@ class AgentMonitorTests(unittest.TestCase):
             frame=lambda: SimpleNamespace(
                 origin=SimpleNamespace(x=0.0, y=0.0),
                 size=SimpleNamespace(width=1512.0, height=982.0),
+            ),
+            visibleFrame=lambda: SimpleNamespace(
+                origin=SimpleNamespace(x=0.0, y=0.0),
+                size=SimpleNamespace(width=1512.0, height=944.0),
             ),
             safeAreaInsets=lambda: SimpleNamespace(top=32.0),
             auxiliaryTopLeftArea=lambda: SimpleNamespace(
@@ -973,7 +977,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             virtual_device.virtual_window_frame_for_screen(screen),
-            ((640.0, 945.0), (232.0, 37.0)),
+            ((1268.0, 924.0), (232.0, 16.0)),
         )
         self.assertEqual(
             virtual_device.led_band_rect(232.0),
@@ -991,6 +995,10 @@ class AgentMonitorTests(unittest.TestCase):
                 origin=SimpleNamespace(x=0.0, y=0.0),
                 size=SimpleNamespace(width=1920.0, height=1080.0),
             ),
+            visibleFrame=lambda: SimpleNamespace(
+                origin=SimpleNamespace(x=0.0, y=0.0),
+                size=SimpleNamespace(width=1920.0, height=1055.0),
+            ),
             safeAreaInsets=lambda: SimpleNamespace(top=0.0),
             auxiliaryTopLeftArea=lambda: SimpleNamespace(
                 origin=SimpleNamespace(x=0.0, y=0.0),
@@ -1005,7 +1013,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertFalse(virtual_device.screen_has_notch(screen))
         self.assertEqual(
             virtual_device.virtual_window_frame_for_screen(screen),
-            ((850.0, 1075.0), (220.0, 5.0)),
+            ((1688.0, 1035.0), (220.0, 16.0)),
         )
 
     def test_virtual_sidepulse_notch_redraws_at_60fps(self) -> None:
