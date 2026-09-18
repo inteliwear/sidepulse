@@ -1665,10 +1665,10 @@ def _tool_response_looks_failed(response: object) -> bool:
             return True
         return False
 
-    if isinstance(response, str):
-        text = response.lower()
-        return "exit code: 1" in text or "traceback" in text
-
+    # A string response carries no status, only output. Sniffing it for words
+    # like "traceback" flags commands that printed one and still succeeded, so
+    # genuine failures are left to the PostToolUseFailure hook and to the
+    # structured fields above.
     return False
 
 

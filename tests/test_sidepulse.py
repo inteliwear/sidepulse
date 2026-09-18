@@ -949,6 +949,46 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertGreater(image.size().width, 38)
         self.assertEqual(image.size().height, 18)
 
+    def test_bash_output_mentioning_traceback_is_not_blocked_error(self) -> None:
+        """Output text carries no exit status, so it must not imply failure.
+
+        A command can print a traceback, or tail a log containing one, and
+        still succeed. Treating that as BLOCKED_ERROR turned the LEDs amber
+        mid-run, which reads as "your turn" when the agent is still working.
+        """
+        from datetime import datetime, timezone
+
+        from sidepulse.collector import mode_for_event
+        from sidepulse.models import AgentMode, HookEvent
+
+        def event(response):
+            return HookEvent(
+                provider="claude",
+                logged_at=datetime.now(timezone.utc),
+                event_name="PostToolUse",
+                raw={"tool_response": response},
+                tool_name="Bash",
+            )
+
+        for response in (
+            "Traceback (most recent call last):\n  File \"x.py\", line 1",
+            "tests ... ok\nexit code: 1 appears in this log line",
+        ):
+            with self.subTest(response=response[:24]):
+                self.assertEqual(mode_for_event(event(response)), AgentMode.WORKING)
+
+        # Structured status is still authoritative.
+        self.assertEqual(
+            mode_for_event(event({"exit_code": 1})), AgentMode.BLOCKED_ERROR
+        )
+        self.assertEqual(
+            mode_for_event(event({"success": False})), AgentMode.BLOCKED_ERROR
+        )
+        self.assertEqual(
+            mode_for_event(event({"interrupted": True})), AgentMode.BLOCKED_ERROR
+        )
+        self.assertEqual(mode_for_event(event({"exit_code": 0})), AgentMode.WORKING)
+
     def test_virtual_sidepulse_notch_frame_covers_notch_plus_led_band(self) -> None:
         try:
             from sidepulse import virtual_device
