@@ -232,6 +232,9 @@ changed after planning. The development CLI exposes those plans with explicit
 `--config`, `--log`, and `--hook` paths and now defaults to all five providers,
 the user's home, the existing state directory convention, and a sibling Rust
 hook executable. It accepts a positional provider name like the Python CLI.
+It also accepts Python's per-provider `--codex-log`, `--claude-log`,
+`--grok-log`, `--cursor-log`, and `--junie-log` overrides, including `~` paths,
+for single-provider and batch installation.
 Temporary-home process tests cover dry run, apply, uninstall, default paths,
 and missing argument values. No production hook config has been changed.
 An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route

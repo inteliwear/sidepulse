@@ -194,6 +194,45 @@ fn defaults_install_all_providers_into_isolated_home_and_xdg_state() {
 }
 
 #[test]
+fn legacy_per_provider_log_flags_override_batch_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"));
+    command
+        .args([
+            "agent-monitor",
+            "install",
+            "all",
+            "--dry-run",
+            "--json",
+            "--home",
+        ])
+        .arg(home);
+    for provider in ["codex", "claude", "grok", "cursor", "junie"] {
+        command
+            .arg(format!("--{provider}-log"))
+            .arg(format!("~/custom logs/{provider}.jsonl"));
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for plan in value["providers"].as_array().unwrap() {
+        let provider = plan["provider"].as_str().unwrap();
+        assert_eq!(
+            plan["log_path"],
+            home.join(format!("custom logs/{provider}.jsonl"))
+                .to_string_lossy()
+                .as_ref()
+        );
+    }
+    assert!(!home.join(".codex/config.toml").exists());
+}
+
+#[test]
 fn positional_provider_uses_default_paths_and_missing_values_fail() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path();
