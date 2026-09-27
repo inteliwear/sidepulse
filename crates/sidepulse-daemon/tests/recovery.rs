@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -434,5 +436,165 @@ fn service_ingests_remote_relay_event_through_ipc() {
         snapshot(endpoint).unwrap().statuses[0].mode,
         state.statuses[0].mode
     );
+    drop(server);
+}
+
+#[test]
+fn opt_in_relay_publishes_local_hook_to_configured_bridge() {
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let config_path = directory.path().join("relay.json");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    let config = sidepulse_relay::RelayConfig::default_for_host("Desktop")
+        .with_outbound_channel(&"a".repeat(22), &server_url)
+        .unwrap();
+    sidepulse_relay::save_config(&config_path, &config).unwrap();
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--relay-config")
+            .arg(&config_path)
+            .env("HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 13,
+        kind: RequestKind::IngestHook {
+            provider: "claude".into(),
+            line: serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "local-session",
+                "logged_at": chrono::Utc::now().to_rfc3339(),
+            }),
+        },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    assert!(matches!(reply.payload, ServerPayload::Ack));
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "relay was not published");
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("relay listener failed: {error}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+    assert!(request_line.starts_with("POST /api/leds/"));
+    let mut body_length = 0;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" {
+            break;
+        }
+        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            body_length = value.trim().parse::<usize>().unwrap();
+        }
+    }
+    let mut body = vec![0; body_length];
+    reader.read_exact(&mut body).unwrap();
+    reader
+        .get_mut()
+        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        .unwrap();
+    let message: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(message["provider"], "claude");
+    assert_eq!(message["line"]["session_id"], "local-session");
+    drop(server);
+}
+
+#[test]
+fn opt_in_relay_receives_remote_event_from_bridge() {
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let config_path = directory.path().join("relay.json");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut config = sidepulse_relay::RelayConfig::default_for_host("Desktop")
+        .with_receiver_channel()
+        .unwrap();
+    config.server = format!("http://{}", listener.local_addr().unwrap());
+    sidepulse_relay::save_config(&config_path, &config).unwrap();
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--relay-config")
+            .arg(&config_path)
+            .env("HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "relay was not connected");
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("relay listener failed: {error}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+    assert!(request_line.starts_with("GET /api/leds/"));
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let message = serde_json::json!({
+        "v": 1, "type": "agent_event", "event_id": "remote-inbound",
+        "source": {"name": "Laptop"}, "provider": "claude",
+        "line": {"hook_event_name": "PreToolUse", "session_id": "remote-inbound", "logged_at": chrono::Utc::now().to_rfc3339()}
+    });
+    let body = format!("data: {message}\n\n");
+    reader.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).unwrap();
+    let endpoint = endpoint.to_str().unwrap();
+    loop {
+        if snapshot(endpoint).is_some_and(|state| {
+            state
+                .statuses
+                .iter()
+                .any(|status| status.agent_id == "claude:agent:relay:Laptop:remote-inbound")
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remote relay event did not reach the service"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
     drop(server);
 }

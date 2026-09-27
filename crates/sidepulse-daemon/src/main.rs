@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
         );
         return ExitCode::from(2);
     };
@@ -14,13 +14,14 @@ fn main() -> ExitCode {
     let mut auto_device = false;
     let mut state = None;
     let mut settings = None;
+    let mut relay_config = None;
     let mut brightness = None;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
                     );
                     return ExitCode::from(2);
                 };
@@ -63,6 +64,13 @@ fn main() -> ExitCode {
                 };
                 settings = Some(PathBuf::from(path));
             }
+            "--relay-config" => {
+                let Some(path) = args.next() else {
+                    eprintln!("sidepulse-next-service: --relay-config requires a path");
+                    return ExitCode::from(2);
+                };
+                relay_config = Some(PathBuf::from(path));
+            }
             "--brightness" => {
                 let Some(value) = args.next().and_then(|value| value.parse::<u8>().ok()) else {
                     eprintln!("sidepulse-next-service: brightness must be 0-255");
@@ -72,7 +80,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
                 );
                 return ExitCode::from(2);
             }
@@ -91,6 +99,7 @@ fn main() -> ExitCode {
         state.as_deref(),
         settings.as_deref(),
         auto_device,
+        relay_config.as_deref(),
     ) {
         eprintln!("sidepulse-next-service: {error}");
         return ExitCode::FAILURE;

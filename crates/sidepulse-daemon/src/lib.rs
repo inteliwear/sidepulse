@@ -22,6 +22,7 @@ use sidepulse_device::battery_source::read_battery_state;
 use sidepulse_device::led_count_for_target;
 use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
 use sidepulse_ipc::{read_message, write_message};
+use sidepulse_relay::{load_config, publish_event, receive_once};
 use sidepulse_sources::{SourceSpec, SourceTailer, load_recent_events, sources_from_environment};
 use tempfile::NamedTempFile;
 
@@ -34,6 +35,9 @@ pub struct RuntimeSettings {
     pub display_mode: Option<String>,
 }
 
+type RelayPublication = (String, serde_json::Value);
+type RelayPublisher = mpsc::SyncSender<RelayPublication>;
+
 #[derive(Clone, Default)]
 pub struct Service {
     monitor: Arc<Mutex<Monitor>>,
@@ -42,6 +46,7 @@ pub struct Service {
     latest_state_path: Arc<Option<PathBuf>>,
     settings: Arc<Mutex<Option<SettingsStore>>>,
     seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
+    relay_publisher: Arc<Mutex<Option<RelayPublisher>>>,
 }
 
 #[derive(Default)]
@@ -223,6 +228,21 @@ impl Service {
             io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
         })?;
         store.set_display_for_device(output.target(), mode, output.brightness())
+    }
+
+    pub fn ingest_relay_message(&self, text: &str) -> io::Result<bool> {
+        let Some(event) = parse_relay_message(text) else {
+            return Ok(false);
+        };
+        let Some(record) = parse_log_line(&event.provider, &event.line.to_string()) else {
+            return Ok(false);
+        };
+        let mut seen = self.seen_relay_events.lock().map_err(poisoned)?;
+        if !seen.contains(&event.event_id) {
+            self.ingest_record(&record)?;
+            seen.insert(event.event_id);
+        }
+        Ok(true)
     }
 
     /// Only the service calls this; tray and CLI clients receive read-only snapshots.
@@ -502,11 +522,15 @@ impl Service {
                 )
             }
             RequestKind::IngestHook { provider, line } => {
+                let publish_line = line.clone();
                 let record = serde_json::to_string(&line)
                     .ok()
                     .and_then(|line| parse_log_line(&provider, &line));
                 if let Some(record) = record {
                     self.ingest_record(&record)?;
+                    if let Some(sender) = self.relay_publisher.lock().map_err(poisoned)?.as_ref() {
+                        let _ = sender.try_send((provider, publish_line));
+                    }
                     write_message(
                         &mut stream,
                         &ServerMessage {
@@ -530,21 +554,8 @@ impl Service {
                 }
             }
             RequestKind::IngestRelay { message } => {
-                let event = parse_relay_message(&message.to_string());
-                let payload = if let Some(event) = event {
-                    if let Some(record) = parse_log_line(&event.provider, &event.line.to_string()) {
-                        let mut seen = self.seen_relay_events.lock().map_err(poisoned)?;
-                        if !seen.contains(&event.event_id) {
-                            self.ingest_record(&record)?;
-                            seen.insert(event.event_id);
-                        }
-                        ServerPayload::Ack
-                    } else {
-                        ServerPayload::Error {
-                            code: "invalid_relay_event".into(),
-                            message: "the relay event could not be parsed".into(),
-                        }
-                    }
+                let payload = if self.ingest_relay_message(&message.to_string())? {
+                    ServerPayload::Ack
                 } else {
                     ServerPayload::Error {
                         code: "invalid_relay_event".into(),
@@ -638,6 +649,7 @@ pub fn run_with_logs_and_device(
         None,
         None,
         false,
+        None,
     )
 }
 
@@ -648,6 +660,7 @@ pub fn run_with_options(
     latest_state_path: Option<&Path>,
     settings_path: Option<&Path>,
     auto_device: bool,
+    relay_config_path: Option<&Path>,
 ) -> io::Result<()> {
     let listener = sidepulse_ipc::bind(endpoint)?;
     let service = latest_state_path.map_or_else(Service::new, |path| {
@@ -655,6 +668,47 @@ pub fn run_with_options(
     });
     if let Some(path) = settings_path {
         service.configure_settings(path)?;
+    }
+    if let Some(path) = relay_config_path {
+        let path = path.to_path_buf();
+        let host = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "Remote computer".into());
+        let (sender, receiver) = mpsc::sync_channel(128);
+        *service.relay_publisher.lock().map_err(poisoned)? = Some(sender);
+        let publish_path = path.clone();
+        let publish_host = host.clone();
+        std::thread::spawn(move || {
+            for (provider, line) in receiver {
+                match load_config(&publish_path, &publish_host) {
+                    Ok(config) if !config.outbound_channel.is_empty() => {
+                        if let Err(error) = publish_event(&config, &provider, &line) {
+                            eprintln!("sidepulse-next-service: relay send failed: {error}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("sidepulse-next-service: relay config: {error}"),
+                }
+            }
+        });
+        let receiver_service = service.clone();
+        std::thread::spawn(move || {
+            loop {
+                match load_config(&path, &host) {
+                    Ok(config) if !config.receiver_channel.is_empty() => {
+                        if let Err(error) = receive_once(&config, |message| {
+                            receiver_service.ingest_relay_message(&message)?;
+                            Ok(())
+                        }) {
+                            eprintln!("sidepulse-next-service: relay receive failed: {error}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("sidepulse-next-service: relay config: {error}"),
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
     }
     service.load_latest_state()?;
     let mut source_overrides = logs.to_vec();

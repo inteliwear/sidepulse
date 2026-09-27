@@ -41,6 +41,7 @@ fn main() -> ExitCode {
         Some("status") => sidepulse_cli::run_status(args),
         Some("watch" | "live") => sidepulse_cli::run_watch(args),
         Some("doctor") => sidepulse_cli::run_doctor(args),
+        Some("link") => sidepulse_cli::run_link(args),
         Some("service-status") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next service-status ENDPOINT");
@@ -162,7 +163,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

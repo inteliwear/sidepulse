@@ -18,6 +18,7 @@ sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-sources = { path = "../sidepulse-sources" }
 sidepulse-hook-config = { path = "../sidepulse-hook-config" }
+sidepulse-relay = { path = "../sidepulse-relay" }
 serde_json.workspace = true
 chrono.workspace = true
 

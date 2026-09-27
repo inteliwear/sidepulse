@@ -169,9 +169,15 @@ from the legacy settings `animations` directory, then validates and writes the
 selected program. Editing animation profiles in the native UI remains open.
 The core now validates and annotates legacy relay `agent_event` envelopes.
 The service accepts these events through its local IPC and ignores repeated
-event IDs using a bounded cache. This path has an end-to-end service test;
-relay configuration, outbound publishing, and inbound network streaming remain
-to be ported.
+event IDs using a bounded cache. The separate `sidepulse-relay` crate owns
+legacy `relay.json` settings, receiver-code generation, HTTP publishing, and
+bounded SSE streaming. `sidepulse-next link` can create a receiving code or
+save an outbound code. A development service started with explicit
+`--relay-config PATH` sends local hook events and receives remote events;
+loopback HTTP tests cover both paths. Relay remains opt-in so the development
+service cannot connect through the installed Python setup unexpectedly. A
+production service launch and UI control for relay configuration still need
+implementation.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
@@ -193,7 +199,7 @@ Python dashboard and still needs a final CLI output comparison.
 Codex hook trust refresh and legacy Grok backup relocation still need implementation
 before the native installer can own cutover.
 
-Further origin parity, relay network delivery, production provider hook installation,
+Further origin parity, production relay launch, production provider hook installation,
 settings-controlled transcript selection, production device discovery,
 physical device selection, virtual device output, full status bar settings and
 controls, native helpers, full CLI parity, and release packaging still need
