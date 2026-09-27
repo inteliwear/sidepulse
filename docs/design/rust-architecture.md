@@ -84,8 +84,10 @@ now renders the mode, active agents, and a quit action. It polls and reconnects
 to the service; its UI event loop is native on macOS and Windows and uses the
 KSNI tray backend on Linux. The development tray compiled and stayed running
 during a macOS smoke test with a temporary Rust service and hook event.
-Rust formatting, linting, and workspace tests pass in CI on macOS, Linux, and
-Windows. Visual behavior on macOS and runtime UI and device behavior on Linux
+Rust formatting, linting, and workspace tests run in CI on macOS, Linux, and
+Windows; the workflow also builds and retains preview binaries for each OS.
+These are development artifacts, not signed release packages. Visual behavior
+on macOS and runtime UI and device behavior on Linux
 and Windows still need validation. These executables are not installed by the
 existing setup flow.
 
