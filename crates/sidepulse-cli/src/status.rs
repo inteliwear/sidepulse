@@ -14,6 +14,7 @@ struct Options {
     policy: MonitoringPolicy,
     max_lines: usize,
     logs: HashMap<&'static str, PathBuf>,
+    transcripts: HashMap<&'static str, PathBuf>,
 }
 
 impl Default for Options {
@@ -24,6 +25,7 @@ impl Default for Options {
             policy: MonitoringPolicy::default(),
             max_lines: 5000,
             logs: HashMap::new(),
+            transcripts: HashMap::new(),
         }
     }
 }
@@ -36,11 +38,17 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let overrides = options
+    let mut overrides = options
         .logs
         .into_iter()
         .map(|(provider, path)| (provider.to_owned(), path))
         .collect::<Vec<_>>();
+    overrides.extend(
+        options
+            .transcripts
+            .into_iter()
+            .map(|(provider, path)| (format!("{provider}-transcripts"), path)),
+    );
     let sources = sources_from_environment(&overrides);
     let events = match load_recent_events(&sources, options.max_lines) {
         Ok(events) => events,
@@ -94,6 +102,18 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     .map_err(|_| format!("invalid --max-lines: {value}"))?;
             }
             _ => {
+                if flag == "--codex-transcripts" || flag == "--claude-transcripts" {
+                    let provider = if flag == "--codex-transcripts" {
+                        "codex"
+                    } else {
+                        "claude"
+                    };
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} needs a directory"))?;
+                    options.transcripts.insert(provider, expand_home(&value));
+                    continue;
+                }
                 let provider = PROVIDERS
                     .iter()
                     .copied()

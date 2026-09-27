@@ -89,3 +89,66 @@ fn running_service_recovers_rows_written_without_ipc() {
     drop(server);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn running_service_recovers_new_codex_transcript() {
+    let directory = Path::new("/tmp").join(format!(
+        "sidepulse-transcript-recover-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let transcripts = directory.join("sessions");
+    fs::create_dir_all(&transcripts).unwrap();
+    let endpoint = directory.join("s.sock");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .args(["--transcript", "codex"])
+            .arg(&transcripts)
+            .env("HOME", &directory)
+            .env("XDG_STATE_HOME", &directory)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let transcript = transcripts.join("rollout-12345678-1234-1234-1234-123456789abc.jsonl");
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "type": "response_item",
+                "payload": {"type": "function_call", "name": "Shell", "call_id": "x"}
+            })
+        ),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if snapshot(endpoint).is_some_and(|state| {
+            state.aggregate.active_count == 1
+                && state.statuses[0].agent_id
+                    == "codex:session:12345678-1234-1234-1234-123456789abc"
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "service did not recover transcript"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+}

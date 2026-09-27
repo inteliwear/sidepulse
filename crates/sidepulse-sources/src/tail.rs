@@ -4,7 +4,10 @@ use std::path::Path;
 
 use sidepulse_core::HookEvent;
 
-use crate::{SourceSpec, parse_log_line};
+use crate::{
+    SourceSpec, parse_log_line,
+    transcript::{TranscriptCursor, is_transcript_provider},
+};
 
 const MAX_PENDING_BYTES: usize = 1024 * 1024;
 
@@ -95,6 +98,7 @@ impl Cursor {
 /// Rows appended during replay are safe to process twice; none are missed.
 pub struct SourceTailer {
     cursors: Vec<Cursor>,
+    transcripts: Vec<TranscriptCursor>,
 }
 
 impl SourceTailer {
@@ -102,8 +106,15 @@ impl SourceTailer {
         Ok(Self {
             cursors: sources
                 .iter()
+                .filter(|source| !is_transcript_provider(&source.provider))
                 .cloned()
                 .map(Cursor::new)
+                .collect::<io::Result<Vec<_>>>()?,
+            transcripts: sources
+                .iter()
+                .filter(|source| is_transcript_provider(&source.provider))
+                .cloned()
+                .map(TranscriptCursor::new)
                 .collect::<io::Result<Vec<_>>>()?,
         })
     }
@@ -111,6 +122,9 @@ impl SourceTailer {
     pub fn poll(&mut self) -> io::Result<Vec<HookEvent>> {
         let mut events = Vec::new();
         for cursor in &mut self.cursors {
+            cursor.poll(&mut events)?;
+        }
+        for cursor in &mut self.transcripts {
             cursor.poll(&mut events)?;
         }
         events.sort_by_key(|event| event.logged_at);

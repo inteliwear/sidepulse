@@ -2,6 +2,7 @@
 
 mod discovery;
 mod tail;
+mod transcript;
 
 use std::collections::VecDeque;
 use std::env;
@@ -13,6 +14,7 @@ use sidepulse_core::{HookEvent, parse_log_line};
 
 pub use discovery::discover_log_path;
 pub use tail::SourceTailer;
+pub use transcript::{is_transcript_provider, load_transcript_events};
 
 pub const PROVIDERS: [&str; 5] = ["codex", "claude", "grok", "cursor", "junie"];
 
@@ -81,6 +83,10 @@ fn expand_home(path: &Path, home: &Path) -> PathBuf {
 pub fn load_recent_events(sources: &[SourceSpec], max_lines: usize) -> io::Result<Vec<HookEvent>> {
     let mut events = Vec::new();
     for source in sources {
+        if is_transcript_provider(&source.provider) {
+            events.extend(load_transcript_events(source)?);
+            continue;
+        }
         let file = match File::open(&source.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,

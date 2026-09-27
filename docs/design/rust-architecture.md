@@ -106,8 +106,13 @@ log paths in the five provider configuration files, then falls back to the
 default state directory. The `sidepulse-sources` crate shares source selection,
 bounded replay, and appended-row recovery between CLI and service. The service
 replays those sources at startup and tails new complete rows so events written
-while its socket is unavailable can still reach the monitor. Transcript
-recovery remains to be ported.
+while its socket is unavailable can still reach the monitor. Optional Codex
+and Claude transcript sources can now be supplied to one-shot status with
+`--codex-transcripts DIR` or `--claude-transcripts DIR`, and to the service
+with `--transcript codex|claude DIR`. They replay recent files and detect later
+file changes; they remain opt-in as in the Python defaults. The Rust reader
+needs comparison against a larger set of captured transcript cases and a
+more efficient bounded tail read for large files.
 
 The development service can load and atomically update the legacy
 `latest.json` status schema when launched with `--state PATH`. State output is
@@ -131,7 +136,7 @@ Codex hook trust refresh and legacy Grok file cleanup still need implementation
 before the native installer can own cutover.
 
 General origin detection from process ancestry, Windows Junie process correlation,
-relay delivery, provider hook installation, transcript discovery, automatic
+relay delivery, production provider hook installation, settings-controlled transcript selection, automatic
 physical device selection, virtual device output, full status bar settings and
 controls, native helpers, full CLI parity, and release packaging still need
 implementation before cutover. The Python application
@@ -141,7 +146,7 @@ remains authoritative for users until the delivery gates above pass.
 
 1. Implement and test native hook installation and removal for all five
    providers, preserving unrelated config and backing up changed files.
-2. Finish source parity: transcript recovery, process ancestry origin,
+2. Finish source parity: transcript edge cases, process ancestry origin,
    Junie correlation, and captured Python-to-Rust transition comparisons.
 3. Port settings, relay, link, battery and sleep policy, custom animations,
    automatic device selection, and virtual device output into service modules.

@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--device PATH] [--brightness 0-255] [--state PATH]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH]"
         );
         return ExitCode::from(2);
     };
@@ -18,11 +18,26 @@ fn main() -> ExitCode {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--device PATH] [--brightness 0-255] [--state PATH]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH]"
                     );
                     return ExitCode::from(2);
                 };
                 logs.push((provider, PathBuf::from(path)));
+            }
+            "--transcript" => {
+                let (Some(provider), Some(path)) = (args.next(), args.next()) else {
+                    eprintln!(
+                        "sidepulse-next-service: --transcript needs a provider and directory"
+                    );
+                    return ExitCode::from(2);
+                };
+                if provider != "codex" && provider != "claude" {
+                    eprintln!(
+                        "sidepulse-next-service: transcript provider must be codex or claude"
+                    );
+                    return ExitCode::from(2);
+                }
+                logs.push((format!("{provider}-transcripts"), PathBuf::from(path)));
             }
             "--device" => {
                 let Some(path) = args.next() else {
@@ -47,7 +62,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--device PATH] [--brightness 0-255] [--state PATH]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH]"
                 );
                 return ExitCode::from(2);
             }

@@ -149,3 +149,35 @@ fn finds_existing_log_paths_from_provider_configs() {
     assert_eq!(value["stale_statuses"].as_array().unwrap().len(), 1);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn status_can_include_explicit_transcript_source() {
+    let dir = scratch_dir();
+    let transcripts = dir.join("sessions");
+    fs::create_dir_all(&transcripts).unwrap();
+    let path = transcripts.join("rollout-12345678-1234-1234-1234-123456789abc.jsonl");
+    fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "type": "response_item",
+                "payload": {"type": "function_call", "name": "Shell"}
+            })
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"))
+        .args(["status", "--json", "--codex-transcripts", transcripts.to_str().unwrap()])
+        .env("HOME", &dir)
+        .env("XDG_STATE_HOME", &dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["aggregate"]["mode"], "tool_running");
+    assert_eq!(value["statuses"][0]["agent_id"], "codex:session:12345678-1234-1234-1234-123456789abc");
+    assert_eq!(value["sources"].as_array().unwrap().len(), 6);
+    fs::remove_dir_all(dir).unwrap();
+}
