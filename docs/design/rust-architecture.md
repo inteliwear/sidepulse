@@ -199,12 +199,15 @@ The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
 preserving unrelated hooks, idempotence, backups, and rejecting a config that
 changed after planning. The development CLI exposes those plans with explicit
-`--config`, `--log`, and `--hook` paths; a temporary-home process test covers
-dry run, apply, and uninstall. No production hook config has been changed.
+`--config`, `--log`, and `--hook` paths and now defaults to all five providers,
+the user's home, the existing state directory convention, and a sibling Rust
+hook executable. It accepts a positional provider name like the Python CLI.
+Temporary-home process tests cover dry run, apply, uninstall, default paths,
+and missing argument values. No production hook config has been changed.
 An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route
 now plans all five providers first and restores earlier config files if a
 later apply fails. The test uses a temporary home; live installation still
-awaits trust refresh, full Grok backup-file cleanup, and upgrade verification.
+awaits Codex trust review, full Grok backup-file cleanup, and upgrade verification.
 The batch route removes old SidePulse commands from the two legacy Grok hook
 JSON files while preserving unrelated commands in those files. It now also
 relocates SidePulse backup JSON files out of Grok's live hooks directory into
@@ -229,8 +232,8 @@ remains authoritative for users until the delivery gates above pass.
 
 ## Remaining work, in delivery order
 
-1. Implement and test native hook installation and removal for all five
-   providers, preserving unrelated config and backing up changed files.
+1. Verify native hook installation and removal against captured real configs
+   for all five providers, preserving unrelated config and backups.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
 3. Port the remaining settings controls, relay, link, battery and sleep policy,

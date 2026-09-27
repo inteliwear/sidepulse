@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::json;
@@ -23,40 +24,81 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
     let mut args = args;
     while let Some(flag) = args.next() {
         match flag.as_str() {
-            "--provider" => provider = args.next(),
-            "--config" => config = args.next().map(PathBuf::from),
-            "--log" => log = args.next().map(PathBuf::from),
-            "--hook" => hook = args.next().map(PathBuf::from),
-            "--home" => home = args.next().map(PathBuf::from),
-            "--log-dir" => log_dir = args.next().map(PathBuf::from),
+            "--provider" | "--config" | "--log" | "--hook" | "--home" | "--log-dir" => {
+                let Some(value) = args.next().filter(|value| !value.starts_with('-')) else {
+                    eprintln!("sidepulse-next: {flag} needs a value");
+                    return ExitCode::from(2);
+                };
+                match flag.as_str() {
+                    "--provider" => provider = Some(value),
+                    "--config" => config = Some(PathBuf::from(value)),
+                    "--log" => log = Some(PathBuf::from(value)),
+                    "--hook" => hook = Some(PathBuf::from(value)),
+                    "--home" => home = Some(PathBuf::from(value)),
+                    "--log-dir" => log_dir = Some(PathBuf::from(value)),
+                    _ => unreachable!(),
+                }
+            }
             "--dry-run" => dry_run = true,
             "--json" => json_output = true,
             _ => {
+                if !flag.starts_with('-') && provider.is_none() {
+                    provider = Some(flag);
+                    continue;
+                }
                 eprintln!("sidepulse-next: unknown hook config argument: {flag}");
                 return ExitCode::from(2);
             }
         }
     }
-    if provider.as_deref() == Some("all") {
-        let (Some(home), Some(log_dir), Some(hook)) = (home, log_dir, hook) else {
-            eprintln!(
-                "usage: sidepulse-next agent-monitor <install | uninstall> --provider all --home DIR --log-dir DIR --hook EXECUTABLE [--dry-run] [--json]"
-            );
+    let provider = provider.unwrap_or_else(|| "all".to_owned());
+    if !["all", "codex", "claude", "grok", "cursor", "junie"].contains(&provider.as_str()) {
+        eprintln!("sidepulse-next: unsupported provider: {provider}");
+        return ExitCode::from(2);
+    }
+    let explicit_home = home.is_some();
+    let home = match home.or_else(|| {
+        env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+    }) {
+        Some(home) => home,
+        None => {
+            eprintln!("sidepulse-next: cannot determine home directory; use --home DIR");
             return ExitCode::from(2);
-        };
+        }
+    };
+    let log_dir = log_dir.unwrap_or_else(|| default_log_dir(&home, !explicit_home));
+    let hook = match hook {
+        Some(hook) => hook,
+        None => match env::current_exe() {
+            Ok(exe) => {
+                let hook =
+                    exe.with_file_name(format!("sidepulse-next-hook{}", env::consts::EXE_SUFFIX));
+                if action == Action::Install && !hook.is_file() {
+                    eprintln!(
+                        "sidepulse-next: hook executable missing: {}",
+                        hook.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+                hook
+            }
+            Err(error) => {
+                eprintln!("sidepulse-next: cannot find hook executable: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    if provider == "all" {
         if config.is_some() || log.is_some() {
             eprintln!("sidepulse-next: --config and --log apply only to one provider");
             return ExitCode::from(2);
         }
         return run_all_providers(action, &home, &log_dir, &hook, dry_run, json_output);
     }
-    let (Some(provider), Some(config), Some(log), Some(hook)) = (provider, config, log, hook)
-    else {
-        eprintln!(
-            "usage: sidepulse-next agent-monitor <install | uninstall> --provider PROVIDER --config PATH --log PATH --hook EXECUTABLE [--dry-run] [--json]"
-        );
-        return ExitCode::from(2);
-    };
+    let config = config.unwrap_or_else(|| home.join(provider_config_path(&provider)));
+    let log = log.unwrap_or_else(|| log_dir.join(format!("{provider}.jsonl")));
     let plan = if provider == "codex" {
         plan_codex_hooks(&config, &log, &hook, action)
     } else {
@@ -122,6 +164,35 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
     ExitCode::SUCCESS
 }
 
+fn default_log_dir(home: &Path, use_xdg: bool) -> PathBuf {
+    let state_root = use_xdg
+        .then(|| env::var_os("XDG_STATE_HOME"))
+        .flatten()
+        .map(PathBuf::from)
+        .map(|path| {
+            if path == Path::new("~") {
+                home.to_path_buf()
+            } else if let Ok(suffix) = path.strip_prefix("~/") {
+                home.join(suffix)
+            } else {
+                path
+            }
+        })
+        .unwrap_or_else(|| home.join(".local/state"));
+    state_root.join("sidepulse/agent-monitor")
+}
+
+fn provider_config_path(provider: &str) -> &'static str {
+    match provider {
+        "codex" => ".codex/config.toml",
+        "claude" => ".claude/settings.json",
+        "grok" => ".grok/hooks/sidepulse.json",
+        "cursor" => ".cursor/hooks.json",
+        "junie" => ".junie/config.json",
+        _ => unreachable!("provider validated before use"),
+    }
+}
+
 fn run_all_providers(
     action: Action,
     home: &std::path::Path,
@@ -130,17 +201,11 @@ fn run_all_providers(
     dry_run: bool,
     json_output: bool,
 ) -> ExitCode {
-    let providers = [
-        ("codex", ".codex/config.toml"),
-        ("claude", ".claude/settings.json"),
-        ("grok", ".grok/hooks/sidepulse.json"),
-        ("cursor", ".cursor/hooks.json"),
-        ("junie", ".junie/config.json"),
-    ];
+    let providers = ["codex", "claude", "grok", "cursor", "junie"];
     let plans: Result<Vec<HookPlan>, _> = providers
         .iter()
-        .map(|(provider, relative)| {
-            let config = home.join(relative);
+        .map(|provider| {
+            let config = home.join(provider_config_path(provider));
             let log = log_dir.join(format!("{provider}.jsonl"));
             if *provider == "codex" {
                 plan_codex_hooks(&config, &log, hook, action)
