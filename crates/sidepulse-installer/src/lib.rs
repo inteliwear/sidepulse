@@ -90,20 +90,7 @@ impl StagePlan {
             })
             .collect::<io::Result<Vec<_>>>()?;
         let endpoint = endpoint_for_stage(&stage_dir, platform);
-        let service_command = vec![
-            binaries[2].to_string_lossy().into_owned(),
-            endpoint.clone(),
-            "--state".into(),
-            stage_dir
-                .join("state/latest.json")
-                .to_string_lossy()
-                .into_owned(),
-            "--settings".into(),
-            stage_dir
-                .join("settings.json")
-                .to_string_lossy()
-                .into_owned(),
-        ];
+        let service_command = service_command_for_stage(&stage_dir, &binaries[2], &endpoint);
         let tray_command = vec![binaries[3].to_string_lossy().into_owned(), endpoint.clone()];
         let launch_files = match platform {
             Platform::Macos => vec![
@@ -208,20 +195,8 @@ pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
         })
         .collect::<Vec<_>>();
     let expected_endpoint = endpoint_for_stage(&stage_dir, platform);
-    let expected_command = vec![
-        expected_binaries[2].to_string_lossy().into_owned(),
-        expected_endpoint.clone(),
-        "--state".into(),
-        stage_dir
-            .join("state/latest.json")
-            .to_string_lossy()
-            .into_owned(),
-        "--settings".into(),
-        stage_dir
-            .join("settings.json")
-            .to_string_lossy()
-            .into_owned(),
-    ];
+    let expected_command =
+        service_command_for_stage(&stage_dir, &expected_binaries[2], &expected_endpoint);
     if manifest.stage_dir != stage_dir
         || manifest.platform != platform
         || manifest.binaries != expected_binaries
@@ -357,6 +332,31 @@ fn endpoint_for_stage(stage: &Path, platform: Platform) -> String {
     }
 }
 
+fn service_command_for_stage(stage: &Path, executable: &Path, endpoint: &str) -> Vec<String> {
+    let mut command = vec![
+        executable.to_string_lossy().into_owned(),
+        endpoint.to_owned(),
+        "--state".into(),
+        stage
+            .join("state/latest.json")
+            .to_string_lossy()
+            .into_owned(),
+        "--settings".into(),
+        stage.join("settings.json").to_string_lossy().into_owned(),
+    ];
+    for provider in ["codex", "claude", "grok", "cursor", "junie"] {
+        command.push("--log".into());
+        command.push(provider.into());
+        command.push(
+            stage
+                .join(format!("state/{provider}.jsonl"))
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    command
+}
+
 fn render_launch_files(manifest: &StageManifest) -> [String; 2] {
     match manifest.platform {
         Platform::Macos => [
@@ -469,6 +469,14 @@ mod tests {
             let manifest = plan.stage().unwrap();
             assert_eq!(manifest.binaries.len(), 5);
             assert_eq!(manifest.launch_files.len(), 2);
+            assert_eq!(manifest.service_command.len(), 21);
+            assert!(manifest.service_command.contains(&"cursor".to_owned()));
+            assert!(
+                manifest
+                    .service_command
+                    .iter()
+                    .all(|part| !part.contains("--auto-device"))
+            );
             assert!(destination.join("state").is_dir());
             assert_eq!(
                 fs::read(destination.join("settings.json")).unwrap(),

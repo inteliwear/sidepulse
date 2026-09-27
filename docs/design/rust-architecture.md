@@ -103,7 +103,9 @@ and platform launch definitions. macOS gets LaunchAgent plists, Linux gets
 systemd user units, and Windows gets PowerShell launch scripts. The
 `sidepulse-next-stage` command supports a dry run and refuses to overwrite an
 existing preview. It does not register startup jobs, install hooks, use the
-existing settings file, or enable physical device output. This is a staging
+existing settings file, read provider logs from the user's normal home, or
+enable physical device output. All five preview log paths remain inside the
+stage directory. This is a staging
 step for native installation and rollback testing, not a production cutover.
 Its `--smoke-stage` check starts and stops the staged service and verifies
 snapshot/settings IPC with no selected device.
