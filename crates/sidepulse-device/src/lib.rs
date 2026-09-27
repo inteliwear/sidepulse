@@ -279,8 +279,12 @@ impl DeviceOutput {
 
     pub fn sync(&mut self, mode: AgentMode) -> io::Result<bool> {
         let program = program_for_mode(mode, led_count_for_target(&self.target), self.brightness);
-        validate_led_text(&program)?;
-        if self.last_program.as_deref() == Some(&program)
+        self.sync_program(&program)
+    }
+
+    pub fn sync_program(&mut self, program: &str) -> io::Result<bool> {
+        validate_led_text(program)?;
+        if self.last_program.as_deref() == Some(program)
             && fs::read_to_string(&self.target).is_ok_and(|existing| existing == program)
         {
             return Ok(false);
@@ -301,7 +305,7 @@ impl DeviceOutput {
         if is_new {
             let _ = File::open(parent).and_then(|directory| directory.sync_all());
         }
-        self.last_program = Some(program);
+        self.last_program = Some(program.to_owned());
         Ok(true)
     }
 }

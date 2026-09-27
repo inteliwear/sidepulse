@@ -51,6 +51,22 @@ impl SettingsStore {
             .unwrap_or(255)
     }
 
+    pub fn display_for_device(&self, path: &Path) -> &str {
+        self.find_device(path)
+            .and_then(|device| device.get("led_display"))
+            .and_then(Value::as_str)
+            .or_else(|| self.document.get("led_display").and_then(Value::as_str))
+            .unwrap_or("agent")
+    }
+
+    pub fn battery_full_charge_watts(&self) -> Option<f64> {
+        self.document
+            .get("battery_monitoring")
+            .and_then(|battery| battery.get("full_charge_watts"))
+            .and_then(Value::as_f64)
+            .filter(|watts| watts.is_finite() && *watts > 0.0)
+    }
+
     pub fn set_brightness_for_device(&mut self, path: &Path, brightness: u8) -> io::Result<()> {
         let mut updated = self.document.clone();
         let devices = updated.entry("devices").or_insert_with(|| json!([]));

@@ -149,9 +149,10 @@ rules. No platform window consumes this model yet; macOS notch rendering and
 Windows/Linux virtual display adapters remain separate UI work.
 The device layer also has the portable battery LED program policy, including
 partial fills and charging pulses. Basic macOS, Linux, and Windows battery
-readers supply charge percentage and power state. Wiring that source into
-service arbitration with agent status and the richer legacy battery diagnostics
-remain pending.
+readers supply charge percentage and power state. When saved per-device settings
+select battery display, the service writes that program instead of the agent
+program, without UI ownership of the device. Power-change previews, custom
+display modes, and richer legacy battery diagnostics remain pending.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover

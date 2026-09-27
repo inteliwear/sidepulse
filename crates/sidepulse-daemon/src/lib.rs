@@ -15,6 +15,9 @@ use sidepulse_core::{
     ClientRequest, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
     ServerMessage, ServerPayload, parse_log_line,
 };
+use sidepulse_device::battery::{BatteryState, program_for_battery};
+use sidepulse_device::battery_source::read_battery_state;
+use sidepulse_device::led_count_for_target;
 use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
 use sidepulse_ipc::{read_message, write_message};
 use sidepulse_sources::{SourceSpec, SourceTailer, load_recent_events, sources_from_environment};
@@ -147,9 +150,55 @@ impl Service {
 
     /// Only the service calls this; tray and CLI clients receive read-only snapshots.
     pub fn sync_device(&self) -> io::Result<Option<bool>> {
+        let battery_display = {
+            let device = self.device.lock().map_err(poisoned)?;
+            let settings = self.settings.lock().map_err(poisoned)?;
+            device.as_ref().is_some_and(|output| {
+                settings
+                    .as_ref()
+                    .is_some_and(|store| store.display_for_device(output.target()) == "battery")
+            })
+        };
+        let battery = if battery_display {
+            read_battery_state()?
+        } else {
+            None
+        };
+        self.sync_device_with_battery(battery)
+    }
+
+    pub fn sync_device_with_battery(
+        &self,
+        battery: Option<BatteryState>,
+    ) -> io::Result<Option<bool>> {
         let mode = self.snapshot()?.aggregate.mode;
         let mut device = self.device.lock().map_err(poisoned)?;
-        device.as_mut().map(|device| device.sync(mode)).transpose()
+        let settings = self.settings.lock().map_err(poisoned)?;
+        let Some(output) = device.as_mut() else {
+            return Ok(None);
+        };
+        let battery_display = settings
+            .as_ref()
+            .is_some_and(|store| store.display_for_device(output.target()) == "battery");
+        if battery_display && battery.is_none() {
+            return Ok(Some(false));
+        }
+        if battery_display && let Some(mut state) = battery {
+            if let Some(full_watts) = settings
+                .as_ref()
+                .and_then(SettingsStore::battery_full_charge_watts)
+            {
+                state.full_charge_watts = full_watts;
+            }
+            let program = program_for_battery(
+                state,
+                led_count_for_target(output.target()),
+                360,
+                output.brightness(),
+            );
+            return output.sync_program(&program).map(Some);
+        }
+        output.sync(mode).map(Some)
     }
 
     /// Rebuild monitor state from the durable provider log after a restart.
@@ -756,5 +805,49 @@ mod tests {
         );
         assert_eq!(service.sync_device().unwrap(), Some(false));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn service_uses_saved_battery_display_without_ui_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let device = directory.path().join("SidePulseDot");
+        std::fs::create_dir(&device).unwrap();
+        let settings = directory.path().join("settings.json");
+        std::fs::write(
+            &settings,
+            serde_json::json!({
+                "led_display": "agent",
+                "battery_monitoring": {"full_charge_watts": 140.0},
+                "devices": [{"path": device, "led_display": "battery", "brightness": 128}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let service = Service::new();
+        service.configure_settings(&settings).unwrap();
+        service.configure_device(&device, 128).unwrap();
+        let battery = BatteryState {
+            percent: 50,
+            is_plugged: true,
+            is_charging: true,
+            adapter_watts: 70.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            service.sync_device_with_battery(Some(battery)).unwrap(),
+            Some(true)
+        );
+        let program = std::fs::read_to_string(device.join("LEDS.LED")).unwrap();
+        assert!(program.starts_with("brightness 128\n"));
+        assert!(program.contains("1:#80FFC8 790ms pulse"));
+        assert_eq!(
+            service.sync_device_with_battery(Some(battery)).unwrap(),
+            Some(false)
+        );
+        assert_eq!(service.sync_device_with_battery(None).unwrap(), Some(false));
+        assert_eq!(
+            std::fs::read_to_string(device.join("LEDS.LED")).unwrap(),
+            program
+        );
     }
 }
