@@ -203,7 +203,9 @@ now plans all five providers first and restores earlier config files if a
 later apply fails. The test uses a temporary home; live installation still
 awaits trust refresh, full Grok backup-file cleanup, and upgrade verification.
 The batch route removes old SidePulse commands from the two legacy Grok hook
-JSON files while preserving unrelated commands in those files.
+JSON files while preserving unrelated commands in those files. It now also
+relocates SidePulse backup JSON files out of Grok's live hooks directory into
+the legacy backup folder. A relocation error rolls back provider config writes.
 The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
 reports of hook events and log paths for all five providers.
 `agent-monitor live` and `watch` now refresh the same Rust monitor view using

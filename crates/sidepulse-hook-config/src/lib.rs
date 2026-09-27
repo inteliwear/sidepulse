@@ -492,6 +492,84 @@ pub fn apply_plans_atomically(plans: &[HookPlan]) -> io::Result<Vec<ApplyResult>
     Ok(results)
 }
 
+/// Apply provider plans, then move Grok hook backups out of Grok's live hook
+/// directory. A failed relocation restores the moved files and config plans.
+pub fn apply_plans_with_grok_backup_relocation(
+    plans: &[HookPlan],
+    grok_hooks_dir: &Path,
+) -> io::Result<Vec<ApplyResult>> {
+    let mut results = apply_plans_atomically(plans)?;
+    let backup_dir = grok_hooks_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("sidepulse-hook-backups");
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let relocation = (|| -> io::Result<()> {
+        let entries = match fs::read_dir(grok_hooks_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let mut sources = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy();
+                    name.starts_with("sidepulse") && name.contains(".json.bak.")
+                }) && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+            })
+            .collect::<Vec<_>>();
+        sources.sort();
+        if sources.is_empty() {
+            return Ok(());
+        }
+        fs::create_dir_all(&backup_dir)?;
+        for (index, source) in sources.iter().enumerate() {
+            let name = source.file_name().unwrap().to_string_lossy();
+            let mut destination = backup_dir.join(name.as_ref());
+            if fs::symlink_metadata(&destination).is_ok() {
+                let stamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(io::Error::other)?
+                    .as_nanos();
+                destination = backup_dir.join(format!("{name}.{stamp}.{index}"));
+            }
+            fs::rename(source, &destination)?;
+            moved.push((source.clone(), destination));
+        }
+        Ok(())
+    })();
+    if let Err(error) = relocation {
+        let mut rollback_errors = Vec::new();
+        for (source, destination) in moved.iter().rev() {
+            if let Err(rollback_error) = fs::rename(destination, source) {
+                rollback_errors.push(format!("{}: {rollback_error}", source.display()));
+            }
+        }
+        for plan in plans.iter().rev() {
+            if let Err(rollback_error) = plan.rollback() {
+                rollback_errors.push(format!("{}: {rollback_error}", plan.provider));
+            }
+        }
+        if rollback_errors.is_empty() {
+            return Err(error);
+        }
+        return Err(io::Error::other(format!(
+            "{error}; rollback failed: {}",
+            rollback_errors.join("; ")
+        )));
+    }
+    for result in &mut results {
+        if let Some(path) = &result.backup_path
+            && let Some((_, destination)) = moved.iter().find(|(source, _)| source == path)
+        {
+            result.backup_path = Some(destination.clone());
+        }
+    }
+    Ok(results)
+}
+
 fn clean_cursor_entries(entries: Vec<Value>) -> Vec<Value> {
     entries
         .into_iter()
@@ -761,6 +839,62 @@ mod tests {
         );
         assert_eq!(fs::read(&first).unwrap(), original);
         assert_eq!(fs::read_to_string(&second).unwrap(), "{\"changed\":true}\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn batch_moves_grok_backups_out_of_live_hooks_directory() {
+        let dir = scratch_dir();
+        let hooks = dir.join(".grok/hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        let backup = hooks.join("sidepulse.json.bak.old");
+        fs::write(&backup, b"old hook config").unwrap();
+        let config = hooks.join("sidepulse.json");
+        fs::write(&config, "{}\n").unwrap();
+        let plan = plan_json_hooks(
+            "grok",
+            &config,
+            &dir.join("grok.jsonl"),
+            &dir.join("hook"),
+            Action::Install,
+        )
+        .unwrap();
+        let results = apply_plans_with_grok_backup_relocation(&[plan], &hooks).unwrap();
+        assert!(results[0].changed);
+        assert!(!backup.exists());
+        assert_eq!(
+            fs::read(dir.join(".grok/sidepulse-hook-backups/sidepulse.json.bak.old")).unwrap(),
+            b"old hook config"
+        );
+        assert!(
+            results[0]
+                .backup_path
+                .as_ref()
+                .unwrap()
+                .starts_with(dir.join(".grok/sidepulse-hook-backups"))
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_grok_backup_move_rolls_back_provider_config() {
+        let dir = scratch_dir();
+        let hooks = dir.join(".grok/hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        fs::write(dir.join(".grok/sidepulse-hook-backups"), b"blocked").unwrap();
+        let config = hooks.join("sidepulse.json");
+        let original = b"{}\n";
+        fs::write(&config, original).unwrap();
+        let plan = plan_json_hooks(
+            "grok",
+            &config,
+            &dir.join("grok.jsonl"),
+            &dir.join("hook"),
+            Action::Install,
+        )
+        .unwrap();
+        assert!(apply_plans_with_grok_backup_relocation(&[plan], &hooks).is_err());
+        assert_eq!(fs::read(&config).unwrap(), original);
         fs::remove_dir_all(dir).unwrap();
     }
 }

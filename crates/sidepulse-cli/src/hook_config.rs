@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use serde_json::json;
 use sidepulse_hook_config::{
-    Action, HookPlan, apply_plans_atomically, plan_codex_hooks, plan_json_hooks,
+    Action, HookPlan, apply_plans_with_grok_backup_relocation, plan_codex_hooks, plan_json_hooks,
 };
 
 pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> ExitCode {
@@ -172,7 +172,7 @@ fn run_all_providers(
     let backups = if dry_run {
         vec![None; plans.len()]
     } else {
-        match apply_plans_atomically(&plans) {
+        match apply_plans_with_grok_backup_relocation(&plans, &home.join(".grok/hooks")) {
             Ok(results) => results
                 .into_iter()
                 .map(|result| result.backup_path)

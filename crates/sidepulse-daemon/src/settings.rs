@@ -6,7 +6,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
-use sidepulse_core::{AgentMode, AwakePolicy};
+use sidepulse_core::AgentMode;
+#[cfg(any(target_os = "macos", test))]
+use sidepulse_core::AwakePolicy;
 use sidepulse_device::animations::builtin_animation;
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
@@ -69,6 +71,7 @@ impl SettingsStore {
             .filter(|watts| watts.is_finite() && *watts > 0.0)
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn sleep_policy(&self) -> AwakePolicy {
         match self
             .document
@@ -81,6 +84,7 @@ impl SettingsStore {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn sleep_battery_threshold(&self) -> f64 {
         self.document
             .get("sleep_prevention")
@@ -96,6 +100,7 @@ impl SettingsStore {
             .clamp(0.0, 100.0)
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn closed_lid_system_override_enabled(&self) -> bool {
         self.document
             .get("closed_lid_system_override_enabled")
