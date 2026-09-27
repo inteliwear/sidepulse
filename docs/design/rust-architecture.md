@@ -154,6 +154,8 @@ preserving unrelated hooks, idempotence, backups, and rejecting a config that
 changed after planning. The development CLI exposes those plans with explicit
 `--config`, `--log`, and `--hook` paths; a temporary-home process test covers
 dry run, apply, and uninstall. No production hook config has been changed.
+The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
+reports of hook events and log paths for all five providers.
 Codex hook trust refresh and legacy Grok file cleanup still need implementation
 before the native installer can own cutover.
 

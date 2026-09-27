@@ -27,16 +27,18 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some("status") => sidepulse_cli::run_status(args),
+            Some("doctor") => sidepulse_cli::run_doctor(args),
             Some("install") => sidepulse_cli::run_hook_config("install", args),
             Some("uninstall") => sidepulse_cli::run_hook_config("uninstall", args),
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next agent-monitor <status | hook-log | install | uninstall>"
+                    "usage: sidepulse-next agent-monitor <doctor | status | hook-log | install | uninstall>"
                 );
                 ExitCode::from(2)
             }
         },
         Some("status") => sidepulse_cli::run_status(args),
+        Some("doctor") => sidepulse_cli::run_doctor(args),
         Some("service-status") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next service-status ENDPOINT");
@@ -133,7 +135,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

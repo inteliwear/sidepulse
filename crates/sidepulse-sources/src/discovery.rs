@@ -35,7 +35,7 @@ pub fn discover_log_path(provider: &str, home: &Path) -> Option<PathBuf> {
         .next()
 }
 
-fn collect_commands<'a>(value: &'a Value, output: &mut Vec<&'a str>) {
+pub(crate) fn collect_commands<'a>(value: &'a Value, output: &mut Vec<&'a str>) {
     match value {
         Value::Object(object) => {
             if let Some(command) = object.get("command").and_then(Value::as_str) {
@@ -56,7 +56,7 @@ fn collect_commands<'a>(value: &'a Value, output: &mut Vec<&'a str>) {
     }
 }
 
-fn paths_from_command(command: &str, home: &Path) -> Vec<PathBuf> {
+pub(crate) fn paths_from_command(command: &str, home: &Path) -> Vec<PathBuf> {
     let parts = split_shell_words(command);
     let mut paths = Vec::new();
     for (index, part) in parts.iter().enumerate() {

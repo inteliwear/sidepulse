@@ -1,6 +1,7 @@
 //! Provider log discovery and bounded replay shared by the CLI and service.
 
 mod discovery;
+mod doctor;
 mod tail;
 mod transcript;
 
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 use sidepulse_core::{HookEvent, parse_log_line};
 
 pub use discovery::discover_log_path;
+pub use doctor::{ProviderConfig, detect_provider_configs};
 pub use tail::SourceTailer;
 pub use transcript::{is_transcript_provider, load_transcript_events};
 
