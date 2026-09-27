@@ -5,10 +5,9 @@ mod doctor;
 mod tail;
 mod transcript;
 
-use std::collections::VecDeque;
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use sidepulse_core::{HookEvent, parse_log_line};
@@ -89,22 +88,13 @@ pub fn load_recent_events(sources: &[SourceSpec], max_lines: usize) -> io::Resul
             events.extend(load_transcript_events(source)?);
             continue;
         }
-        let file = match File::open(&source.path) {
+        let mut file = match File::open(&source.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(with_path(&source.path, error)),
         };
-        let mut lines = VecDeque::with_capacity(max_lines.min(5000));
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(|error| with_path(&source.path, error))?;
-            if max_lines == 0 {
-                continue;
-            }
-            if lines.len() == max_lines {
-                lines.pop_front();
-            }
-            lines.push_back(line);
-        }
+        let lines = read_recent_lines(&mut file, max_lines)
+            .map_err(|error| with_path(&source.path, error))?;
         events.extend(
             lines
                 .into_iter()
@@ -113,6 +103,52 @@ pub fn load_recent_events(sources: &[SourceSpec], max_lines: usize) -> io::Resul
     }
     events.sort_by_key(|event| event.logged_at);
     Ok(events)
+}
+
+/// Seek backward until every selected line has its start, leaving older log
+/// bytes unread. The final partial line is retained for the JSON parser to
+/// reject or accept, matching the previous forward reader.
+fn read_recent_lines(file: &mut File, max_lines: usize) -> io::Result<Vec<String>> {
+    if max_lines == 0 {
+        return Ok(Vec::new());
+    }
+    let mut position = file.seek(SeekFrom::End(0))?;
+    if position == 0 {
+        return Ok(Vec::new());
+    }
+    file.seek(SeekFrom::Start(position - 1))?;
+    let mut last = [0_u8; 1];
+    file.read_exact(&mut last)?;
+    let target_newlines = max_lines.saturating_add(usize::from(last[0] == b'\n'));
+    let mut newline_count = 0;
+    let mut chunks = Vec::new();
+    while position > 0 && newline_count < target_newlines {
+        let size = position.min(64 * 1024) as usize;
+        position -= size as u64;
+        file.seek(SeekFrom::Start(position))?;
+        let mut chunk = vec![0; size];
+        file.read_exact(&mut chunk)?;
+        newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
+        chunks.push(chunk);
+    }
+    let total = chunks.iter().map(Vec::len).sum();
+    let mut bytes = Vec::with_capacity(total);
+    for chunk in chunks.into_iter().rev() {
+        bytes.extend(chunk);
+    }
+    let mut lines = bytes.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+    if bytes.last() == Some(&b'\n') {
+        lines.pop();
+    }
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..]
+        .iter()
+        .map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            String::from_utf8(line.to_vec())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        })
+        .collect()
 }
 
 fn with_path(path: &Path, error: io::Error) -> io::Error {
@@ -137,5 +173,28 @@ mod tests {
             home.join("state/sidepulse/agent-monitor/codex.jsonl")
         );
         assert_eq!(sources[1].path, PathBuf::from("/logs/claude.jsonl"));
+    }
+
+    #[test]
+    fn bounded_tail_reads_complete_recent_lines_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.jsonl");
+        let mut bytes = vec![b'x'; 200_000];
+        bytes.extend_from_slice(b"\nfirst\nsecond\nthird\n");
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            read_recent_lines(&mut File::open(&path).unwrap(), 2).unwrap(),
+            ["second", "third"]
+        );
+        std::fs::write(&path, b"one\ntwo\nthree").unwrap();
+        assert_eq!(
+            read_recent_lines(&mut File::open(&path).unwrap(), 2).unwrap(),
+            ["two", "three"]
+        );
+        assert!(
+            read_recent_lines(&mut File::open(&path).unwrap(), 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

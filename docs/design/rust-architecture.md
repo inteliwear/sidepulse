@@ -111,8 +111,9 @@ and Claude transcript sources can now be supplied to one-shot status with
 `--codex-transcripts DIR` or `--claude-transcripts DIR`, and to the service
 with `--transcript codex|claude DIR`. They replay recent files and detect later
 file changes; they remain opt-in as in the Python defaults. The Rust reader
-needs comparison against a larger set of captured transcript cases and a
-more efficient bounded tail read for large files.
+needs comparison against a larger set of captured transcript cases. Provider
+JSONL replay now seeks backward for the last requested lines instead of
+scanning entire historical logs.
 
 The development service can load and atomically update the legacy
 `latest.json` status schema when launched with `--state PATH`. State output is
