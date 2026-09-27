@@ -12,9 +12,9 @@ use std::time::Duration;
 use chrono::Utc;
 use serde_json::{Value, json};
 use sidepulse_core::{
-    AgentOrigin, ClientRequest, Monitor, PROTOCOL_VERSION, RequestKind, ServerMessage,
+    AgentOrigin, ClientRequest, Monitor, PROTOCOL_VERSION, ProcessInfo, RequestKind, ServerMessage,
     format_hook_payload, infer_hook_provider, normalize_cursor_payload, origin_from_environment,
-    parse_log_line, status_audit_record,
+    origin_from_processes, origin_from_terminal_environment, parse_log_line, status_audit_record,
 };
 
 const MAX_STDIN_BYTES: u64 = 8 * 1024 * 1024;
@@ -163,6 +163,8 @@ fn annotate_origin(provider: &str, line: &mut Value) {
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .collect::<HashMap<_, _>>();
     let origin = origin_from_environment(provider, &environment)
+        .or_else(|| origin_from_processes(provider, &process_ancestry()))
+        .or_else(|| origin_from_terminal_environment(provider, &environment))
         .unwrap_or_else(|| AgentOrigin::fallback(provider));
     for (key, value) in [
         ("agent_origin", origin.label),
@@ -232,9 +234,31 @@ fn normalize_junie_payload(raw: &Value, log: &Path, process_id: Option<u32>) -> 
     Value::Object(result)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn junie_process_id() -> Option<u32> {
+    process_ancestry().into_iter().find_map(|info| {
+        let comm = info.comm.to_ascii_lowercase();
+        let command = info.command.to_ascii_lowercase();
+        let basename = Path::new(&comm)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&comm);
+        (basename.trim_end_matches(".exe") == "junie"
+            || [
+                "/junie.app/",
+                "junie-release-",
+                "matterhorn.ej.app.cli.standalone",
+            ]
+            .iter()
+            .any(|marker| command.contains(marker)))
+        .then_some(info.pid)
+    })
+}
+
+#[cfg(unix)]
+fn process_ancestry() -> Vec<ProcessInfo> {
     let mut current = std::process::id();
+    let mut processes = Vec::new();
     for _ in 0..10 {
         let output = Command::new("/bin/ps")
             .args([
@@ -249,48 +273,114 @@ fn junie_process_id() -> Option<u32> {
                 "-o",
                 "command=",
             ])
-            .output()
-            .ok()?;
+            .output();
+        let Ok(output) = output else { break };
         if !output.status.success() {
-            return None;
+            break;
         }
         let text = String::from_utf8_lossy(&output.stdout);
         let mut parts = text.split_whitespace();
-        let pid = parts.next()?.parse::<u32>().ok()?;
-        let parent = parts.next()?.parse::<u32>().ok()?;
-        let comm = parts.next()?.to_ascii_lowercase();
-        let command = parts.collect::<Vec<_>>().join(" ").to_ascii_lowercase();
-        let basename = Path::new(&comm)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&comm);
-        if basename == "junie"
-            || [
-                "/junie.app/",
-                "junie-release-",
-                "matterhorn.ej.app.cli.standalone",
-            ]
-            .iter()
-            .any(|marker| command.contains(marker))
-        {
-            return Some(pid);
-        }
+        let (Some(pid), Some(parent), Some(comm)) = (
+            parts.next().and_then(|part| part.parse::<u32>().ok()),
+            parts.next().and_then(|part| part.parse::<u32>().ok()),
+            parts.next(),
+        ) else {
+            break;
+        };
+        let command = parts.collect::<Vec<_>>().join(" ");
+        processes.push(ProcessInfo {
+            pid,
+            ppid: Some(parent),
+            comm: comm.to_owned(),
+            command,
+        });
         if parent <= 1 || parent == current {
             break;
         }
         current = parent;
     }
+    processes
+}
+
+#[cfg(not(any(unix, windows)))]
+fn junie_process_id() -> Option<u32> {
     None
 }
 
-#[cfg(not(unix))]
-fn junie_process_id() -> Option<u32> {
-    None
+#[cfg(windows)]
+fn process_ancestry() -> Vec<ProcessInfo> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    // One snapshot is enough to correlate all parents without starting a
+    // shell or waiting on another process in the time-sensitive hook path.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Vec::new();
+    }
+    let mut entries = HashMap::new();
+    let mut entry = PROCESSENTRY32W::default();
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+        loop {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|character| *character == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let comm = String::from_utf16_lossy(&entry.szExeFile[..end]);
+            entries.insert(
+                entry.th32ProcessID,
+                ProcessInfo {
+                    pid: entry.th32ProcessID,
+                    ppid: Some(entry.th32ParentProcessID),
+                    command: comm.clone(),
+                    comm,
+                },
+            );
+            if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    unsafe { CloseHandle(snapshot) };
+    let mut processes = Vec::new();
+    let mut current = std::process::id();
+    for _ in 0..10 {
+        let Some(info) = entries.get(&current) else {
+            break;
+        };
+        processes.push(info.clone());
+        let Some(parent) = info.ppid else { break };
+        if parent <= 1 || parent == current {
+            break;
+        }
+        current = parent;
+    }
+    processes
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_ancestry() -> Vec<ProcessInfo> {
+    Vec::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn reads_process_ancestry_for_the_hook_process() {
+        let processes = process_ancestry();
+        assert_eq!(
+            processes.first().map(|info| info.pid),
+            Some(std::process::id())
+        );
+    }
 
     #[test]
     fn junie_terminal_event_prefers_matching_process_context() {

@@ -10,6 +10,14 @@ pub struct AgentOrigin {
     pub confidence: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub ppid: Option<u32>,
+    pub comm: String,
+    pub command: String,
+}
+
 impl AgentOrigin {
     fn surface(provider: &str, surface: &str, source: &str) -> Self {
         let label = match (provider, surface) {
@@ -100,8 +108,138 @@ pub fn origin_from_environment(
             ));
         }
     }
-    if !term.trim().is_empty() {
-        return Some(AgentOrigin::surface(provider, "cli", "env:TERM_PROGRAM"));
+    None
+}
+
+pub fn origin_from_terminal_environment(
+    provider: &str,
+    env: &HashMap<String, String>,
+) -> Option<AgentOrigin> {
+    env.get("TERM_PROGRAM")
+        .filter(|term| !term.trim().is_empty() && !term.eq_ignore_ascii_case("vscode"))
+        .map(|_| AgentOrigin::surface(provider, "cli", "env:TERM_PROGRAM"))
+}
+
+pub fn origin_from_processes(provider: &str, processes: &[ProcessInfo]) -> Option<AgentOrigin> {
+    let haystack = processes
+        .iter()
+        .map(|info| format!("{}\n{}", info.comm, info.command))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    for (tokens, surface, source) in [
+        (
+            &["visual studio code.app", "code helper", "vscode"][..],
+            "vscode",
+            "process:Visual Studio Code",
+        ),
+        (
+            &["cursor.app", "cursor helper"][..],
+            "cursor",
+            "process:Cursor",
+        ),
+        (
+            &["windsurf.app", "windsurf helper"][..],
+            "windsurf",
+            "process:Windsurf",
+        ),
+    ] {
+        if tokens.iter().any(|token| haystack.contains(token)) {
+            return Some(AgentOrigin::surface(provider, surface, source));
+        }
+    }
+    for (process, surface, source) in [
+        ("code.exe", "vscode", "process:Visual Studio Code"),
+        ("cursor.exe", "cursor", "process:Cursor"),
+        ("windsurf.exe", "windsurf", "process:Windsurf"),
+    ] {
+        if processes
+            .iter()
+            .any(|info| info.comm.eq_ignore_ascii_case(process))
+        {
+            return Some(AgentOrigin::surface(provider, surface, source));
+        }
+    }
+    let app = match provider {
+        "codex" if haystack.contains("codex.app") || haystack.contains("chatgpt.app") => {
+            Some("process:Codex.app")
+        }
+        "claude" if haystack.contains("claude.app") => Some("process:Claude.app"),
+        "grok" if haystack.contains("grok.app") => Some("process:Grok.app"),
+        "junie"
+            if [
+                "intellij idea.app",
+                "pycharm.app",
+                "webstorm.app",
+                "goland.app",
+                "phpstorm.app",
+                "rubymine.app",
+                "rustrover.app",
+                "rider.app",
+                "clion.app",
+            ]
+            .iter()
+            .any(|token| haystack.contains(token))
+                || processes.iter().any(|info| {
+                    [
+                        "idea64.exe",
+                        "pycharm64.exe",
+                        "webstorm64.exe",
+                        "goland64.exe",
+                        "phpstorm64.exe",
+                        "rubymine64.exe",
+                        "rustrover64.exe",
+                        "rider64.exe",
+                        "clion64.exe",
+                    ]
+                    .iter()
+                    .any(|name| info.comm.eq_ignore_ascii_case(name))
+                }) =>
+        {
+            return Some(AgentOrigin::surface(
+                provider,
+                "ide",
+                "process:JetBrains IDE",
+            ));
+        }
+        _ => None,
+    };
+    if let Some(source) = app {
+        return Some(AgentOrigin::surface(provider, "app", source));
+    }
+    for info in processes {
+        let basename = std::path::Path::new(&info.comm)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let command_basename = info
+            .command
+            .split_whitespace()
+            .next()
+            .and_then(|name| std::path::Path::new(name).file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let is_cli = [
+            basename.trim_end_matches(".exe"),
+            command_basename.trim_end_matches(".exe"),
+        ]
+        .iter()
+        .any(|name| match provider {
+            "codex" => *name == "codex",
+            "claude" => ["claude", "claude-code"].contains(name),
+            "grok" => *name == "grok",
+            "junie" => *name == "junie",
+            _ => false,
+        });
+        if is_cli {
+            return Some(AgentOrigin::surface(
+                provider,
+                "cli",
+                &format!("process:{provider}"),
+            ));
+        }
     }
     None
 }
@@ -197,6 +335,58 @@ mod tests {
         assert_eq!(
             origin_label_from_payload("codex", &json!({"source":"codex-transcripts"})),
             Some("Codex Transcript".into())
+        );
+    }
+
+    #[test]
+    fn process_origin_prefers_editor_before_cli() {
+        let processes = vec![
+            ProcessInfo {
+                pid: 10,
+                ppid: Some(20),
+                comm: "/usr/bin/codex".into(),
+                command: "codex exec".into(),
+            },
+            ProcessInfo {
+                pid: 20,
+                ppid: None,
+                comm: "Code Helper".into(),
+                command: "/Applications/Visual Studio Code.app/Contents/MacOS/Code Helper".into(),
+            },
+        ];
+        let origin = origin_from_processes("codex", &processes).unwrap();
+        assert_eq!(origin.label, "Codex in VS Code");
+        assert_eq!(origin.source, "process:Visual Studio Code");
+        let origin = origin_from_processes(
+            "claude",
+            &[ProcessInfo {
+                pid: 1,
+                ppid: None,
+                comm: "/usr/bin/claude".into(),
+                command: "claude".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(origin.label, "Claude Code CLI");
+        let windows = [ProcessInfo {
+            pid: 3,
+            ppid: None,
+            comm: "Cursor.exe".into(),
+            command: "Cursor.exe".into(),
+        }];
+        assert_eq!(
+            origin_from_processes("codex", &windows).unwrap().label,
+            "Codex in Cursor"
+        );
+        let windows_cli = [ProcessInfo {
+            pid: 4,
+            ppid: None,
+            comm: "codex.exe".into(),
+            command: "codex.exe".into(),
+        }];
+        assert_eq!(
+            origin_from_processes("codex", &windows_cli).unwrap().label,
+            "Codex CLI"
         );
     }
 }
