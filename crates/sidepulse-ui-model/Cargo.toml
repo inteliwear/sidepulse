@@ -1,0 +1,12 @@
+[package]
+name = "sidepulse-ui-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sidepulse-core = { path = "../sidepulse-core" }
+
+[dev-dependencies]
+chrono.workspace = true

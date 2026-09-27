@@ -1,0 +1,25 @@
+[package]
+name = "sidepulse-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sidepulse-next"
+path = "src/main.rs"
+
+[[bin]]
+name = "sidepulse-next-hook"
+path = "src/hook.rs"
+
+[dependencies]
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }
+sidepulse-sources = { path = "../sidepulse-sources" }
+sidepulse-hook-config = { path = "../sidepulse-hook-config" }
+serde_json.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+interprocess.workspace = true

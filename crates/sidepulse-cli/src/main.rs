@@ -1,0 +1,122 @@
+//! Development-only binary for comparing the new core with existing logs.
+
+use std::env;
+use std::fs;
+use std::process::ExitCode;
+use std::time::Duration;
+
+use sidepulse_core::{
+    ClientRequest, Monitor, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    parse_log_line,
+};
+
+fn main() -> ExitCode {
+    let mut args = env::args().skip(1);
+    match args.next().as_deref() {
+        Some("version") if args.next().is_none() => {
+            println!("sidepulse-next {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Some("hook-log") => {
+            let _ = sidepulse_cli::run_hook(args);
+            ExitCode::SUCCESS
+        }
+        Some("agent-monitor") => match args.next().as_deref() {
+            Some("hook-log") => {
+                let _ = sidepulse_cli::run_hook(args);
+                ExitCode::SUCCESS
+            }
+            Some("status") => sidepulse_cli::run_status(args),
+            Some("install") => sidepulse_cli::run_hook_config("install", args),
+            Some("uninstall") => sidepulse_cli::run_hook_config("uninstall", args),
+            _ => {
+                eprintln!(
+                    "usage: sidepulse-next agent-monitor <status | hook-log | install | uninstall>"
+                );
+                ExitCode::from(2)
+            }
+        },
+        Some("status") => sidepulse_cli::run_status(args),
+        Some("service-status") => {
+            let (Some(endpoint), None) = (args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next service-status ENDPOINT");
+                return ExitCode::from(2);
+            };
+            let request = ClientRequest {
+                version: PROTOCOL_VERSION,
+                request_id: 1,
+                kind: RequestKind::Snapshot,
+            };
+            let reply: ServerMessage =
+                match sidepulse_ipc::request(&endpoint, &request, Duration::from_secs(2)) {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        eprintln!("sidepulse-next: service unavailable: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            match reply.payload {
+                ServerPayload::Snapshot { state } => {
+                    println!("{}", serde_json::to_string_pretty(&state).unwrap());
+                    ExitCode::SUCCESS
+                }
+                ServerPayload::Error { code, message } => {
+                    eprintln!("sidepulse-next: {code}: {message}");
+                    ExitCode::FAILURE
+                }
+                _ => {
+                    eprintln!("sidepulse-next: unexpected service reply");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("inspect-log") => {
+            let (Some(provider), Some(path), at, None) =
+                (args.next(), args.next(), args.next(), args.next())
+            else {
+                eprintln!("usage: sidepulse-next inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]");
+                return ExitCode::from(2);
+            };
+            let now = if let Some(value) = at {
+                match chrono::DateTime::parse_from_rfc3339(&value) {
+                    Ok(value) => value.with_timezone(&chrono::Utc),
+                    Err(error) => {
+                        eprintln!("sidepulse-next: invalid timestamp: {error}");
+                        return ExitCode::from(2);
+                    }
+                }
+            } else {
+                chrono::Utc::now()
+            };
+            let text = match fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("sidepulse-next: {path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut monitor = Monitor::default();
+            for line in text.lines() {
+                if let Some(event) = parse_log_line(&provider, line) {
+                    monitor.ingest(&event);
+                }
+            }
+            match serde_json::to_string_pretty(&monitor.snapshot(now)) {
+                Ok(output) => {
+                    println!("{output}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("sidepulse-next: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        _ => {
+            eprintln!(
+                "usage: sidepulse-next <version | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <status | hook-log | install | uninstall> | service-status ENDPOINT | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+            );
+            ExitCode::from(2)
+        }
+    }
+}
