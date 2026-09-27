@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tempfile::Builder;
 
-const BINARIES: [&str; 4] = [
+const BINARIES: [&str; 5] = [
     "sidepulse-next",
     "sidepulse-next-hook",
     "sidepulse-next-service",
     "sidepulse-next-tray",
+    "sidepulse-next-stage",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,7 +336,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
-            assert_eq!(manifest.binaries.len(), 4);
+            assert_eq!(manifest.binaries.len(), 5);
             assert_eq!(manifest.launch_files.len(), 2);
             assert!(destination.join("state").is_dir());
             assert_eq!(

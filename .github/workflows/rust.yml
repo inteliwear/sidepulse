@@ -26,18 +26,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace --release --bins
+      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --source-dir target/release --stage-dir target/sidepulse-preview
       - uses: actions/upload-artifact@v4
         with:
           name: sidepulse-rust-preview-${{ matrix.os }}
           if-no-files-found: error
-          path: |
-            target/release/sidepulse-next
-            target/release/sidepulse-next-hook
-            target/release/sidepulse-next-service
-            target/release/sidepulse-next-tray
-            target/release/sidepulse-next-stage
-            target/release/sidepulse-next.exe
-            target/release/sidepulse-next-hook.exe
-            target/release/sidepulse-next-service.exe
-            target/release/sidepulse-next-tray.exe
-            target/release/sidepulse-next-stage.exe
+          path: target/sidepulse-preview/

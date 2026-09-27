@@ -14,6 +14,7 @@ fn stage_cli_plans_then_creates_one_isolated_bundle() {
         "sidepulse-next-hook",
         "sidepulse-next-service",
         "sidepulse-next-tray",
+        "sidepulse-next-stage",
     ] {
         fs::write(
             source.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
