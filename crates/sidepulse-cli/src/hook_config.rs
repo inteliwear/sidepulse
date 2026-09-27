@@ -178,8 +178,8 @@ fn default_log_dir(home: &Path, use_xdg: bool) -> PathBuf {
                 path
             }
         })
-        .unwrap_or_else(|| home.join(".local/state"));
-    state_root.join("sidepulse/agent-monitor")
+        .unwrap_or_else(|| home.join(".local").join("state"));
+    state_root.join("sidepulse").join("agent-monitor")
 }
 
 fn provider_config_path(provider: &str) -> &'static str {

@@ -163,7 +163,9 @@ fn defaults_install_all_providers_into_isolated_home_and_xdg_state() {
     assert_eq!(
         plans[0]["log_path"],
         state
-            .join("sidepulse/agent-monitor/codex.jsonl")
+            .join("sidepulse")
+            .join("agent-monitor")
+            .join("codex.jsonl")
             .to_string_lossy()
             .as_ref()
     );
@@ -215,7 +217,11 @@ fn positional_provider_uses_default_paths_and_missing_values_fail() {
     );
     assert_eq!(
         result["log_path"],
-        home.join(".local/state/sidepulse/agent-monitor/claude.jsonl")
+        home.join(".local")
+            .join("state")
+            .join("sidepulse")
+            .join("agent-monitor")
+            .join("claude.jsonl")
             .to_string_lossy()
             .as_ref()
     );
@@ -244,7 +250,11 @@ fn positional_provider_uses_default_paths_and_missing_values_fail() {
     let explicit: Value = serde_json::from_slice(&explicit_home.stdout).unwrap();
     assert_eq!(
         explicit["log_path"],
-        home.join(".local/state/sidepulse/agent-monitor/claude.jsonl")
+        home.join(".local")
+            .join("state")
+            .join("sidepulse")
+            .join("agent-monitor")
+            .join("claude.jsonl")
             .to_string_lossy()
             .as_ref()
     );
