@@ -1870,6 +1870,7 @@ dependencies = [
  "sidepulse-hook-config",
  "sidepulse-ipc",
  "sidepulse-sources",
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 
