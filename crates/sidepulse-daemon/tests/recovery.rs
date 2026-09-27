@@ -199,6 +199,7 @@ fn service_updates_settings_and_device_from_one_request() {
         settings,
         active_device,
         brightness,
+        ..
     } = response.payload
     else {
         panic!("service did not return updated settings")
@@ -223,6 +224,29 @@ fn service_updates_settings_and_device_from_one_request() {
         );
         thread::sleep(Duration::from_millis(100));
     }
+    let response: ServerMessage = sidepulse_ipc::request(
+        endpoint,
+        &ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 8,
+            kind: RequestKind::SetDisplayMode {
+                mode: "battery".into(),
+            },
+        },
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let ServerPayload::Settings {
+        settings,
+        display_mode,
+        ..
+    } = response.payload
+    else {
+        panic!("service did not update display mode")
+    };
+    assert_eq!(display_mode.as_deref(), Some("battery"));
+    assert_eq!(settings["devices"][0]["led_display"], "battery");
+    assert_eq!(settings["unknown"]["keep"], true);
     drop(server);
     fs::remove_dir_all(directory).unwrap();
 }

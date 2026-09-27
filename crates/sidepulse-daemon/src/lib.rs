@@ -29,6 +29,7 @@ pub struct RuntimeSettings {
     pub document: serde_json::Value,
     pub active_device: Option<String>,
     pub brightness: Option<u8>,
+    pub display_mode: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -131,6 +132,9 @@ impl Service {
                 .as_ref()
                 .map(|output| output.target().to_string_lossy().into_owned()),
             brightness: device.as_ref().map(DeviceOutput::brightness),
+            display_mode: device
+                .as_ref()
+                .map(|output| store.display_for_device(output.target()).to_owned()),
         }))
     }
 
@@ -146,6 +150,18 @@ impl Service {
         store.set_brightness_for_device(output.target(), brightness)?;
         output.set_brightness(brightness);
         Ok(())
+    }
+
+    pub fn set_display_mode(&self, mode: &str) -> io::Result<()> {
+        let device = self.device.lock().map_err(poisoned)?;
+        let output = device
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no device is configured"))?;
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_display_for_device(output.target(), mode, output.brightness())
     }
 
     /// Only the service calls this; tray and CLI clients receive read-only snapshots.
@@ -286,6 +302,7 @@ impl Service {
                         settings: settings.document,
                         active_device: settings.active_device,
                         brightness: settings.brightness,
+                        display_mode: settings.display_mode,
                     },
                     None => ServerPayload::Error {
                         code: "settings_unavailable".into(),
@@ -310,6 +327,43 @@ impl Service {
                         settings: settings.document,
                         active_device: settings.active_device,
                         brightness: settings.brightness,
+                        display_mode: settings.display_mode,
+                    },
+                    Ok(None) => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => ServerPayload::Error {
+                        code: "device_unavailable".into(),
+                        message: error.to_string(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        ServerPayload::Error {
+                            code: "settings_conflict".into(),
+                            message: error.to_string(),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::SetDisplayMode { mode } => {
+                let payload = match self
+                    .set_display_mode(&mode)
+                    .and_then(|_| self.settings_snapshot())
+                {
+                    Ok(Some(settings)) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                        display_mode: settings.display_mode,
                     },
                     Ok(None) => ServerPayload::Error {
                         code: "settings_unavailable".into(),

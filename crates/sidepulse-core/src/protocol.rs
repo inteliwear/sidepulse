@@ -21,6 +21,7 @@ pub enum RequestKind {
     Snapshot,
     Settings,
     SetBrightness { brightness: u8 },
+    SetDisplayMode { mode: String },
     Subscribe,
     IngestHook { provider: String, line: Value },
 }
@@ -44,6 +45,7 @@ pub enum ServerPayload {
         settings: Value,
         active_device: Option<String>,
         brightness: Option<u8>,
+        display_mode: Option<String>,
     },
     StateChanged {
         state: MonitorSnapshot,
@@ -64,6 +66,12 @@ impl ClientRequest {
             && (provider.is_empty() || !line.is_object())
         {
             return Err("invalid hook event");
+        }
+        if let RequestKind::SetDisplayMode { mode } = &self.kind
+            && mode != "agent"
+            && mode != "battery"
+        {
+            return Err("invalid display mode");
         }
         Ok(())
     }
@@ -102,5 +110,21 @@ mod tests {
             },
         };
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_only_supported_display_modes() {
+        let mut request = ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 1,
+            kind: RequestKind::SetDisplayMode {
+                mode: "battery".into(),
+            },
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetDisplayMode {
+            mode: "custom".into(),
+        };
+        assert_eq!(request.validate(), Err("invalid display mode"));
     }
 }

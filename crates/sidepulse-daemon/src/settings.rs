@@ -115,6 +115,59 @@ impl SettingsStore {
         Ok(())
     }
 
+    pub fn set_display_for_device(
+        &mut self,
+        path: &Path,
+        mode: &str,
+        brightness: u8,
+    ) -> io::Result<()> {
+        if !matches!(mode, "agent" | "battery") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported display mode",
+            ));
+        }
+        let mut updated = self.document.clone();
+        let devices = updated.entry("devices").or_insert_with(|| json!([]));
+        let list = devices.as_array_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "settings.devices must be an array",
+            )
+        })?;
+        let target = target_from_device_path(path);
+        if let Some(device) = list.iter_mut().find(|device| {
+            device
+                .get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|value| target_from_device_path(Path::new(value)) == target)
+        }) {
+            let object = device.as_object_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "settings device must be an object",
+                )
+            })?;
+            object.insert("led_display".into(), json!(mode));
+        } else {
+            let path_text = path.to_string_lossy().into_owned();
+            list.push(json!({
+                "id": path_text,
+                "name": path.file_name().unwrap_or_default().to_string_lossy(),
+                "path": path_text,
+                "led_display": mode,
+                "brightness": brightness,
+            }));
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     fn find_device(&self, path: &Path) -> Option<&Value> {
         let target = target_from_device_path(path);
         self.document

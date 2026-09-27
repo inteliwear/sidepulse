@@ -91,6 +91,17 @@ fn main() -> ExitCode {
             };
             service_settings_request(&endpoint, RequestKind::SetBrightness { brightness })
         }
+        Some("service-display") => {
+            let (Some(endpoint), Some(mode), None) = (args.next(), args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next service-display ENDPOINT agent|battery");
+                return ExitCode::from(2);
+            };
+            if !matches!(mode.as_str(), "agent" | "battery") {
+                eprintln!("sidepulse-next: display mode must be agent or battery");
+                return ExitCode::from(2);
+            }
+            service_settings_request(&endpoint, RequestKind::SetDisplayMode { mode })
+        }
         Some("inspect-log") => {
             let (Some(provider), Some(path), at, None) =
                 (args.next(), args.next(), args.next(), args.next())
@@ -135,7 +146,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

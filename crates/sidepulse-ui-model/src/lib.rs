@@ -79,6 +79,23 @@ pub const BRIGHTNESS_CHOICES: [BrightnessChoice; 5] = [
     },
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayChoice {
+    pub label: &'static str,
+    pub value: &'static str,
+}
+
+pub const DISPLAY_CHOICES: [DisplayChoice; 2] = [
+    DisplayChoice {
+        label: "Agent status",
+        value: "agent",
+    },
+    DisplayChoice {
+        label: "Battery level",
+        value: "battery",
+    },
+];
+
 pub fn brightness_label(current: Option<u8>) -> String {
     current.map_or_else(
         || "Device brightness unavailable".into(),
