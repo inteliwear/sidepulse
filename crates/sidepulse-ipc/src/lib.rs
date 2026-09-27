@@ -29,8 +29,13 @@ pub fn bind(endpoint: &str) -> io::Result<local_socket::Listener> {
 
 pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<local_socket::Stream> {
     let stream = local_socket::Stream::connect(endpoint_name(endpoint)?)?;
-    stream.set_send_timeout(Some(timeout))?;
-    stream.set_recv_timeout(Some(timeout))?;
+    #[cfg(unix)]
+    {
+        stream.set_send_timeout(Some(timeout))?;
+        stream.set_recv_timeout(Some(timeout))?;
+    }
+    #[cfg(windows)]
+    let _ = timeout;
     Ok(stream)
 }
 
@@ -48,6 +53,11 @@ pub fn write_message<T: Serialize>(stream: &mut impl Write, value: &T) -> io::Re
 }
 
 pub fn read_message<T: DeserializeOwned>(stream: &mut impl BufRead) -> io::Result<T> {
+    serde_json::from_slice(&read_frame(stream)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn read_frame(stream: &mut impl BufRead) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     stream
         .take((MAX_MESSAGE_BYTES + 1) as u64)
@@ -64,10 +74,11 @@ pub fn read_message<T: DeserializeOwned>(stream: &mut impl BufRead) -> io::Resul
             "IPC message exceeds limit or has no terminator",
         ));
     }
-    serde_json::from_slice(&bytes[..bytes.len() - 1])
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    bytes.pop();
+    Ok(bytes)
 }
 
+#[cfg(unix)]
 pub fn request<T: Serialize, R: DeserializeOwned>(
     endpoint: &str,
     value: &T,
@@ -76,6 +87,40 @@ pub fn request<T: Serialize, R: DeserializeOwned>(
     let mut stream = connect(endpoint, timeout)?;
     write_message(&mut stream, value)?;
     read_message(&mut BufReader::new(stream))
+}
+
+#[cfg(windows)]
+pub fn request<T: Serialize, R: DeserializeOwned>(
+    endpoint: &str,
+    value: &T,
+    timeout: Duration,
+) -> io::Result<R> {
+    use std::sync::mpsc;
+
+    let message = serde_json::to_vec(value).map_err(io::Error::other)?;
+    if message.len() + 1 > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "IPC message too large",
+        ));
+    }
+    let endpoint = endpoint.to_owned();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let response = (|| {
+            let mut stream = connect(&endpoint, timeout)?;
+            stream.write_all(&message)?;
+            stream.write_all(b"\n")?;
+            stream.flush()?;
+            read_frame(&mut BufReader::new(stream))
+        })();
+        let _ = sender.send(response);
+    });
+    let frame = receiver
+        .recv_timeout(timeout)
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "IPC request timed out"))??;
+    serde_json::from_slice(&frame)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(unix)]
@@ -96,6 +141,17 @@ mod tests {
     use sidepulse_core::{
         ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
     };
+
+    #[cfg(windows)]
+    fn windows_endpoint() -> String {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        format!(
+            "sidepulse-ipc-test-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        )
+    }
 
     #[cfg(unix)]
     #[test]
@@ -148,7 +204,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn round_trips_a_snapshot_request_over_named_pipe() {
-        let endpoint = format!("sidepulse-ipc-test-{}", std::process::id());
+        let endpoint = windows_endpoint();
         let listener = bind(&endpoint).unwrap();
         let server = std::thread::spawn(move || {
             let mut stream = listener.accept().unwrap();
@@ -175,6 +231,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.payload, ServerPayload::Ack);
+        server.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_request_timeout_is_enforced_by_caller() {
+        let endpoint = windows_endpoint();
+        let listener = bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let _: ClientRequest = read_message(&mut BufReader::new(&mut stream)).unwrap();
+            std::thread::sleep(Duration::from_millis(1500));
+        });
+        let error = request::<_, ServerMessage>(
+            &endpoint,
+            &ClientRequest {
+                version: PROTOCOL_VERSION,
+                request_id: 8,
+                kind: RequestKind::Snapshot,
+            },
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         server.join().unwrap();
     }
 }

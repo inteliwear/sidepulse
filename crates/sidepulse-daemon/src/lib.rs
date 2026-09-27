@@ -135,6 +135,7 @@ impl Service {
     }
 
     pub fn serve_connection(&self, mut stream: Stream) -> io::Result<()> {
+        #[cfg(unix)]
         stream.set_recv_timeout(Some(Duration::from_secs(5)))?;
         let request: ClientRequest = read_message(&mut BufReader::new(&mut stream))?;
         if let Err(message) = request.validate() {
