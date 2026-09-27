@@ -178,6 +178,10 @@ loopback HTTP tests cover both paths. Relay remains opt-in so the development
 service cannot connect through the installed Python setup unexpectedly. A
 production service launch and UI control for relay configuration still need
 implementation.
+The core also owns portable awake-policy decisions, battery safeguard rules,
+closed-lid LED and animation decisions, and pure macOS sleep-diagnostic
+parsers. Mac system commands and display detection have not yet been wired to
+the Rust service; no privileged power setting is changed by this work.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover

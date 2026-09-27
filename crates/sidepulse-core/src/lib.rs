@@ -11,6 +11,7 @@ mod origin;
 mod protocol;
 mod provider;
 mod relay;
+mod sleep;
 
 pub use audit::status_audit_record;
 pub use model::{AgentMode, AgentStatus, AggregateStatus, HookEvent, MonitorSnapshot};
@@ -27,3 +28,7 @@ pub use provider::{
     parse_log_line,
 };
 pub use relay::{RelayEvent, parse_relay_message};
+pub use sleep::{
+    AwakePolicy, BatteryPower, MacSleepSnapshot, SleepInputs, SleepPlan, battery_safeguard_active,
+    parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
+};
