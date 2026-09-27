@@ -55,7 +55,9 @@ fn both_status_routes_expose_the_legacy_json_shape() {
         assert_eq!(value["statuses"][0]["cwd"], "/repo");
         assert!(value["statuses"][0]["age_seconds"].is_number());
         assert!(value["collected_at"].is_string());
-        assert_eq!(value["sources"].as_array().unwrap().len(), 5);
+        let sources = value["sources"].as_array().unwrap();
+        assert_eq!(sources.len(), 4);
+        assert!(sources.iter().all(|source| source["provider"] != "cursor"));
         assert!(value["stale_statuses"].is_array());
     }
     fs::remove_dir_all(dir).unwrap();
@@ -190,6 +192,6 @@ fn status_can_include_explicit_transcript_source() {
         value["statuses"][0]["agent_id"],
         "codex:session:12345678-1234-1234-1234-123456789abc"
     );
-    assert_eq!(value["sources"].as_array().unwrap().len(), 6);
+    assert_eq!(value["sources"].as_array().unwrap().len(), 5);
     fs::remove_dir_all(dir).unwrap();
 }

@@ -10,3 +10,4 @@ sidepulse-core = { path = "../sidepulse-core" }
 
 [dev-dependencies]
 chrono.workspace = true
+serde_json.workspace = true

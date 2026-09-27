@@ -84,6 +84,9 @@ now renders the mode, active agents, and a quit action. It polls and reconnects
 to the service; its UI event loop is native on macOS and Windows and uses the
 KSNI tray backend on Linux. The development tray compiled and stayed running
 during a macOS smoke test with a temporary Rust service and hook event.
+The shared UI model now interprets one service settings response into portable
+tray controls; platform event loops no longer issue separate requests for each
+control. A disconnect also resets the visible status title through that model.
 Rust formatting, linting, and workspace tests run in CI on macOS, Linux, and
 Windows; the workflow also stages and smoke-tests the isolated service on each
 OS, then retains portable

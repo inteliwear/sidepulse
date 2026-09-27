@@ -2,7 +2,7 @@
 //! This crate reads service snapshots; it never opens hooks, monitors logs,
 //! writes device output, or imports a GUI toolkit.
 
-use sidepulse_core::{AgentMode, AgentStatus, MonitorSnapshot};
+use sidepulse_core::{AgentMode, AgentStatus, MonitorSnapshot, ServerPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusIcon {
@@ -48,6 +48,49 @@ pub struct TrayState {
     pub active_count: usize,
     pub rows: Vec<AgentRow>,
     pub stale_rows: Vec<AgentRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayControls {
+    pub brightness: Option<u8>,
+    pub display_mode: Option<String>,
+    pub codex_transcripts: bool,
+    pub claude_transcripts: bool,
+    pub sleep_policy: Option<String>,
+}
+
+impl TrayControls {
+    pub fn from_service_payload(payload: &ServerPayload) -> Option<Self> {
+        let ServerPayload::Settings {
+            settings,
+            active_device,
+            brightness,
+            display_mode,
+        } = payload
+        else {
+            return None;
+        };
+        let monitoring = settings.get("transcript_monitoring");
+        Some(Self {
+            brightness: active_device.as_ref().and(*brightness),
+            display_mode: active_device.as_ref().and(display_mode.clone()),
+            codex_transcripts: monitoring
+                .and_then(|value| value.get("codex"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            claude_transcripts: monitoring
+                .and_then(|value| value.get("claude"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            sleep_policy: Some(
+                settings
+                    .get("sleep_prevention_policy")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("agents")
+                    .to_owned(),
+            ),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +173,17 @@ pub fn brightness_label(current: Option<u8>) -> String {
 }
 
 impl TrayState {
+    pub fn disconnected() -> Self {
+        Self {
+            icon: StatusIcon::Unknown,
+            title: "SidePulse".to_owned(),
+            tooltip: "SidePulse service unavailable".to_owned(),
+            active_count: 0,
+            rows: Vec::new(),
+            stale_rows: Vec::new(),
+        }
+    }
+
     pub fn from_snapshot(snapshot: &MonitorSnapshot) -> Self {
         let aggregate = &snapshot.aggregate;
         let mode = aggregate.mode;
@@ -184,6 +238,7 @@ fn agent_row(status: &AgentStatus) -> AgentRow {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use serde_json::json;
     use sidepulse_core::{Monitor, parse_log_line};
 
     #[test]
@@ -207,5 +262,40 @@ mod tests {
 
         let empty = Monitor::default().snapshot(Utc::now());
         assert_eq!(TrayState::from_snapshot(&empty).title, "SidePulse");
+        let disconnected = TrayState::disconnected();
+        assert_eq!(disconnected.title, "SidePulse");
+        assert!(disconnected.rows.is_empty());
+        assert_eq!(disconnected.icon, StatusIcon::Unknown);
+    }
+
+    #[test]
+    fn service_settings_map_to_portable_tray_controls() {
+        let payload = ServerPayload::Settings {
+            settings: json!({
+                "transcript_monitoring": {"codex": true, "claude": false},
+                "sleep_prevention_policy": "always"
+            }),
+            active_device: Some("/Volumes/SidePulse".into()),
+            brightness: Some(128),
+            display_mode: Some("battery".into()),
+        };
+        let controls = TrayControls::from_service_payload(&payload).unwrap();
+        assert_eq!(controls.brightness, Some(128));
+        assert_eq!(controls.display_mode.as_deref(), Some("battery"));
+        assert!(controls.codex_transcripts);
+        assert!(!controls.claude_transcripts);
+        assert_eq!(controls.sleep_policy.as_deref(), Some("always"));
+
+        let disconnected_device = ServerPayload::Settings {
+            settings: json!({
+                "transcript_monitoring": {"codex": true},
+            }),
+            active_device: None,
+            brightness: Some(128),
+            display_mode: Some("battery".into()),
+        };
+        let controls = TrayControls::from_service_payload(&disconnected_device).unwrap();
+        assert_eq!(controls.brightness, None);
+        assert_eq!(controls.display_mode, None);
     }
 }

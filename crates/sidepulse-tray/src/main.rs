@@ -11,7 +11,7 @@ use sidepulse_core::{
 #[cfg(target_os = "macos")]
 use sidepulse_ui_model::SLEEP_CHOICES;
 use sidepulse_ui_model::{
-    BRIGHTNESS_CHOICES, DISPLAY_CHOICES, StatusIcon, TrayState, brightness_label,
+    BRIGHTNESS_CHOICES, DISPLAY_CHOICES, StatusIcon, TrayControls, TrayState, brightness_label,
 };
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -129,10 +129,11 @@ impl TrayView {
     }
 
     fn show_disconnected(&mut self) -> Result<(), Box<dyn Error>> {
-        self.status.set_text("SidePulse service unavailable");
-        self.tray
-            .set_tooltip(Some("SidePulse service unavailable"))?;
-        self.tray.set_icon(Some(icon(StatusIcon::Unknown)?))?;
+        let state = TrayState::disconnected();
+        self.status.set_text(&state.tooltip);
+        self.tray.set_tooltip(Some(&state.tooltip))?;
+        self.tray.set_icon(Some(icon(state.icon)?))?;
+        self.tray.set_title(Some(&state.title));
         for _ in 0..self.visible_rows {
             self.menu.remove_at(1);
         }
@@ -353,7 +354,7 @@ fn fetch_snapshot(endpoint: &str) -> Result<MonitorSnapshot, Box<dyn Error>> {
     }
 }
 
-fn fetch_brightness(endpoint: &str) -> Result<Option<u8>, Box<dyn Error>> {
+fn fetch_controls(endpoint: &str) -> Result<TrayControls, Box<dyn Error>> {
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
         request_id: 2,
@@ -361,15 +362,11 @@ fn fetch_brightness(endpoint: &str) -> Result<Option<u8>, Box<dyn Error>> {
     };
     let response: ServerMessage =
         sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
-    match response.payload {
-        ServerPayload::Settings {
-            active_device: Some(_),
-            brightness,
-            ..
-        } => Ok(brightness),
-        ServerPayload::Error { .. } => Ok(None),
-        _ => Err("service did not return settings".into()),
+    if response.version != PROTOCOL_VERSION || response.request_id != Some(2) {
+        return Err("invalid service response".into());
     }
+    TrayControls::from_service_payload(&response.payload)
+        .ok_or_else(|| "service did not return settings".into())
 }
 
 fn send_brightness(endpoint: &str, brightness: u8) -> Result<(), Box<dyn Error>> {
@@ -387,25 +384,6 @@ fn send_brightness(endpoint: &str, brightness: u8) -> Result<(), Box<dyn Error>>
     }
 }
 
-fn fetch_display_mode(endpoint: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let request = ClientRequest {
-        version: PROTOCOL_VERSION,
-        request_id: 4,
-        kind: RequestKind::Settings,
-    };
-    let response: ServerMessage =
-        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
-    match response.payload {
-        ServerPayload::Settings {
-            active_device: Some(_),
-            display_mode,
-            ..
-        } => Ok(display_mode),
-        ServerPayload::Error { .. } => Ok(None),
-        _ => Err("service did not return settings".into()),
-    }
-}
-
 fn send_display_mode(endpoint: &str, mode: &str) -> Result<(), Box<dyn Error>> {
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
@@ -420,33 +398,6 @@ fn send_display_mode(endpoint: &str, mode: &str) -> Result<(), Box<dyn Error>> {
         ServerPayload::Settings { .. } => Ok(()),
         ServerPayload::Error { message, .. } => Err(message.into()),
         _ => Err("service did not update display mode".into()),
-    }
-}
-
-fn fetch_transcript_monitoring(endpoint: &str) -> Result<Option<(bool, bool)>, Box<dyn Error>> {
-    let request = ClientRequest {
-        version: PROTOCOL_VERSION,
-        request_id: 10,
-        kind: RequestKind::Settings,
-    };
-    let response: ServerMessage =
-        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
-    match response.payload {
-        ServerPayload::Settings { settings, .. } => {
-            let monitoring = settings.get("transcript_monitoring");
-            Ok(Some((
-                monitoring
-                    .and_then(|value| value.get("codex"))
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-                monitoring
-                    .and_then(|value| value.get("claude"))
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            )))
-        }
-        ServerPayload::Error { .. } => Ok(None),
-        _ => Err("service did not return settings".into()),
     }
 }
 
@@ -469,28 +420,6 @@ fn send_transcript_monitoring(
         ServerPayload::Settings { .. } => Ok(()),
         ServerPayload::Error { message, .. } => Err(message.into()),
         _ => Err("service did not update transcript monitoring".into()),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn fetch_sleep_policy(endpoint: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let request = ClientRequest {
-        version: PROTOCOL_VERSION,
-        request_id: 8,
-        kind: RequestKind::Settings,
-    };
-    let response: ServerMessage =
-        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
-    match response.payload {
-        ServerPayload::Settings { settings, .. } => Ok(Some(
-            settings
-                .get("sleep_prevention_policy")
-                .and_then(|value| value.as_str())
-                .unwrap_or("agents")
-                .to_owned(),
-        )),
-        ServerPayload::Error { .. } => Ok(None),
-        _ => Err("service did not return settings".into()),
     }
 }
 
@@ -554,11 +483,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     enum UserEvent {
         Snapshot(
             Option<Box<MonitorSnapshot>>,
-            Option<u8>,
-            Option<String>,
+            Option<TrayControls>,
             Option<(Vec<DeviceInfo>, Option<String>)>,
-            Option<String>,
-            Option<(bool, bool)>,
         ),
         Menu(MenuEvent),
     }
@@ -584,24 +510,10 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     std::thread::spawn(move || {
                         loop {
                             let snapshot = fetch_snapshot(&endpoint).ok().map(Box::new);
-                            let brightness = fetch_brightness(&endpoint).ok().flatten();
-                            let display_mode = fetch_display_mode(&endpoint).ok().flatten();
+                            let controls = fetch_controls(&endpoint).ok();
                             let devices = fetch_devices(&endpoint).ok();
-                            let transcript_monitoring =
-                                fetch_transcript_monitoring(&endpoint).ok().flatten();
-                            #[cfg(target_os = "macos")]
-                            let sleep_policy = fetch_sleep_policy(&endpoint).ok().flatten();
-                            #[cfg(target_os = "windows")]
-                            let sleep_policy = None;
                             if proxy
-                                .send_event(UserEvent::Snapshot(
-                                    snapshot,
-                                    brightness,
-                                    display_mode,
-                                    devices,
-                                    sleep_policy,
-                                    transcript_monitoring,
-                                ))
+                                .send_event(UserEvent::Snapshot(snapshot, controls, devices))
                                 .is_err()
                             {
                                 break;
@@ -611,16 +523,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
-            Event::UserEvent(UserEvent::Snapshot(
-                snapshot,
-                brightness,
-                display_mode,
-                devices,
-                sleep_policy,
-                transcript_monitoring,
-            )) => {
-                #[cfg(target_os = "windows")]
-                let _ = &sleep_policy;
+            Event::UserEvent(UserEvent::Snapshot(snapshot, controls, devices)) => {
                 let connected = snapshot.is_some();
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
@@ -632,11 +535,23 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     }
                     last_state = Some(state);
                     if let Some(view) = &mut view {
-                        view.show_brightness(brightness);
-                        view.show_display_mode(display_mode.as_deref());
-                        view.show_transcript_monitoring(transcript_monitoring);
+                        view.show_brightness(controls.as_ref().and_then(|state| state.brightness));
+                        view.show_display_mode(
+                            controls
+                                .as_ref()
+                                .and_then(|state| state.display_mode.as_deref()),
+                        );
+                        view.show_transcript_monitoring(
+                            controls
+                                .as_ref()
+                                .map(|state| (state.codex_transcripts, state.claude_transcripts)),
+                        );
                         #[cfg(target_os = "macos")]
-                        view.show_sleep_policy(sleep_policy.as_deref());
+                        view.show_sleep_policy(
+                            controls
+                                .as_ref()
+                                .and_then(|state| state.sleep_policy.as_deref()),
+                        );
                     }
                     if last_devices != devices {
                         if let Some((ref entries, ref active)) = devices
@@ -728,10 +643,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 if last_state.as_ref() != Some(&state) {
                     view.show_snapshot(&snapshot)?;
                 }
-                view.show_brightness(fetch_brightness(&endpoint).ok().flatten());
-                view.show_display_mode(fetch_display_mode(&endpoint).ok().flatten().as_deref());
+                let controls = fetch_controls(&endpoint).ok();
+                view.show_brightness(controls.as_ref().and_then(|state| state.brightness));
+                view.show_display_mode(
+                    controls
+                        .as_ref()
+                        .and_then(|state| state.display_mode.as_deref()),
+                );
                 view.show_transcript_monitoring(
-                    fetch_transcript_monitoring(&endpoint).ok().flatten(),
+                    controls
+                        .as_ref()
+                        .map(|state| (state.codex_transcripts, state.claude_transcripts)),
                 );
                 let devices = fetch_devices(&endpoint).ok();
                 if last_devices != devices {
