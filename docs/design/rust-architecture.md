@@ -166,9 +166,15 @@ control, not complete settings parity. Settings paths remain opt-in during
 migration, and native tray interaction still needs visual runtime validation.
 An opt-in `--auto-device` mode now scans platform mount roots, keeps the
 selected device while mounted, and reconnects after removal and return.
-It uses each device's saved brightness. Windows discovery recognizes a drive
-root containing `LEDS.LED`; volume-label discovery and physical-device runtime
-validation remain open.
+It uses each device's saved brightness. Windows discovery now enumerates
+assigned fixed and removable drives and recognizes their volume label or
+`LEDS.LED`. Dot LED counts use that volume label too. Native volume queries
+suppress missing-media dialogs for their calling thread and restore its error
+mode; Windows tests cover the native probe and that restoration. Physical
+device runtime validation remains open.
+An optional label in the device protocol lets the shared UI model show the
+device name instead of just its Windows drive letter. Older payloads without
+that label still deserialize and use their mount path.
 The service now exposes its discovered devices and accepts a selection over
 IPC. The CLI can list or select them, and the native tray renders the same
 choices. Only the service changes its active `DeviceOutput`.

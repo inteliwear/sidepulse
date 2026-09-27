@@ -75,6 +75,8 @@ pub struct DeviceInfo {
     pub root: String,
     pub target: String,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl ClientRequest {
@@ -120,6 +122,15 @@ impl ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_device_payloads_without_optional_volume_label() {
+        let device: DeviceInfo = serde_json::from_str(
+            r#"{"root":"D:\\","target":"D:\\LEDS.LED","reason":"contains LEDS.LED"}"#,
+        )
+        .unwrap();
+        assert_eq!(device.label, None);
+    }
 
     #[test]
     fn round_trips_versioned_hook_request() {

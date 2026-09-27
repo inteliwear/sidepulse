@@ -9,7 +9,7 @@ repository.workspace = true
 sidepulse-core = { path = "../sidepulse-core" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_System_Power"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Power", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_WindowsProgramming"] }
 
 [dev-dependencies]
 tempfile = "3"

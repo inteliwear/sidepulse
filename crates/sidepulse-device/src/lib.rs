@@ -11,6 +11,8 @@ pub mod animations;
 pub mod battery;
 pub mod battery_source;
 pub mod virtual_led;
+#[cfg(windows)]
+mod windows_volume;
 
 pub const DEFAULT_FILE_NAME: &str = "LEDS.LED";
 pub const MAX_LED_BYTES: usize = 512;
@@ -29,6 +31,7 @@ pub struct DeviceCandidate {
     pub root: PathBuf,
     pub target: PathBuf,
     pub reason: String,
+    pub label: Option<String>,
 }
 
 pub fn display_state_for_mode(mode: AgentMode) -> LedDisplayState {
@@ -45,8 +48,15 @@ pub fn display_state_for_mode(mode: AgentMode) -> LedDisplayState {
 pub fn led_count_for_target(target: &Path) -> usize {
     let name = target
         .parent()
-        .and_then(Path::file_name)
-        .map(|name| normalized_name(&name.to_string_lossy()))
+        .and_then(|root| {
+            #[cfg(windows)]
+            if windows_volume::is_drive_root(root) {
+                return windows_volume::volume_label(root);
+            }
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .map(|name| normalized_name(&name))
         .unwrap_or_default();
     if name.contains("sidepulsedot") || name.contains("pulsedot") {
         2
@@ -129,6 +139,31 @@ pub fn discover_devices(roots: &[PathBuf]) -> Vec<DeviceCandidate> {
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for root in roots {
+        #[cfg(windows)]
+        if windows_volume::is_drive_root(root) {
+            if !seen.insert(root.clone()) {
+                continue;
+            }
+            if let Some(label) = windows_volume::volume_label(root) {
+                let target = target_from_device_path(root);
+                let reason = if target.is_file() {
+                    Some(format!("contains {DEFAULT_FILE_NAME}"))
+                } else if is_device_name(&label) {
+                    Some(format!("volume label matches device: {label}"))
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    candidates.push(DeviceCandidate {
+                        root: root.clone(),
+                        target,
+                        reason,
+                        label: (!label.is_empty()).then_some(label),
+                    });
+                }
+            }
+            continue;
+        }
         if root.is_dir() {
             let target = target_from_device_path(root);
             if target.is_file() && seen.insert(root.clone()) {
@@ -136,6 +171,7 @@ pub fn discover_devices(roots: &[PathBuf]) -> Vec<DeviceCandidate> {
                     root: root.clone(),
                     target,
                     reason: format!("contains {DEFAULT_FILE_NAME}"),
+                    label: None,
                 });
             }
         }
@@ -168,6 +204,7 @@ pub fn discover_devices(roots: &[PathBuf]) -> Vec<DeviceCandidate> {
                     root: volume,
                     target,
                     reason,
+                    label: None,
                 });
             }
         }
@@ -202,9 +239,7 @@ pub fn default_mount_roots() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        (b'D'..=b'Z')
-            .map(|letter| PathBuf::from(format!("{}:\\", letter as char)))
-            .collect()
+        windows_volume::mounted_drive_roots()
     }
 }
 

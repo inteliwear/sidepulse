@@ -12,6 +12,7 @@ use sidepulse_core::{
 use sidepulse_ui_model::SLEEP_CHOICES;
 use sidepulse_ui_model::{
     BRIGHTNESS_CHOICES, DISPLAY_CHOICES, StatusIcon, TrayControls, TrayState, brightness_label,
+    device_display_name,
 };
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -285,11 +286,7 @@ impl TrayView {
             format!("Devices ({})", devices.len())
         });
         for (index, device) in devices.iter().enumerate() {
-            let name = std::path::Path::new(&device.root)
-                .file_name()
-                .map_or(device.root.as_str().into(), |name| {
-                    name.to_string_lossy().into_owned()
-                });
+            let name = device_display_name(device);
             let label = if active == Some(device.target.as_str()) {
                 format!("✓ {name}")
             } else {

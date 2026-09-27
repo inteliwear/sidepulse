@@ -158,6 +158,7 @@ impl Service {
                 root: candidate.root.to_string_lossy().into_owned(),
                 target: candidate.target.to_string_lossy().into_owned(),
                 reason: candidate.reason,
+                label: candidate.label,
             })
             .collect();
         let active = self

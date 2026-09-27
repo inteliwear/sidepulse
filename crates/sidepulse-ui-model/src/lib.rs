@@ -2,7 +2,17 @@
 //! This crate reads service snapshots; it never opens hooks, monitors logs,
 //! writes device output, or imports a GUI toolkit.
 
-use sidepulse_core::{AgentMode, AgentStatus, MonitorSnapshot, ServerPayload};
+use sidepulse_core::{AgentMode, AgentStatus, DeviceInfo, MonitorSnapshot, ServerPayload};
+
+pub fn device_display_name(device: &DeviceInfo) -> String {
+    if let Some(label) = device.label.as_deref().filter(|label| !label.is_empty()) {
+        return label.to_owned();
+    }
+    std::path::Path::new(&device.root).file_name().map_or_else(
+        || device.root.clone(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusIcon {
@@ -297,5 +307,16 @@ mod tests {
         let controls = TrayControls::from_service_payload(&disconnected_device).unwrap();
         assert_eq!(controls.brightness, None);
         assert_eq!(controls.display_mode, None);
+    }
+
+    #[test]
+    fn windows_volume_label_is_presented_instead_of_drive_letter() {
+        let device = DeviceInfo {
+            root: "D:\\".into(),
+            target: "D:\\LEDS.LED".into(),
+            reason: "volume label matches device".into(),
+            label: Some("SidePulse Dot".into()),
+        };
+        assert_eq!(device_display_name(&device), "SidePulse Dot");
     }
 }
