@@ -4,8 +4,11 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
 
 const BINARIES: [&str; 5] = [
@@ -185,6 +188,133 @@ impl StagePlan {
         manifest_file.sync_all()?;
         fs::rename(temporary.path(), final_dir)?;
         Ok(&self.manifest)
+    }
+}
+
+/// Start the isolated service from a staged bundle and verify IPC, then stop it.
+/// This never installs hooks, registers startup jobs, or configures a device.
+pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
+    let stage_dir = fs::canonicalize(stage_dir)?;
+    let manifest: StageManifest =
+        serde_json::from_slice(&fs::read(stage_dir.join("manifest.json"))?)?;
+    let platform = Platform::current()?;
+    let expected_binaries = BINARIES
+        .iter()
+        .map(|name| {
+            stage_dir
+                .join("bin")
+                .join(format!("{name}{}", platform.executable_suffix()))
+        })
+        .collect::<Vec<_>>();
+    let expected_endpoint = endpoint_for_stage(&stage_dir, platform);
+    let expected_command = vec![
+        expected_binaries[2].to_string_lossy().into_owned(),
+        expected_endpoint.clone(),
+        "--state".into(),
+        stage_dir
+            .join("state/latest.json")
+            .to_string_lossy()
+            .into_owned(),
+        "--settings".into(),
+        stage_dir
+            .join("settings.json")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    if manifest.stage_dir != stage_dir
+        || manifest.platform != platform
+        || manifest.binaries != expected_binaries
+        || manifest.endpoint != expected_endpoint
+        || manifest.service_command != expected_command
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bundle manifest does not match its location or isolated service command",
+        ));
+    }
+    for binary in &manifest.binaries {
+        if !fs::symlink_metadata(binary).is_ok_and(|metadata| metadata.file_type().is_file()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bundle binary is missing or is not a regular file",
+            ));
+        }
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind: RequestKind::Snapshot,
+    };
+    if sidepulse_ipc::request::<_, ServerMessage>(
+        &manifest.endpoint,
+        &request,
+        Duration::from_millis(200),
+    )
+    .is_ok()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a service already owns the preview endpoint",
+        ));
+    }
+    let mut child = SmokeChild(
+        Command::new(&manifest.service_command[0])
+            .args(&manifest.service_command[1..])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?,
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(response) = sidepulse_ipc::request::<_, ServerMessage>(
+            &manifest.endpoint,
+            &request,
+            Duration::from_millis(300),
+        ) && matches!(response.payload, ServerPayload::Snapshot { .. })
+        {
+            break;
+        }
+        if let Some(status) = child.0.try_wait()? {
+            return Err(io::Error::other(format!(
+                "preview service exited: {status}"
+            )));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "preview service did not become ready",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let settings = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 2,
+        kind: RequestKind::Settings,
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(&manifest.endpoint, &settings, Duration::from_secs(2))?;
+    if !matches!(
+        response.payload,
+        ServerPayload::Settings {
+            active_device: None,
+            ..
+        }
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "preview service settings or device isolation failed",
+        ));
+    }
+    Ok(())
+}
+
+struct SmokeChild(Child);
+
+impl Drop for SmokeChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -432,6 +562,26 @@ mod tests {
                 .unwrap()
                 .kind(),
             io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn smoke_check_rejects_a_modified_service_command_before_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let platform = Platform::current().unwrap();
+        dummy_binaries(&source, platform);
+        let destination = directory.path().join("preview");
+        let plan = StagePlan::new(&source, &destination, platform).unwrap();
+        plan.stage().unwrap();
+        let manifest_path = destination.join("manifest.json");
+        let mut manifest: StageManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.service_command.push("--auto-device".into());
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            smoke_stage(&destination).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
         );
     }
 }

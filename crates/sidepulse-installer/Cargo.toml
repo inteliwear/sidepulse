@@ -13,4 +13,5 @@ path = "src/main.rs"
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
-
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }

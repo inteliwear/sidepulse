@@ -85,9 +85,11 @@ to the service; its UI event loop is native on macOS and Windows and uses the
 KSNI tray backend on Linux. The development tray compiled and stayed running
 during a macOS smoke test with a temporary Rust service and hook event.
 Rust formatting, linting, and workspace tests run in CI on macOS, Linux, and
-Windows; the workflow also builds and retains isolated preview bundles for
-each OS using the native staging tool. These are development artifacts, not
-signed release packages. Visual behavior
+Windows; the workflow also stages and smoke-tests the isolated service on each
+OS, then retains portable
+preview binaries. A downloaded artifact can be staged at its destination with
+`sidepulse-next-stage` so generated startup files contain the right absolute
+paths. These are development artifacts, not signed release packages. Visual behavior
 on macOS and runtime UI and device behavior on Linux
 and Windows still need validation. These executables are not installed by the
 existing setup flow.
@@ -100,6 +102,8 @@ systemd user units, and Windows gets PowerShell launch scripts. The
 existing preview. It does not register startup jobs, install hooks, use the
 existing settings file, or enable physical device output. This is a staging
 step for native installation and rollback testing, not a production cutover.
+Its `--smoke-stage` check starts and stops the staged service and verifies
+snapshot/settings IPC with no selected device.
 
 The `sidepulse-device` crate now owns the default LED programs, program
 validation, candidate discovery, and synced writes. An explicitly configured

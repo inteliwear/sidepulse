@@ -2,13 +2,33 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sidepulse_installer::{Platform, StagePlan};
+use sidepulse_installer::{Platform, StagePlan, smoke_stage};
 
 fn main() -> ExitCode {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|flag| flag == "--smoke-stage")
+    {
+        if arguments.len() != 2 {
+            eprintln!("usage: sidepulse-next-stage --smoke-stage DIR");
+            return ExitCode::from(2);
+        }
+        return match smoke_stage(&PathBuf::from(&arguments[1])) {
+            Ok(()) => {
+                println!("Preview service passed the isolated startup check.");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("sidepulse-next-stage: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let mut source_dir = None;
     let mut stage_dir = None;
     let mut dry_run = false;
-    let mut args = env::args().skip(1);
+    let mut args = arguments.into_iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--source-dir" | "--stage-dir" => {
