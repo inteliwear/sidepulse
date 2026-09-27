@@ -76,8 +76,10 @@ the `sidepulse-next-hook` hook executable. The hook handles Cursor names,
 Junie's missing context, Grok routing, provider JSONL, legacy audit JSONL, and
 best-effort service delivery. The service can replay provider logs at startup
 when launched with `--log PROVIDER PATH` pairs. Hook and service are separate
-from the UI. The `sidepulse-ui-model` crate turns service snapshots into common
-tray state without owning monitoring or output. A `sidepulse-next-tray` client
+from the UI. Unix IPC startup can reclaim an abandoned socket after checking
+that it is a socket with no listener; active sockets and regular files remain.
+The `sidepulse-ui-model` crate turns service snapshots into common tray state
+without owning monitoring or output. A `sidepulse-next-tray` client
 now renders the mode, active agents, and a quit action. It polls and reconnects
 to the service; its UI event loop is native on macOS and Windows and uses the
 KSNI tray backend on Linux. The development tray compiled and stayed running

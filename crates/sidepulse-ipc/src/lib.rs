@@ -11,6 +11,8 @@ pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 /// A socket pathname on Unix, or a local named-pipe identifier on Windows.
 pub fn bind(endpoint: &str) -> io::Result<local_socket::Listener> {
+    #[cfg(unix)]
+    reclaim_stale_socket(endpoint)?;
     let name = endpoint_name(endpoint)?;
     let options = ListenerOptions::new().name(name);
     #[cfg(target_os = "linux")]
@@ -25,6 +27,36 @@ pub fn bind(endpoint: &str) -> io::Result<local_socket::Listener> {
         std::fs::set_permissions(endpoint, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(listener)
+}
+
+#[cfg(unix)]
+fn reclaim_stale_socket(endpoint: &str) -> io::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::os::unix::net::UnixStream;
+
+    let before = match std::fs::symlink_metadata(endpoint) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !before.file_type().is_socket() {
+        return Ok(());
+    }
+    match UnixStream::connect(endpoint) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {}
+        Err(error) => return Err(error),
+    }
+    let after = std::fs::symlink_metadata(endpoint)?;
+    if !after.file_type().is_socket() || before.dev() != after.dev() || before.ino() != after.ino()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "socket changed during stale-socket check",
+        ));
+    }
+    std::fs::remove_file(endpoint)
 }
 
 pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<local_socket::Stream> {
@@ -199,6 +231,35 @@ mod tests {
         assert_eq!(response.payload, ServerPayload::Ack);
         server.join().unwrap();
         std::fs::remove_dir(&directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaims_stale_socket_but_preserves_live_socket_and_regular_file() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = std::path::Path::new("/tmp").join(format!(
+            "sidepulse-stale-ipc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let endpoint = directory.join("service.sock");
+        drop(UnixListener::bind(&endpoint).unwrap());
+        assert!(endpoint.exists());
+        let live = bind(endpoint.to_str().unwrap()).unwrap();
+        assert!(bind(endpoint.to_str().unwrap()).is_err());
+        assert!(endpoint.exists());
+        drop(live);
+        let regular = directory.join("regular.sock");
+        std::fs::write(&regular, b"keep").unwrap();
+        assert!(bind(regular.to_str().unwrap()).is_err());
+        assert_eq!(std::fs::read(&regular).unwrap(), b"keep");
+        std::fs::remove_file(regular).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[cfg(windows)]
