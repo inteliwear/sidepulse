@@ -122,10 +122,19 @@ mod tests {
     fn native_probe_restores_thread_error_mode() {
         let previous = unsafe { GetThreadErrorMode() };
         let roots = mounted_drive_roots();
+        assert!(
+            !roots.is_empty(),
+            "Windows must expose its local system drive"
+        );
+        let mut readable_volume = false;
         for root in roots {
             assert!(is_drive_root(&root));
-            let _ = volume_label(&root);
+            readable_volume |= volume_label(&root).is_some();
         }
+        assert!(
+            readable_volume,
+            "native volume query must read at least one local drive"
+        );
         assert_eq!(unsafe { GetThreadErrorMode() }, previous);
     }
 }
