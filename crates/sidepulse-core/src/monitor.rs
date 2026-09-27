@@ -270,10 +270,13 @@ pub fn mode_for_event(event: &HookEvent) -> Option<AgentMode> {
             return Some(mode);
         }
     }
-    for key in ["last_assistant_message", "message"] {
-        if let Some(mode) = raw.get(key).and_then(Value::as_str).and_then(mode_marker) {
-            return Some(mode);
-        }
+    let marker_message = raw
+        .get("last_assistant_message")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| raw.get("message").and_then(Value::as_str));
+    if let Some(mode) = marker_message.and_then(mode_marker) {
+        return Some(mode);
     }
     match event.event_name.as_str() {
         "PostToolUseFailure" | "PermissionDenied" | "StopFailure" => Some(AgentMode::BlockedError),
@@ -283,11 +286,13 @@ pub fn mode_for_event(event: &HookEvent) -> Option<AgentMode> {
                 .get("notification_type")
                 .and_then(Value::as_str)
                 .unwrap_or("")
+                .trim()
                 .to_lowercase();
             let message = raw
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("")
+                .trim()
                 .to_lowercase();
             let text = format!("{kind} {message}");
             if [
@@ -331,11 +336,17 @@ pub fn mode_for_event(event: &HookEvent) -> Option<AgentMode> {
         "UserPromptSubmit" | "PreCompact" | "PostCompact" | "SubagentStart" => {
             Some(AgentMode::Working)
         }
-        "Stop" | "SubagentStop" => Some(if event.message.as_deref().is_some_and(asks_question) {
-            AgentMode::WaitingForInput
-        } else {
-            AgentMode::Completed
-        }),
+        "Stop" | "SubagentStop" => Some(
+            if raw
+                .get("last_assistant_message")
+                .and_then(Value::as_str)
+                .is_some_and(asks_question)
+            {
+                AgentMode::WaitingForInput
+            } else {
+                AgentMode::Completed
+            },
+        ),
         "SessionEnd" => Some(AgentMode::Completed),
         "SessionStart" => Some(AgentMode::IdleReady),
         _ => None,
@@ -574,12 +585,9 @@ fn truncate_text(value: &str, max_len: usize) -> String {
 }
 
 fn explicit_mode(value: &str) -> Option<AgentMode> {
-    let normalized = value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect::<String>();
+    static SEPARATORS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+    let lower = value.trim().to_lowercase();
+    let normalized = SEPARATORS.replace_all(&lower, "_");
     match normalized.trim_matches('_') {
         "ask" | "question" | "waiting" | "waiting_for_input" | "input" => {
             Some(AgentMode::WaitingForInput)
@@ -595,35 +603,20 @@ fn explicit_mode(value: &str) -> Option<AgentMode> {
 }
 
 fn mode_marker(message: &str) -> Option<AgentMode> {
-    static MARKER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)^(?:sidepulse|agent[-_ ]monitor)(?:\s+(?:status|mode))?\s*:\s*(.+)$")
-            .unwrap()
+    static CODE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)```.*?```").unwrap());
+    static MARKERS: LazyLock<[Regex; 3]> = LazyLock::new(|| {
+        [
+            r"(?im)^\s*<!--\s*(?:sidepulse|agent[-_ ]monitor)\s*:\s*([a-z0-9_ -]+)\s*-->\s*$",
+            r"(?im)^\s*<!--\s*(?:sidepulse|agent[-_ ]monitor)\s+(?:status|mode)\s*:\s*([a-z0-9_ -]+)\s*-->\s*$",
+            r"(?im)^\s*\[(?:sidepulse|agent[-_ ]monitor)\s+(?:status|mode)\s*:\s*([a-z0-9_ -]+)\]\s*$",
+        ].map(|pattern| Regex::new(pattern).unwrap())
     });
-    let mut in_code_block = false;
-    for line in message.lines() {
-        let line = line.trim();
-        if line.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
-            continue;
-        }
-        if let Some(body) = line
-            .strip_prefix("<!--")
-            .and_then(|text| text.strip_suffix("-->"))
-            && let Some(captures) = MARKER.captures(body.trim())
-            && let Some(mode) = explicit_mode(&captures[1])
-        {
-            return Some(mode);
-        }
-        if let Some(body) = line
-            .strip_prefix('[')
-            .and_then(|text| text.strip_suffix(']'))
-            && let Some(captures) = MARKER.captures(body.trim())
-            && let Some(mode) = explicit_mode(&captures[1])
-        {
-            return Some(mode);
+    let text = CODE_BLOCK.replace_all(message, "");
+    for marker in MARKERS.iter() {
+        for captures in marker.captures_iter(&text) {
+            if let Some(mode) = explicit_mode(&captures[1]) {
+                return Some(mode);
+            }
         }
     }
     None
@@ -822,6 +815,35 @@ mod tests {
             mode_marker("[sidepulse status: done]"),
             Some(AgentMode::Completed)
         );
+        assert_eq!(mode_marker("[sidepulse: ask]"), None);
+        assert_eq!(
+            mode_marker("[sidepulse status: done]\n<!-- sidepulse: ask -->"),
+            Some(AgentMode::WaitingForInput)
+        );
+        assert_eq!(
+            explicit_mode("waiting---for input"),
+            Some(AgentMode::WaitingForInput)
+        );
+    }
+
+    #[test]
+    fn final_status_uses_assistant_message_and_marker_precedence() {
+        let mut stopped = event("Stop");
+        stopped.raw = serde_json::json!({
+            "message": "Complete.",
+            "last_assistant_message": "Please choose a region."
+        });
+        assert_eq!(mode_for_event(&stopped), Some(AgentMode::WaitingForInput));
+        stopped.raw = serde_json::json!({
+            "message": "<!-- sidepulse: ask -->",
+            "last_assistant_message": "Complete."
+        });
+        assert_eq!(mode_for_event(&stopped), Some(AgentMode::Completed));
+
+        let mut notification = event("Notification");
+        notification.raw =
+            serde_json::json!({"notification_type":" idle_prompt ","message":" done "});
+        assert_eq!(mode_for_event(&notification), Some(AgentMode::Completed));
     }
 
     #[test]

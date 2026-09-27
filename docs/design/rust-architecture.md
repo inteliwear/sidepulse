@@ -129,6 +129,8 @@ log paths in the five provider configuration files, then falls back to the
 default state directory. The monitor retains project and prompt titles across
 hook events and reads Codex session titles from its local index. An isolated
 Python/Rust status comparison matched both provider display names and modes.
+Seven additional marker, message-precedence, question, and notification cases
+also match Python's status rules.
 Default source selection follows Python by including Cursor only when its log
 is explicitly requested.
 The `sidepulse-sources` crate shares source selection,
