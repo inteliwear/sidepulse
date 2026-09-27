@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
 
-const BINARIES: [&str; 5] = [
+const BINARIES: [&str; 6] = [
     "sidepulse-next",
     "sidepulse-next-hook",
     "sidepulse-next-service",
     "sidepulse-next-tray",
     "sidepulse-next-stage",
+    "sidepulse-next-settings",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +56,8 @@ pub struct StageManifest {
     pub service_command: Vec<String>,
     pub tray_command: Vec<String>,
     pub launch_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub application_bundles: Vec<PathBuf>,
     pub enabled: bool,
 }
 
@@ -91,7 +94,15 @@ impl StagePlan {
             .collect::<io::Result<Vec<_>>>()?;
         let endpoint = endpoint_for_stage(&stage_dir, platform);
         let service_command = service_command_for_stage(&stage_dir, &binaries[2], &endpoint);
-        let tray_command = vec![binaries[3].to_string_lossy().into_owned(), endpoint.clone()];
+        let tray_executable = if platform == Platform::Macos {
+            stage_dir.join("applications/SidePulse Tray.app/Contents/MacOS/sidepulse-next-tray")
+        } else {
+            binaries[3].clone()
+        };
+        let tray_command = vec![
+            tray_executable.to_string_lossy().into_owned(),
+            endpoint.clone(),
+        ];
         let launch_files = match platform {
             Platform::Macos => vec![
                 stage_dir.join("launch/io.sidepulse.next.service.plist"),
@@ -106,6 +117,14 @@ impl StagePlan {
                 stage_dir.join("launch/start-tray.ps1"),
             ],
         };
+        let application_bundles = if platform == Platform::Macos {
+            vec![
+                stage_dir.join("applications/SidePulse Tray.app"),
+                stage_dir.join("applications/SidePulse Settings.app"),
+            ]
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             source_dir,
             manifest: StageManifest {
@@ -117,6 +136,7 @@ impl StagePlan {
                 service_command,
                 tray_command,
                 launch_files,
+                application_bundles,
                 enabled: false,
             },
         })
@@ -157,6 +177,33 @@ impl StagePlan {
                 ));
             }
             fs::copy(&source, temporary.path().join("bin").join(filename))?;
+        }
+        for (bundle, (binary_index, label, identifier, tray)) in
+            self.manifest.application_bundles.iter().zip([
+                (3, "SidePulse Tray", "io.sidepulse.next.tray", true),
+                (5, "SidePulse Settings", "io.sidepulse.next.settings", false),
+            ])
+        {
+            let contents = temporary
+                .path()
+                .join("applications")
+                .join(bundle.file_name().unwrap())
+                .join("Contents");
+            fs::create_dir_all(contents.join("MacOS"))?;
+            fs::create_dir_all(contents.join("Resources"))?;
+            let filename = self.manifest.binaries[binary_index].file_name().unwrap();
+            fs::copy(
+                self.source_dir.join(filename),
+                contents.join("MacOS").join(filename),
+            )?;
+            fs::write(
+                contents.join("Resources/endpoint.txt"),
+                &self.manifest.endpoint,
+            )?;
+            fs::write(
+                contents.join("Info.plist"),
+                render_app_info(label, identifier, &filename.to_string_lossy(), tray),
+            )?;
         }
         fs::write(temporary.path().join("settings.json"), b"{}\n")?;
         let rendered = render_launch_files(&self.manifest);
@@ -397,6 +444,18 @@ fn render_plist(label: &str, command: &[String], working_directory: &Path) -> St
     )
 }
 
+fn render_app_info(name: &str, identifier: &str, executable: &str, tray: bool) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n<key>CFBundleName</key><string>{}</string>\n<key>CFBundleDisplayName</key><string>{}</string>\n<key>CFBundleIdentifier</key><string>{}</string>\n<key>CFBundleExecutable</key><string>{}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleVersion</key><string>1</string>\n<key>CFBundleShortVersionString</key><string>{}</string>\n<key>LSUIElement</key><{}/>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n",
+        xml_escape(name),
+        xml_escape(name),
+        xml_escape(identifier),
+        xml_escape(executable),
+        env!("CARGO_PKG_VERSION"),
+        if tray { "true" } else { "false" }
+    )
+}
+
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -467,7 +526,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
-            assert_eq!(manifest.binaries.len(), 5);
+            assert_eq!(manifest.binaries.len(), 6);
             assert_eq!(manifest.launch_files.len(), 2);
             assert_eq!(manifest.service_command.len(), 21);
             assert!(manifest.service_command.contains(&"cursor".to_owned()));
@@ -487,6 +546,22 @@ mod tests {
             }
             for launch_file in &manifest.launch_files {
                 assert!(launch_file.is_file());
+            }
+            if platform == Platform::Macos {
+                assert_eq!(manifest.application_bundles.len(), 2);
+                for bundle in &manifest.application_bundles {
+                    assert_eq!(
+                        fs::read_to_string(bundle.join("Contents/Resources/endpoint.txt")).unwrap(),
+                        manifest.endpoint
+                    );
+                    assert!(
+                        fs::read_to_string(bundle.join("Contents/Info.plist"))
+                            .unwrap()
+                            .contains("CFBundleExecutable")
+                    );
+                }
+            } else {
+                assert!(manifest.application_bundles.is_empty());
             }
             let saved: StageManifest =
                 serde_json::from_slice(&fs::read(destination.join("manifest.json")).unwrap())

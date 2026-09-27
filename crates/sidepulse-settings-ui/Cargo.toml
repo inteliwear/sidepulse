@@ -1,0 +1,17 @@
+[package]
+name = "sidepulse-settings-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sidepulse-next-settings"
+path = "src/main.rs"
+
+[dependencies]
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }
+sidepulse-ui-model = { path = "../sidepulse-ui-model" }
+serde_json.workspace = true
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }

@@ -43,6 +43,37 @@ fn main() -> ExitCode {
         Some("doctor") => sidepulse_cli::run_doctor(args),
         Some("link") => sidepulse_cli::run_link(args),
         Some("battery") => sidepulse_cli::run_battery(args),
+        Some("settings") => {
+            let endpoint = match (args.next(), args.next(), args.next()) {
+                (Some(flag), Some(endpoint), None) if flag == "--endpoint" => Some(endpoint),
+                (None, None, None) => env::var("SIDEPULSE_NEXT_ENDPOINT").ok(),
+                _ => None,
+            };
+            let Some(endpoint) = endpoint else {
+                eprintln!(
+                    "usage: sidepulse-next settings --endpoint ENDPOINT (or SIDEPULSE_NEXT_ENDPOINT)"
+                );
+                return ExitCode::from(2);
+            };
+            let result = env::current_exe().and_then(|path| {
+                let executable = if cfg!(target_os = "macos") {
+                    path.ancestors().take(3).map(|root| root.join("applications/SidePulse Settings.app/Contents/MacOS/sidepulse-next-settings"))
+                        .find(|candidate| candidate.is_file())
+                } else { None }.unwrap_or_else(|| path.with_file_name(if cfg!(windows) {
+                    "sidepulse-next-settings.exe"
+                } else {
+                    "sidepulse-next-settings"
+                }));
+                std::process::Command::new(executable).arg(endpoint).spawn()
+            });
+            match result {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("sidepulse-next settings: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("service-status") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next service-status ENDPOINT");
@@ -147,7 +178,7 @@ fn main() -> ExitCode {
         }
         Some("service-display") => {
             let (Some(endpoint), Some(mode), None) = (args.next(), args.next(), args.next()) else {
-                eprintln!("usage: sidepulse-next service-display ENDPOINT agent|battery");
+                eprintln!("usage: sidepulse-next service-display ENDPOINT agent|battery|custom");
                 return ExitCode::from(2);
             };
             if !matches!(mode.as_str(), "agent" | "battery" | "custom") {
@@ -231,7 +262,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery status [--json] [--full-watts auto|WATTS] | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | service-sleep-policy ENDPOINT never|agents|always | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

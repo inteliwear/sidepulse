@@ -32,6 +32,8 @@ struct TrayView {
     transcript_enabled: Option<(bool, bool)>,
     battery_preview_item: MenuItem,
     battery_preview_enabled: Option<bool>,
+    settings_item: MenuItem,
+    settings_child: Option<std::process::Child>,
     #[cfg(target_os = "macos")]
     sleep_status: MenuItem,
     #[cfg(target_os = "macos")]
@@ -66,6 +68,7 @@ impl TrayView {
         let sleep_items =
             SLEEP_CHOICES.map(|choice| (MenuItem::new(choice.label, false, None), choice.value));
         let controls_separator = PredefinedMenuItem::separator();
+        let settings_item = MenuItem::new("Settings…", true, None);
         let quit = MenuItem::new("Quit SidePulse tray", true, None);
         menu.append_items(&[&status, &separator, &device_status, &brightness_status])?;
         for (item, _) in &brightness_items {
@@ -87,7 +90,7 @@ impl TrayView {
                 menu.append(item)?;
             }
         }
-        menu.append_items(&[&controls_separator, &quit])?;
+        menu.append_items(&[&controls_separator, &settings_item, &quit])?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon(StatusIcon::Unknown)?)
@@ -108,6 +111,8 @@ impl TrayView {
             transcript_enabled: None,
             battery_preview_item,
             battery_preview_enabled: None,
+            settings_item,
+            settings_child: None,
             #[cfg(target_os = "macos")]
             sleep_status,
             #[cfg(target_os = "macos")]
@@ -266,6 +271,31 @@ impl TrayView {
             .then_some(self.battery_preview_enabled)
             .flatten()
             .map(|enabled| !enabled)
+    }
+
+    fn open_settings(&mut self, endpoint: &str) -> Result<(), Box<dyn Error>> {
+        if self
+            .settings_child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+        {
+            return Ok(());
+        }
+        let current = std::env::current_exe()?;
+        let executable = if cfg!(target_os = "macos") {
+            current.ancestors().take(6).map(|path| path.join("applications/SidePulse Settings.app/Contents/MacOS/sidepulse-next-settings"))
+                .find(|path| path.is_file())
+        } else { None }.unwrap_or_else(|| current.with_file_name(if cfg!(windows) {
+            "sidepulse-next-settings.exe"
+        } else {
+            "sidepulse-next-settings"
+        }));
+        self.settings_child = Some(
+            std::process::Command::new(executable)
+                .arg(endpoint)
+                .spawn()?,
+        );
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
@@ -624,6 +654,13 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 *flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Menu(event)) => {
+                if let Some(view) = &mut view
+                    && event.id == *view.settings_item.id()
+                    && let Err(error) = view.open_settings(&control_endpoint)
+                {
+                    view.status
+                        .set_text(format!("Could not open settings: {error}"));
+                }
                 if let Some(enabled) = view
                     .as_ref()
                     .and_then(|view| view.battery_preview_for_menu_event(&event))
@@ -734,6 +771,13 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             if event.id == *view.quit.id() {
                 break;
             }
+            if event.id == *view.settings_item.id() {
+                if let Err(error) = view.open_settings(&endpoint) {
+                    view.status
+                        .set_text(format!("Could not open settings: {error}"));
+                }
+                continue;
+            }
             if let Some(brightness) = view.brightness_for_menu_event(&event) {
                 let _ = send_brightness(&endpoint, brightness);
             } else if let Some(enabled) = view.battery_preview_for_menu_event(&event) {
@@ -754,6 +798,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let endpoint = env::args()
         .nth(1)
+        .or_else(|| env::var("SIDEPULSE_NEXT_ENDPOINT").ok())
+        .or_else(|| {
+            let executable = env::current_exe().ok()?;
+            std::fs::read_to_string(
+                executable
+                    .parent()?
+                    .parent()?
+                    .join("Resources/endpoint.txt"),
+            )
+            .ok()
+        })
         .ok_or("usage: sidepulse-next-tray ENDPOINT")?;
     run(endpoint)
 }

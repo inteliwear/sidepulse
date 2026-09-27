@@ -68,6 +68,26 @@ During migration:
 The optional reply classifier and maintained examples are part of the final
 Rust migration. Their model behavior requires separate parity evaluation.
 
+## Settings window implementation
+
+The cross-platform settings window uses Rust `egui`/`eframe` as a separate
+client executable. It reads the same shared presentation model as the tray
+and sends versioned service requests for every setting change. A background
+client worker performs IPC so reconnects and saves cannot block drawing. The
+service remains the owner of settings validation, persistence, monitoring,
+power policy, and device output. Native tray clients and the CLI open the
+sibling settings executable with their existing endpoint. The window is
+included in preview bundles but does not register itself for startup.
+The first window covers live activity, device selection, brightness, agent /
+battery / manual display, charger baseline and power-change previews,
+transcript monitoring, and macOS awake preferences. macOS staging now includes
+native `.app` bundles for tray and settings, with the isolated endpoint in
+their resources. Local window checks exercised saving, preserving manual LED
+output, visible external-edit conflicts, retained edits, and reconnecting
+after a service restart. Animation editing, session-opening preferences,
+history, relay controls, virtual display, and broader sleep controls still
+need implementation.
+
 ## Current migration state
 
 The Rust workspace currently contains the portable event/status core, a

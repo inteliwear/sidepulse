@@ -109,6 +109,36 @@ impl TrayControls {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsView {
+    pub controls: TrayControls,
+    pub full_charge_watts: Option<f64>,
+    pub power_change_preview_seconds: f64,
+}
+
+impl SettingsView {
+    pub fn from_service_payload(payload: &ServerPayload) -> Option<Self> {
+        let controls = TrayControls::from_service_payload(payload)?;
+        let ServerPayload::Settings { settings, .. } = payload else {
+            return None;
+        };
+        let battery = settings.get("battery_monitoring");
+        Some(Self {
+            controls,
+            full_charge_watts: battery
+                .and_then(|value| value.get("full_charge_watts"))
+                .and_then(|value| value.as_f64())
+                .filter(|watts| watts.is_finite() && *watts > 0.0),
+            power_change_preview_seconds: battery
+                .and_then(|value| value.get("power_change_preview_seconds"))
+                .and_then(|value| value.as_f64())
+                .filter(|seconds| seconds.is_finite())
+                .unwrap_or(7.0)
+                .max(0.0),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrightnessChoice {
     pub label: &'static str,
