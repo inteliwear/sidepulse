@@ -103,7 +103,7 @@ fn recent_files(root: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
             }
         }
     }
-    found.sort_by(|left, right| right.1.cmp(&left.1));
+    found.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
     Ok(found
         .into_iter()
         .take(limit)
