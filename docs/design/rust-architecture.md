@@ -124,6 +124,8 @@ log paths in the five provider configuration files, then falls back to the
 default state directory. The monitor retains project and prompt titles across
 hook events and reads Codex session titles from its local index. An isolated
 Python/Rust status comparison matched both provider display names and modes.
+Default source selection follows Python by including Cursor only when its log
+is explicitly requested.
 The `sidepulse-sources` crate shares source selection,
 bounded replay, and appended-row recovery between CLI and service. The service
 replays those sources at startup and tails new complete rows so events written

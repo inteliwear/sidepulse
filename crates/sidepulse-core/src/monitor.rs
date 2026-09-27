@@ -100,8 +100,15 @@ impl Monitor {
 
     pub fn ingest(&mut self, event: &HookEvent) -> Option<&AgentStatus> {
         let metadata = self.metadata_for_record(event);
-        let status = status_from_event(event, &metadata)?;
+        let mut status = status_from_event(event, &metadata)?;
         let key = status.agent_id.clone();
+        if metadata.title.is_none()
+            && event.cwd.is_none()
+            && let Some(previous) = self.statuses.get(&key)
+            && previous.session_id == status.session_id
+        {
+            status.display_name = previous.display_name.clone();
+        }
         if self
             .statuses
             .get(&key)
@@ -876,6 +883,35 @@ mod tests {
                 .get("abc")
                 .map(String::as_str),
             Some("Updated title")
+        );
+    }
+
+    #[test]
+    fn restored_status_keeps_its_name_when_next_event_has_no_context() {
+        let mut monitor = Monitor::default();
+        monitor.restore_statuses([AgentStatus {
+            provider: "claude".into(),
+            agent_id: "claude:session:abc".into(),
+            display_name: "project: Saved title (abc)".into(),
+            mode: AgentMode::Working,
+            updated_at: Utc.with_ymd_and_hms(2026, 9, 26, 11, 0, 0).unwrap(),
+            event_name: "UserPromptSubmit".into(),
+            session_id: Some("abc".into()),
+            cwd: Some("/tmp/project".into()),
+            tool_name: None,
+            message: None,
+            origin: None,
+            stale: false,
+        }]);
+        let next = parse_log_line(
+            "claude",
+            r#"{"logged_at":"2026-09-26T12:00:00Z","hook_event_name":"PreToolUse","session_id":"abc"}"#,
+        )
+        .unwrap();
+        monitor.ingest(&next);
+        assert_eq!(
+            monitor.stored_statuses()[0].display_name,
+            "project: Saved title (abc)"
         );
     }
 }

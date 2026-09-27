@@ -45,6 +45,9 @@ pub fn resolve_sources(
     let default_dir = state_root.join("sidepulse/agent-monitor");
     let mut sources = PROVIDERS
         .into_iter()
+        .filter(|provider| {
+            *provider != "cursor" || overrides.iter().any(|(name, _)| name == "cursor")
+        })
         .map(|provider| {
             let path = overrides
                 .iter()
@@ -167,12 +170,21 @@ mod tests {
             Some(Path::new("~/state")),
             &[("claude".into(), PathBuf::from("/logs/claude.jsonl"))],
         );
-        assert_eq!(sources.len(), 5);
+        assert_eq!(sources.len(), 4);
         assert_eq!(
             sources[0].path,
             home.join("state/sidepulse/agent-monitor/codex.jsonl")
         );
         assert_eq!(sources[1].path, PathBuf::from("/logs/claude.jsonl"));
+        assert!(sources.iter().all(|source| source.provider != "cursor"));
+
+        let with_cursor = resolve_sources(
+            home,
+            None,
+            &[("cursor".into(), PathBuf::from("/logs/cursor.jsonl"))],
+        );
+        assert_eq!(with_cursor.len(), 5);
+        assert_eq!(with_cursor[3].path, PathBuf::from("/logs/cursor.jsonl"));
     }
 
     #[test]
