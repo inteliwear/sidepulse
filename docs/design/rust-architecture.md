@@ -180,8 +180,13 @@ production service launch and UI control for relay configuration still need
 implementation.
 The core also owns portable awake-policy decisions, battery safeguard rules,
 closed-lid LED and animation decisions, and pure macOS sleep-diagnostic
-parsers. Mac system commands and display detection have not yet been wired to
-the Rust service; no privileged power setting is changed by this work.
+parsers. A read-only macOS service adapter reports the actual lid state,
+active external displays, and system sleep assertions through IPC; the CLI
+can inspect this with `service-power`. It uses CoreGraphics for display state.
+Non-macOS services return an explicit unsupported-platform error for this
+macOS-specific observation. Applying the awake policy, the optional sleep
+helper, and settings and UI controls remains to be ported; this adapter does
+not change system power settings.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover

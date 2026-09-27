@@ -19,3 +19,6 @@ sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-relay = { path = "../sidepulse-relay" }
 sidepulse-sources = { path = "../sidepulse-sources" }
 tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"

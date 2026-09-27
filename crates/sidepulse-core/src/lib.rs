@@ -29,6 +29,6 @@ pub use provider::{
 };
 pub use relay::{RelayEvent, parse_relay_message};
 pub use sleep::{
-    AwakePolicy, BatteryPower, MacSleepSnapshot, SleepInputs, SleepPlan, battery_safeguard_active,
-    parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
+    AwakePolicy, BatteryPower, MacSleepSnapshot, PowerSnapshot, SleepInputs, SleepPlan,
+    battery_safeguard_active, parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
 };

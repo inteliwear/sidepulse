@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::MonitorSnapshot;
+use crate::{MonitorSnapshot, PowerSnapshot};
 
 /// IPC data model shared by the service, CLI, and platform UI adapters.
 /// Each JSON message occupies one line and is limited to 1 MiB on the wire.
@@ -20,6 +20,7 @@ pub struct ClientRequest {
 pub enum RequestKind {
     Snapshot,
     Settings,
+    Power,
     Devices,
     SelectDevice { root: String },
     SetBrightness { brightness: u8 },
@@ -49,6 +50,9 @@ pub enum ServerPayload {
         active_device: Option<String>,
         brightness: Option<u8>,
         display_mode: Option<String>,
+    },
+    Power {
+        snapshot: PowerSnapshot,
     },
     Devices {
         devices: Vec<DeviceInfo>,

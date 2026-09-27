@@ -598,3 +598,35 @@ fn opt_in_relay_receives_remote_event_from_bridge() {
     }
     drop(server);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn service_reports_read_only_mac_power_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 14,
+        kind: RequestKind::Power,
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(3)).unwrap();
+    assert!(matches!(reply.payload, ServerPayload::Power { .. }));
+    drop(server);
+}

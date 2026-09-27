@@ -1956,6 +1956,7 @@ name = "sidepulse-daemon"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "core-graphics",
  "interprocess",
  "serde_json",
  "sidepulse-core",

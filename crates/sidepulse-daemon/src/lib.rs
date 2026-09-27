@@ -1,5 +1,6 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
+mod power;
 mod settings;
 
 use std::collections::{HashSet, VecDeque};
@@ -439,6 +440,26 @@ impl Service {
                         code: "settings_unavailable".into(),
                         message: "the service was started without --settings".into(),
                     },
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::Power => {
+                let payload = match power::observe() {
+                    Ok(snapshot) => ServerPayload::Power { snapshot },
+                    Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                        ServerPayload::Error {
+                            code: "unsupported_platform".into(),
+                            message: error.to_string(),
+                        }
+                    }
+                    Err(error) => return Err(error),
                 };
                 write_message(
                     &mut stream,

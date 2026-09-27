@@ -81,13 +81,20 @@ pub fn plan_sleep(inputs: SleepInputs) -> SleepPlan {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MacSleepSnapshot {
     pub sleep_disabled: Option<bool>,
     pub prevent_system_sleep: Option<bool>,
     pub prevent_user_idle_system_sleep: Option<bool>,
     pub prevent_user_idle_display_sleep: Option<bool>,
     pub user_is_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PowerSnapshot {
+    pub lid_closed: Option<bool>,
+    pub external_display_active: Option<bool>,
+    pub mac_sleep: MacSleepSnapshot,
 }
 
 impl MacSleepSnapshot {
