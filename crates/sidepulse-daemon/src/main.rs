@@ -5,12 +5,13 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH] [--settings PATH]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
         );
         return ExitCode::from(2);
     };
     let mut logs = Vec::new();
     let mut device = None;
+    let mut auto_device = false;
     let mut state = None;
     let mut settings = None;
     let mut brightness = None;
@@ -19,7 +20,7 @@ fn main() -> ExitCode {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
                     );
                     return ExitCode::from(2);
                 };
@@ -47,6 +48,7 @@ fn main() -> ExitCode {
                 };
                 device = Some(PathBuf::from(path));
             }
+            "--auto-device" => auto_device = true,
             "--state" => {
                 let Some(path) = args.next() else {
                     eprintln!("sidepulse-next-service: --state requires a path");
@@ -70,11 +72,17 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH] [--brightness 0-255] [--state PATH] [--settings PATH]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH]"
                 );
                 return ExitCode::from(2);
             }
         }
+    }
+    if auto_device && (device.is_some() || brightness.is_some()) {
+        eprintln!(
+            "sidepulse-next-service: --auto-device cannot be combined with --device or --brightness"
+        );
+        return ExitCode::from(2);
     }
     if let Err(error) = sidepulse_daemon::run_with_options(
         &endpoint,
@@ -82,6 +90,7 @@ fn main() -> ExitCode {
         device.as_deref().map(|path| (path, brightness)),
         state.as_deref(),
         settings.as_deref(),
+        auto_device,
     ) {
         eprintln!("sidepulse-next-service: {error}");
         return ExitCode::FAILURE;

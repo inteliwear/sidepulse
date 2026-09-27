@@ -129,6 +129,11 @@ native tray offers brightness presets through the same requests. The service
 alone saves the setting and writes the LED program. This is the first settings
 control, not complete settings parity. Settings paths remain opt-in during
 migration, and native tray interaction still needs visual runtime validation.
+An opt-in `--auto-device` mode now scans platform mount roots, keeps the
+selected device while mounted, and reconnects after removal and return.
+It uses each device's saved brightness. Windows discovery recognizes a drive
+root containing `LEDS.LED`; volume-label discovery and physical-device runtime
+validation remain open.
 
 The core now resolves explicit and environment-based agent origins and reads
 legacy structured origin labels from hook payloads. Process ancestry detection
@@ -146,7 +151,7 @@ Codex hook trust refresh and legacy Grok file cleanup still need implementation
 before the native installer can own cutover.
 
 General origin detection from process ancestry, Windows Junie process correlation,
-relay delivery, production provider hook installation, settings-controlled transcript selection, automatic
+relay delivery, production provider hook installation, settings-controlled transcript selection, production device discovery,
 physical device selection, virtual device output, full status bar settings and
 controls, native helpers, full CLI parity, and release packaging still need
 implementation before cutover. The Python application
@@ -158,8 +163,9 @@ remains authoritative for users until the delivery gates above pass.
    providers, preserving unrelated config and backing up changed files.
 2. Finish source parity: transcript edge cases, process ancestry origin,
    Junie correlation, and captured Python-to-Rust transition comparisons.
-3. Port the remaining settings controls, relay, link, battery and sleep policy, custom animations,
-   automatic device selection, and virtual device output into service modules.
+3. Port the remaining settings controls, relay, link, battery and sleep policy,
+   custom animations, platform device discovery, and virtual device output
+   into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
 5. Cover the remaining CLI entry points and package native service, hook,

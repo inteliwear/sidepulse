@@ -124,6 +124,16 @@ pub fn discover_devices(roots: &[PathBuf]) -> Vec<DeviceCandidate> {
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for root in roots {
+        if root.is_dir() {
+            let target = target_from_device_path(root);
+            if target.is_file() && seen.insert(root.clone()) {
+                candidates.push(DeviceCandidate {
+                    root: root.clone(),
+                    target,
+                    reason: format!("contains {DEFAULT_FILE_NAME}"),
+                });
+            }
+        }
         let Ok(entries) = fs::read_dir(root) else {
             continue;
         };
@@ -363,5 +373,24 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].target, root.join("SidePulseDot/LEDS.LED"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovers_device_when_mount_root_is_the_volume() {
+        let parent = std::env::temp_dir().join(format!(
+            "sp-drive-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let drive = parent.join("drive");
+        fs::create_dir_all(&drive).unwrap();
+        fs::write(drive.join("LEDS.LED"), "off\n").unwrap();
+        let found = discover_devices(std::slice::from_ref(&drive));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, drive);
+        fs::remove_dir_all(parent).unwrap();
     }
 }

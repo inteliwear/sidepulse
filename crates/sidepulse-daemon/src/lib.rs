@@ -15,7 +15,7 @@ use sidepulse_core::{
     ClientRequest, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
     ServerMessage, ServerPayload, parse_log_line,
 };
-use sidepulse_device::DeviceOutput;
+use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
 use sidepulse_ipc::{read_message, write_message};
 use sidepulse_sources::{SourceSpec, SourceTailer, load_recent_events, sources_from_environment};
 use tempfile::NamedTempFile;
@@ -85,6 +85,33 @@ impl Service {
     pub fn configure_device(&self, path: &Path, brightness: u8) -> io::Result<()> {
         *self.device.lock().map_err(poisoned)? = Some(DeviceOutput::new(path, brightness));
         Ok(())
+    }
+
+    /// Keep the current mounted device while present, then select another
+    /// discovered device or clear output after removal.
+    pub fn auto_select_device(&self, roots: &[PathBuf]) -> io::Result<bool> {
+        let candidates = discover_devices(roots);
+        let mut device = self.device.lock().map_err(poisoned)?;
+        let current = device.as_ref().map(|output| output.target().to_path_buf());
+        let selected = candidates
+            .iter()
+            .find(|candidate| current.as_deref() == Some(candidate.target.as_path()))
+            .or_else(|| candidates.first());
+        if selected.map(|candidate| &candidate.target) == current.as_ref() {
+            return Ok(false);
+        }
+        *device = if let Some(candidate) = selected {
+            let brightness = self
+                .settings
+                .lock()
+                .map_err(poisoned)?
+                .as_ref()
+                .map_or(255, |store| store.brightness_for_device(&candidate.root));
+            Some(DeviceOutput::new(&candidate.root, brightness))
+        } else {
+            None
+        };
+        Ok(true)
     }
 
     pub fn configure_settings(&self, path: &Path) -> io::Result<()> {
@@ -365,6 +392,7 @@ pub fn run_with_logs_and_device(
         device.map(|(path, brightness)| (path, Some(brightness))),
         None,
         None,
+        false,
     )
 }
 
@@ -374,6 +402,7 @@ pub fn run_with_options(
     device: Option<(&Path, Option<u8>)>,
     latest_state_path: Option<&Path>,
     settings_path: Option<&Path>,
+    auto_device: bool,
 ) -> io::Result<()> {
     let listener = sidepulse_ipc::bind(endpoint)?;
     let service = latest_state_path.map_or_else(Service::new, |path| {
@@ -419,6 +448,21 @@ pub fn run_with_options(
                 .map_or(255, |store| store.brightness_for_device(path)),
         };
         service.configure_device(path, brightness)?;
+    }
+    if auto_device {
+        let roots = default_mount_roots();
+        service.auto_select_device(&roots)?;
+        let selection_service = service.clone();
+        std::thread::spawn(move || {
+            loop {
+                if let Err(error) = selection_service.auto_select_device(&roots) {
+                    eprintln!("sidepulse-next-service: device discovery: {error}");
+                }
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+    }
+    if device.is_some() || auto_device {
         let output_service = service.clone();
         std::thread::spawn(move || {
             let mut last_error = None;
@@ -454,6 +498,62 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use serde_json::json;
+
+    #[test]
+    fn automatic_device_selection_reconnects_after_mount_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mounts = directory.path().join("mounts");
+        std::fs::create_dir(&mounts).unwrap();
+        let device = mounts.join("SidePulse Dot");
+        let settings_path = directory.path().join("settings.json");
+        std::fs::write(&settings_path, serde_json::json!({
+            "devices": [{"id": "dot", "name": "SidePulse Dot", "path": device.to_string_lossy(), "brightness": 64}]
+        }).to_string()).unwrap();
+        let service = Service::new();
+        service.configure_settings(&settings_path).unwrap();
+        assert!(
+            !service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+        std::fs::create_dir(&device).unwrap();
+        assert!(
+            service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+        assert_eq!(
+            service.settings_snapshot().unwrap().unwrap().brightness,
+            Some(64)
+        );
+        service.sync_device().unwrap();
+        assert!(
+            std::fs::read_to_string(device.join("LEDS.LED"))
+                .unwrap()
+                .starts_with("brightness 64\n")
+        );
+        assert!(
+            !service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+        std::fs::remove_dir_all(&device).unwrap();
+        assert!(
+            service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+        assert_eq!(
+            service.settings_snapshot().unwrap().unwrap().active_device,
+            None
+        );
+        std::fs::create_dir(&device).unwrap();
+        assert!(service.auto_select_device(&[mounts]).unwrap());
+        assert_eq!(
+            service.settings_snapshot().unwrap().unwrap().brightness,
+            Some(64)
+        );
+    }
 
     #[cfg(unix)]
     #[test]
