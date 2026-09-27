@@ -169,15 +169,27 @@ fn status_can_include_explicit_transcript_source() {
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"))
-        .args(["status", "--json", "--codex-transcripts", transcripts.to_str().unwrap()])
+        .args([
+            "status",
+            "--json",
+            "--codex-transcripts",
+            transcripts.to_str().unwrap(),
+        ])
         .env("HOME", &dir)
         .env("XDG_STATE_HOME", &dir)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["aggregate"]["mode"], "tool_running");
-    assert_eq!(value["statuses"][0]["agent_id"], "codex:session:12345678-1234-1234-1234-123456789abc");
+    assert_eq!(
+        value["statuses"][0]["agent_id"],
+        "codex:session:12345678-1234-1234-1234-123456789abc"
+    );
     assert_eq!(value["sources"].as_array().unwrap().len(), 6);
     fs::remove_dir_all(dir).unwrap();
 }
