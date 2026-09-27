@@ -58,12 +58,12 @@ fn invoke_executable(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    let written = child.stdin.take().unwrap().write_all(input.as_bytes());
+    if let Err(error) = written {
+        // Invalid CLI arguments can exit before reading stdin. That is the
+        // behavior under test, and its pipe may already be closed.
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
     child.wait_with_output().unwrap()
 }
 
