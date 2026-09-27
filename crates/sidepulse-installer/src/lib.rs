@@ -186,6 +186,7 @@ impl StagePlan {
         serde_json::to_writer_pretty(&mut manifest_file, &self.manifest)?;
         manifest_file.write_all(b"\n")?;
         manifest_file.sync_all()?;
+        drop(manifest_file);
         fs::rename(temporary.path(), final_dir)?;
         Ok(&self.manifest)
     }

@@ -121,7 +121,10 @@ one-shot offline views of the Rust monitor, with the existing status flags and
 JSON field names. Status reads the last requested number of lines per provider
 and accepts explicit log paths. It reads configured hook commands for custom
 log paths in the five provider configuration files, then falls back to the
-default state directory. The `sidepulse-sources` crate shares source selection,
+default state directory. The monitor retains project and prompt titles across
+hook events and reads Codex session titles from its local index. An isolated
+Python/Rust status comparison matched both provider display names and modes.
+The `sidepulse-sources` crate shares source selection,
 bounded replay, and appended-row recovery between CLI and service. The service
 replays those sources at startup and tails new complete rows so events written
 while its socket is unavailable can still reach the monitor. Optional Codex

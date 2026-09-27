@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -32,14 +35,35 @@ impl Default for MonitoringPolicy {
 pub struct Monitor {
     statuses: HashMap<String, AgentStatus>,
     pending_permissions: HashMap<String, HashSet<String>>,
+    metadata_by_session: HashMap<String, StatusMetadata>,
+    metadata_by_status: HashMap<String, StatusMetadata>,
     policy: MonitoringPolicy,
 }
+
+#[derive(Debug, Default, Clone)]
+struct StatusMetadata {
+    cwd: Option<String>,
+    title: Option<String>,
+    origin: Option<String>,
+}
+
+#[derive(Debug)]
+struct CodexIndexCache {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    size: u64,
+    titles: HashMap<String, String>,
+}
+
+static CODEX_INDEX: LazyLock<Mutex<Option<CodexIndexCache>>> = LazyLock::new(|| Mutex::new(None));
 
 impl Monitor {
     pub fn new(policy: MonitoringPolicy) -> Self {
         Self {
             statuses: HashMap::new(),
             pending_permissions: HashMap::new(),
+            metadata_by_session: HashMap::new(),
+            metadata_by_status: HashMap::new(),
             policy,
         }
     }
@@ -53,6 +77,14 @@ impl Monitor {
                 .get(&key)
                 .is_none_or(|previous| previous.updated_at <= status.updated_at)
             {
+                self.metadata_by_status.insert(
+                    key.clone(),
+                    StatusMetadata {
+                        cwd: status.cwd.clone(),
+                        title: None,
+                        origin: status.origin.clone(),
+                    },
+                );
                 self.statuses.insert(key, status);
                 restored += 1;
             }
@@ -67,7 +99,8 @@ impl Monitor {
     }
 
     pub fn ingest(&mut self, event: &HookEvent) -> Option<&AgentStatus> {
-        let status = status_from_event(event)?;
+        let metadata = self.metadata_for_record(event);
+        let status = status_from_event(event, &metadata)?;
         let key = status.agent_id.clone();
         if self
             .statuses
@@ -94,6 +127,29 @@ impl Monitor {
         }
         self.statuses.insert(key.clone(), status);
         self.statuses.get(&key)
+    }
+
+    fn metadata_for_record(&mut self, event: &HookEvent) -> StatusMetadata {
+        let session_metadata = event.session_id.as_ref().map(|session_id| {
+            let key = format!("{}:session:{session_id}", event.provider);
+            let metadata = self.metadata_by_session.entry(key).or_default();
+            update_metadata(metadata, event);
+            metadata.clone()
+        });
+        let status_metadata = self
+            .metadata_by_status
+            .entry(event.status_key())
+            .or_default();
+        update_metadata(status_metadata, event);
+        if let Some(session_metadata) = session_metadata {
+            StatusMetadata {
+                cwd: status_metadata.cwd.clone().or(session_metadata.cwd),
+                title: status_metadata.title.clone().or(session_metadata.title),
+                origin: status_metadata.origin.clone().or(session_metadata.origin),
+            }
+        } else {
+            status_metadata.clone()
+        }
     }
 
     fn track_pending_permissions(&mut self, event: &HookEvent) {
@@ -172,6 +228,7 @@ impl Monitor {
                 .priority()
                 .cmp(&right.mode.priority())
                 .then_with(|| right.updated_at.cmp(&left.updated_at))
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
         };
         fresh.sort_by(sort);
         stale.sort_by(sort);
@@ -278,7 +335,72 @@ pub fn mode_for_event(event: &HookEvent) -> Option<AgentMode> {
     }
 }
 
-fn status_from_event(event: &HookEvent) -> Option<AgentStatus> {
+fn update_metadata(metadata: &mut StatusMetadata, event: &HookEvent) {
+    if let Some(cwd) = event.cwd.as_ref().filter(|cwd| !cwd.is_empty()) {
+        metadata.cwd = Some(cwd.clone());
+    }
+    if let Some(title) = codex_session_title(event) {
+        metadata.title = Some(title);
+    } else if metadata.title.is_none() && event.event_name == "UserPromptSubmit" {
+        metadata.title = event
+            .raw
+            .get("prompt")
+            .and_then(Value::as_str)
+            .and_then(summarize_prompt);
+    }
+    if let Some(origin) = &event.origin {
+        metadata.origin = Some(origin.clone());
+    }
+}
+
+fn codex_session_title(event: &HookEvent) -> Option<String> {
+    if event.provider != "codex" {
+        return None;
+    }
+    let session_id = event.session_id.as_ref()?;
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    let path = PathBuf::from(home).join(".codex/session_index.jsonl");
+    let metadata = std::fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok();
+    let mut cache = CODEX_INDEX.lock().ok()?;
+    let needs_reload = cache.as_ref().is_none_or(|cached| {
+        cached.path != path || cached.modified != modified || cached.size != metadata.len()
+    });
+    if needs_reload {
+        *cache = Some(CodexIndexCache {
+            path: path.clone(),
+            modified,
+            size: metadata.len(),
+            titles: read_codex_session_titles(&path),
+        });
+    }
+    cache.as_ref()?.titles.get(session_id).cloned()
+}
+
+fn read_codex_session_titles(path: &Path) -> HashMap<String, String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let mut titles = HashMap::new();
+    let lines = content.lines().collect::<Vec<_>>();
+    for line in &lines[lines.len().saturating_sub(5000)..] {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let (Some(id), Some(title)) = (
+            row.get("id").and_then(Value::as_str),
+            row.get("thread_name").and_then(Value::as_str),
+        ) {
+            let title = title.trim();
+            if !id.is_empty() && !title.is_empty() {
+                titles.insert(id.to_owned(), truncate_text(title, 72));
+            }
+        }
+    }
+    titles
+}
+
+fn status_from_event(event: &HookEvent, metadata: &StatusMetadata) -> Option<AgentStatus> {
     let mode = mode_for_event(event)?;
     if event.provider == "codex" {
         let text = [
@@ -313,9 +435,21 @@ fn status_from_event(event: &HookEvent) -> Option<AgentStatus> {
         _ => &event.provider,
     };
     let display_name = if let Some(id) = &event.agent_id {
-        format!("{provider_label} agent {}", short_id(id))
+        let short = short_id(id);
+        display_name_from_parts(
+            metadata.cwd.as_deref().or(event.cwd.as_deref()),
+            metadata.title.as_deref(),
+            &format!("agent {short}"),
+            &format!("{provider_label} agent {short}"),
+        )
     } else if let Some(id) = &event.session_id {
-        format!("{provider_label} session {}", short_id(id))
+        let short = short_id(id);
+        display_name_from_parts(
+            metadata.cwd.as_deref().or(event.cwd.as_deref()),
+            metadata.title.as_deref(),
+            &short,
+            &format!("{provider_label} session {short}"),
+        )
     } else {
         provider_label.to_owned()
     };
@@ -330,13 +464,106 @@ fn status_from_event(event: &HookEvent) -> Option<AgentStatus> {
         cwd: event.cwd.clone(),
         tool_name: event.tool_name.clone(),
         message: event.message.clone(),
-        origin: event.origin.clone(),
+        origin: event.origin.clone().or_else(|| metadata.origin.clone()),
         stale: false,
     })
 }
 
-fn short_id(value: &str) -> &str {
-    value.get(..value.len().min(8)).unwrap_or(value)
+fn short_id(value: &str) -> String {
+    value.chars().take(8).collect()
+}
+
+fn summarize_prompt(value: &str) -> Option<String> {
+    static MY_REQUEST: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?is)##\s+My request for [^:\n]+:\s*(.*)").unwrap());
+    static CODE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)```.*?```").unwrap());
+    static INLINE_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+    static PATH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?:~|/Users|/var|/private|/tmp)/[^\s,;)'"`]+"#).unwrap());
+    static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+    static MARKDOWN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#+\s*").unwrap());
+    static SPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+
+    let mut text = value.trim();
+    if text.is_empty() || text.starts_with("<task-notification>") {
+        return None;
+    }
+    if let Some(captures) = MY_REQUEST.captures(text) {
+        text = captures.get(1)?.as_str();
+    }
+    let text = CODE_BLOCK.replace_all(text, " ");
+    let text = INLINE_CODE.replace_all(&text, "$1");
+    let text = PATH.replace_all(&text, "...");
+    let text = TAG.replace_all(&text, " ");
+    let text = MARKDOWN.replace_all(&text, " ");
+    let text = SPACE.replace_all(&text, " ");
+    let text = text.trim_matches(|ch: char| ch.is_whitespace() || "-:".contains(ch));
+    if text.is_empty() {
+        None
+    } else {
+        Some(truncate_text(text, 72))
+    }
+}
+
+fn display_name_from_parts(
+    cwd: Option<&str>,
+    title: Option<&str>,
+    short_id: &str,
+    fallback: &str,
+) -> String {
+    let project = cwd.and_then(project_name);
+    let name = match (project.as_deref(), title) {
+        (Some(project), Some(title))
+            if normalized_name_part(project) == normalized_name_part(title) =>
+        {
+            format!("{title} ({short_id})")
+        }
+        (Some(project), Some(title)) => format!("{project}: {title} ({short_id})"),
+        (None, Some(title)) => format!("{title} ({short_id})"),
+        (Some(project), None) => format!("{project} ({short_id})"),
+        (None, None) => return fallback.to_owned(),
+    };
+    truncate_text(&name, 96)
+}
+
+fn normalized_name_part(value: &str) -> String {
+    value
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn project_name(cwd: &str) -> Option<String> {
+    let path = Path::new(cwd);
+    for candidate in path.ancestors() {
+        if candidate.join(".git").exists() {
+            return candidate
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .or_else(|| Some(candidate.display().to_string()));
+        }
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .or_else(|| Some(cwd.to_owned()))
+}
+
+fn truncate_text(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        return value.to_owned();
+    }
+    let mut trimmed = value.chars().take(max_len - 1).collect::<String>();
+    trimmed = trimmed.trim_end().to_owned();
+    let boundary = trimmed.rfind([' ', ',', ';']);
+    if let Some(boundary) = boundary
+        && trimmed[..boundary].chars().count() >= max_len / 2
+    {
+        trimmed.truncate(boundary);
+        trimmed = trimmed.trim_end().to_owned();
+    }
+    format!("{trimmed}...")
 }
 
 fn explicit_mode(value: &str) -> Option<AgentMode> {
@@ -587,6 +814,68 @@ mod tests {
         assert_eq!(
             mode_marker("[sidepulse status: done]"),
             Some(AgentMode::Completed)
+        );
+    }
+
+    #[test]
+    fn keeps_project_and_prompt_title_across_events_without_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("sample-project");
+        let nested = project.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir(project.join(".git")).unwrap();
+        let first = serde_json::json!({
+            "logged_at": "2026-09-26T12:00:00Z",
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "abcdefgh-1234",
+            "cwd": nested,
+            "prompt": "Fix the parser in `/tmp/project/src`"
+        });
+        let second = serde_json::json!({
+            "logged_at": "2026-09-26T12:00:01Z",
+            "hook_event_name": "PreToolUse",
+            "session_id": "abcdefgh-1234",
+            "tool_name": "Shell"
+        });
+        let mut monitor = Monitor::default();
+        monitor.ingest(&parse_log_line("claude", &first.to_string()).unwrap());
+        monitor.ingest(&parse_log_line("claude", &second.to_string()).unwrap());
+        let status = monitor.stored_statuses().remove(0);
+        assert_eq!(
+            status.display_name,
+            "sample-project: Fix the parser in ... (abcdefgh)"
+        );
+        assert_eq!(status.cwd, None);
+    }
+
+    #[test]
+    fn ignores_notification_prompts_and_shortens_unicode_by_character() {
+        assert_eq!(summarize_prompt("<task-notification>finished"), None);
+        assert_eq!(
+            summarize_prompt("## My request for Codex:\n### Résumé"),
+            Some("Résumé".into())
+        );
+        assert_eq!(short_id("éééééééé9"), "éééééééé");
+    }
+
+    #[test]
+    fn codex_session_index_uses_latest_title_within_recent_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session_index.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"id\":\"abc\",\"thread_name\":\"Old title\"}\n",
+                "invalid JSON\n",
+                "{\"id\":\"abc\",\"thread_name\":\"Updated title\"}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_codex_session_titles(&path)
+                .get("abc")
+                .map(String::as_str),
+            Some("Updated title")
         );
     }
 }
