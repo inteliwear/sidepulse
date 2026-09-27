@@ -26,3 +26,4 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [dev-dependencies]
 interprocess.workspace = true
+tempfile = "3"

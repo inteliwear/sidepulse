@@ -50,3 +50,65 @@ fn explicit_paths_support_plan_apply_and_uninstall_without_touching_home() {
     assert_eq!(run("uninstall", false)["changed"], false);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn explicit_home_batch_plans_and_installs_five_providers() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let logs = directory.path().join("logs");
+    fs::create_dir_all(home.join(".claude")).unwrap();
+    fs::write(home.join(".claude/settings.json"), r#"{"theme":"dark"}"#).unwrap();
+    let hook = directory.path().join("sidepulse-next-hook");
+    let run = |action: &str, dry_run: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"));
+        command
+            .args(["agent-monitor", action, "--provider", "all", "--home"])
+            .arg(&home)
+            .arg("--log-dir")
+            .arg(&logs)
+            .arg("--hook")
+            .arg(&hook)
+            .arg("--json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(
+        run("install", true)["providers"].as_array().unwrap().len(),
+        5
+    );
+    assert!(!home.join(".codex/config.toml").exists());
+    assert!(
+        run("install", false)["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["changed"] == true)
+    );
+    assert!(
+        run("install", false)["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["changed"] == false)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(home.join(".claude/settings.json")).unwrap())
+            .unwrap()["theme"],
+        "dark"
+    );
+    assert!(
+        run("uninstall", false)["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["changed"] == true)
+    );
+}

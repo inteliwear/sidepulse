@@ -163,6 +163,10 @@ preserving unrelated hooks, idempotence, backups, and rejecting a config that
 changed after planning. The development CLI exposes those plans with explicit
 `--config`, `--log`, and `--hook` paths; a temporary-home process test covers
 dry run, apply, and uninstall. No production hook config has been changed.
+An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route
+now plans all five providers first and restores earlier config files if a
+later apply fails. The test uses a temporary home; live installation still
+awaits trust refresh, legacy Grok cleanup, and upgrade verification.
 The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
 reports of hook events and log paths for all five providers.
 `agent-monitor live` and `watch` now refresh the same Rust monitor view using

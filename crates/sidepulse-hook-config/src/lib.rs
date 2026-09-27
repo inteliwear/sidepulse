@@ -429,6 +429,67 @@ impl HookPlan {
             backup_path,
         })
     }
+
+    /// Restore only a file still matching this plan's own write. Backups made
+    /// by `apply` remain available even after a successful rollback.
+    fn rollback(&self) -> io::Result<()> {
+        if !self.changed {
+            return Ok(());
+        }
+        let current = fs::read(&self.config_path)?;
+        if current != self.updated.as_bytes() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "provider config changed after this plan was applied",
+            ));
+        }
+        match &self.original {
+            Some(original) => {
+                let parent = self.config_path.parent().unwrap_or_else(|| Path::new("."));
+                let mut temporary = NamedTempFile::new_in(parent)?;
+                if let Ok(metadata) = fs::metadata(&self.config_path) {
+                    temporary
+                        .as_file()
+                        .set_permissions(metadata.permissions())?;
+                }
+                temporary.write_all(original)?;
+                temporary.flush()?;
+                temporary.as_file().sync_all()?;
+                temporary
+                    .persist(&self.config_path)
+                    .map_err(|error| error.error)?;
+            }
+            None => fs::remove_file(&self.config_path)?,
+        }
+        Ok(())
+    }
+}
+
+/// Apply a prebuilt provider set as one operation. A later failure restores
+/// earlier files, unless another process changed one in the meantime.
+pub fn apply_plans_atomically(plans: &[HookPlan]) -> io::Result<Vec<ApplyResult>> {
+    let mut results = Vec::with_capacity(plans.len());
+    for (index, plan) in plans.iter().enumerate() {
+        match plan.apply() {
+            Ok(result) => results.push(result),
+            Err(error) => {
+                let mut rollback_errors = Vec::new();
+                for previous in plans[..index].iter().rev() {
+                    if let Err(rollback_error) = previous.rollback() {
+                        rollback_errors.push(format!("{}: {rollback_error}", previous.provider));
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    return Err(error);
+                }
+                return Err(io::Error::other(format!(
+                    "{error}; rollback failed: {}",
+                    rollback_errors.join("; ")
+                )));
+            }
+        }
+    }
+    Ok(results)
 }
 
 fn clean_cursor_entries(entries: Vec<Value>) -> Vec<Value> {
@@ -664,6 +725,42 @@ mod tests {
         .unwrap();
         assert!(!plan.changed);
         assert_eq!(plan.updated, toml_text);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn multi_provider_apply_restores_earlier_config_on_conflict() {
+        let dir = scratch_dir();
+        let first = dir.join("claude.json");
+        let second = dir.join("cursor.json");
+        let original = b"{\"theme\":\"dark\"}\n";
+        fs::write(&first, original).unwrap();
+        fs::write(&second, "{}\n").unwrap();
+        let plans = [
+            plan_json_hooks(
+                "claude",
+                &first,
+                &dir.join("claude.jsonl"),
+                &dir.join("sidepulse-next-hook"),
+                Action::Install,
+            )
+            .unwrap(),
+            plan_json_hooks(
+                "cursor",
+                &second,
+                &dir.join("cursor.jsonl"),
+                &dir.join("sidepulse-next-hook"),
+                Action::Install,
+            )
+            .unwrap(),
+        ];
+        fs::write(&second, "{\"changed\":true}\n").unwrap();
+        assert_eq!(
+            apply_plans_atomically(&plans).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&first).unwrap(), original);
+        assert_eq!(fs::read_to_string(&second).unwrap(), "{\"changed\":true}\n");
         fs::remove_dir_all(dir).unwrap();
     }
 }
