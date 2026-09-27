@@ -44,6 +44,10 @@ pub(crate) struct TranscriptCursor {
 }
 
 impl TranscriptCursor {
+    pub(crate) fn source(&self) -> &SourceSpec {
+        &self.source
+    }
+
     pub(crate) fn new(source: SourceSpec) -> io::Result<Self> {
         let mut cursor = Self {
             source,

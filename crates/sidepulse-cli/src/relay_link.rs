@@ -2,7 +2,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sidepulse_relay::{DEFAULT_BRIDGE_SERVER, load_config, normalize_server, save_config};
+use sidepulse_relay::{
+    DEFAULT_BRIDGE_SERVER, clean_channel, load_config, normalize_server, save_config,
+};
 
 pub fn run_link(args: impl Iterator<Item = String>) -> ExitCode {
     let mut code = None;
@@ -23,7 +25,21 @@ pub fn run_link(args: impl Iterator<Item = String>) -> ExitCode {
                 };
                 server = Some(value);
             }
-            _ if arg.starts_with('-') || code.is_some() => {
+            "--" => {
+                if code.is_some() {
+                    return usage();
+                }
+                let Some(value) = args.next() else {
+                    return usage();
+                };
+                code = Some(value);
+                if args.next().is_some() {
+                    return usage();
+                }
+            }
+            _ if code.is_some()
+                || (arg.starts_with('-') && (arg.len() != 22 || clean_channel(&arg).is_err())) =>
+            {
                 return usage();
             }
             _ => code = Some(arg),

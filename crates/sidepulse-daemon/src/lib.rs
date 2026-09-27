@@ -231,6 +231,14 @@ impl Service {
         store.set_display_for_device(output.target(), mode, output.brightness())
     }
 
+    pub fn set_transcript_monitoring(&self, provider: &str, enabled: bool) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_transcript_enabled(provider, enabled)
+    }
+
     #[cfg(target_os = "macos")]
     pub fn set_sleep_policy(&self, policy: &str) -> io::Result<()> {
         let mut settings = self.settings.lock().map_err(poisoned)?;
@@ -551,6 +559,42 @@ impl Service {
                     },
                 )
             }
+            RequestKind::SetTranscriptMonitoring { provider, enabled } => {
+                let payload = match self
+                    .set_transcript_monitoring(&provider, enabled)
+                    .and_then(|_| self.settings_snapshot())
+                {
+                    Ok(Some(settings)) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                        display_mode: settings.display_mode,
+                    },
+                    Ok(None) => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: error.to_string(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        ServerPayload::Error {
+                            code: "settings_conflict".into(),
+                            message: error.to_string(),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::SetSleepPolicy { policy } => {
                 #[cfg(target_os = "macos")]
                 let payload = match self
@@ -741,6 +785,25 @@ pub struct RunOptions<'a> {
     pub power_control: bool,
 }
 
+fn source_overrides_with_settings(
+    service: &Service,
+    explicit: &[(String, PathBuf)],
+    home: &Path,
+) -> io::Result<Vec<(String, PathBuf)>> {
+    let mut overrides = explicit.to_vec();
+    if let Some(store) = service.settings.lock().map_err(poisoned)?.as_ref() {
+        for (provider, relative) in [("codex", ".codex/sessions"), ("claude", ".claude/projects")] {
+            let source_name = format!("{provider}-transcripts");
+            if store.transcript_enabled(provider)
+                && !overrides.iter().any(|(name, _)| name == &source_name)
+            {
+                overrides.push((source_name, home.join(relative)));
+            }
+        }
+    }
+    Ok(overrides)
+}
+
 pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<()> {
     let RunOptions {
         logs,
@@ -864,36 +927,34 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         });
     }
     service.load_latest_state()?;
-    let mut source_overrides = logs.to_vec();
-    if let Some(store) = service.settings.lock().map_err(poisoned)?.as_ref() {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        for (provider, relative) in [("codex", ".codex/sessions"), ("claude", ".claude/projects")] {
-            let source_name = format!("{provider}-transcripts");
-            if store.transcript_enabled(provider)
-                && !source_overrides
-                    .iter()
-                    .any(|(name, _)| name == &source_name)
-            {
-                source_overrides.push((source_name, home.join(relative)));
-            }
-        }
-    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let source_overrides = source_overrides_with_settings(&service, logs, &home)?;
     let sources = sources_from_environment(&source_overrides);
     let mut tailer = SourceTailer::new(&sources)?;
     service.replay_sources(&sources, 5000)?;
     let recovery_service = service.clone();
+    let explicit_sources = logs.to_vec();
     std::thread::spawn(move || {
         let mut last_error = None;
         loop {
-            match tailer.poll().and_then(|events| {
+            let result = (|| -> io::Result<()> {
+                let overrides =
+                    source_overrides_with_settings(&recovery_service, &explicit_sources, &home)?;
+                let desired = sources_from_environment(&overrides);
+                let added = tailer.sync_transcripts(&desired)?;
+                if !added.is_empty() {
+                    recovery_service.replay_sources(&added, 5000)?;
+                }
+                let events = tailer.poll()?;
                 for event in &events {
                     recovery_service.ingest_record(event)?;
                 }
                 Ok(())
-            }) {
+            })();
+            match result {
                 Ok(()) => last_error = None,
                 Err(error) => {
                     let message = error.to_string();

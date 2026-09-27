@@ -216,6 +216,115 @@ fn saved_settings_enable_codex_transcript_recovery() {
 }
 
 #[test]
+fn transcript_monitoring_changes_take_effect_without_restarting_service() {
+    let directory = tempfile::tempdir().unwrap();
+    let transcripts = directory.path().join(".codex/sessions");
+    fs::create_dir_all(&transcripts).unwrap();
+    let settings = directory.path().join("settings.json");
+    fs::write(&settings, r#"{"transcript_monitoring":{"codex":false}}"#).unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--settings")
+            .arg(&settings)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint_text = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint_text).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let enabled = sidepulse_ipc::request::<ClientRequest, ServerMessage>(
+        endpoint_text,
+        &ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 12,
+            kind: RequestKind::SetTranscriptMonitoring {
+                provider: "codex".into(),
+                enabled: true,
+            },
+        },
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(matches!(enabled.payload, ServerPayload::Settings { .. }));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&settings).unwrap()).unwrap()["transcript_monitoring"]
+            ["codex"],
+        true
+    );
+    thread::sleep(Duration::from_millis(1200));
+    fs::write(
+        transcripts.join("rollout-12345678-1234-1234-1234-123456789abc.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "type": "response_item",
+                "payload": {"type": "function_call", "name": "Shell", "call_id": "x"}
+            })
+        ),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !snapshot(endpoint_text).is_some_and(|state| {
+        state
+            .statuses
+            .iter()
+            .any(|status| status.agent_id == "codex:session:12345678-1234-1234-1234-123456789abc")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "enabled transcript was not consumed"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    let disabled = sidepulse_ipc::request::<ClientRequest, ServerMessage>(
+        endpoint_text,
+        &ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 13,
+            kind: RequestKind::SetTranscriptMonitoring {
+                provider: "codex".into(),
+                enabled: false,
+            },
+        },
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(matches!(disabled.payload, ServerPayload::Settings { .. }));
+    thread::sleep(Duration::from_millis(1200));
+    fs::write(
+        transcripts.join("rollout-87654321-4321-4321-4321-cba987654321.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "type": "response_item",
+                "payload": {"type": "function_call", "name": "Shell", "call_id": "y"}
+            })
+        ),
+    )
+    .unwrap();
+    thread::sleep(Duration::from_millis(1400));
+    assert!(
+        !snapshot(endpoint_text)
+            .unwrap()
+            .statuses
+            .iter()
+            .any(|status| status.agent_id == "codex:session:87654321-4321-4321-4321-cba987654321")
+    );
+    drop(server);
+}
+
+#[test]
 fn service_updates_settings_and_device_from_one_request() {
     let directory = Path::new("/tmp").join(format!(
         "sidepulse-settings-{}-{}",

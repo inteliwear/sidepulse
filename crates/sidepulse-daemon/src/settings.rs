@@ -135,6 +135,33 @@ impl SettingsStore {
             .unwrap_or(false)
     }
 
+    pub fn set_transcript_enabled(&mut self, provider: &str, enabled: bool) -> io::Result<()> {
+        if !matches!(provider, "codex" | "claude") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid transcript provider",
+            ));
+        }
+        let mut updated = self.document.clone();
+        let monitoring = updated
+            .entry("transcript_monitoring")
+            .or_insert_with(|| json!({}));
+        let object = monitoring.as_object_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "transcript_monitoring must be an object",
+            )
+        })?;
+        object.insert(provider.to_owned(), json!(enabled));
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn animation_for_mode(&self, mode: AgentMode) -> io::Result<(String, String)> {
         let key = match mode {
             AgentMode::IdleReady => "idle_ready",
@@ -406,6 +433,24 @@ mod tests {
         assert_eq!(reloaded.snapshot()["devices"][0]["custom"], "keep");
         assert_eq!(reloaded.snapshot()["transcript_monitoring"]["codex"], true);
         assert_eq!(reloaded.snapshot()["unknown"], 9);
+    }
+
+    #[test]
+    fn updates_transcript_setting_without_losing_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"transcript_monitoring":{"codex":true},"custom":9}"#,
+        )
+        .unwrap();
+        let mut store = SettingsStore::load(&path).unwrap();
+        store.set_transcript_enabled("claude", true).unwrap();
+        assert!(store.transcript_enabled("codex"));
+        assert!(store.transcript_enabled("claude"));
+        let reloaded = SettingsStore::load(&path).unwrap();
+        assert_eq!(reloaded.snapshot()["custom"], 9);
+        assert_eq!(reloaded.snapshot()["transcript_monitoring"]["claude"], true);
     }
 
     #[test]

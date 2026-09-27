@@ -165,6 +165,27 @@ fn main() -> ExitCode {
             };
             service_settings_request(&endpoint, RequestKind::SetSleepPolicy { policy })
         }
+        Some("service-transcript") => {
+            let (Some(endpoint), Some(provider), Some(state), None) =
+                (args.next(), args.next(), args.next(), args.next())
+            else {
+                eprintln!("usage: sidepulse-next service-transcript ENDPOINT codex|claude on|off");
+                return ExitCode::from(2);
+            };
+            if !matches!(provider.as_str(), "codex" | "claude")
+                || !matches!(state.as_str(), "on" | "off")
+            {
+                eprintln!("usage: sidepulse-next service-transcript ENDPOINT codex|claude on|off");
+                return ExitCode::from(2);
+            }
+            service_settings_request(
+                &endpoint,
+                RequestKind::SetTranscriptMonitoring {
+                    provider,
+                    enabled: state == "on",
+                },
+            )
+        }
         Some("inspect-log") => {
             let (Some(provider), Some(path), at, None) =
                 (args.next(), args.next(), args.next(), args.next())

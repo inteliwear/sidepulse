@@ -34,8 +34,28 @@ fn link_command_creates_receiver_and_configures_source_without_installing() {
         .arg(&path)
         .output()
         .unwrap();
-    assert!(source.status.success());
+    assert!(
+        source.status.success(),
+        "{}",
+        String::from_utf8_lossy(&source.stderr)
+    );
     let config = load_config(&path, "Host").unwrap();
     assert_eq!(config.outbound_channel, receiver);
     assert_eq!(config.server, DEFAULT_BRIDGE_SERVER);
+
+    let leading_dash = format!("-{}", "a".repeat(21));
+    let dashed = Command::new(binary)
+        .args(["link", &leading_dash, "--config"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        dashed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dashed.stderr)
+    );
+    assert_eq!(
+        load_config(&path, "Host").unwrap().outbound_channel,
+        leading_dash
+    );
 }

@@ -26,6 +26,7 @@ pub enum RequestKind {
     SetBrightness { brightness: u8 },
     SetDisplayMode { mode: String },
     SetSleepPolicy { policy: String },
+    SetTranscriptMonitoring { provider: String, enabled: bool },
     Subscribe,
     IngestHook { provider: String, line: Value },
     IngestRelay { message: Value },
@@ -102,6 +103,11 @@ impl ClientRequest {
         {
             return Err("invalid sleep policy");
         }
+        if let RequestKind::SetTranscriptMonitoring { provider, .. } = &self.kind
+            && !matches!(provider.as_str(), "codex" | "claude")
+        {
+            return Err("invalid transcript provider");
+        }
         if let RequestKind::SelectDevice { root } = &self.kind
             && root.is_empty()
         {
@@ -168,5 +174,15 @@ mod tests {
             policy: "automatic".into(),
         };
         assert_eq!(request.validate(), Err("invalid sleep policy"));
+        request.kind = RequestKind::SetTranscriptMonitoring {
+            provider: "codex".into(),
+            enabled: true,
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetTranscriptMonitoring {
+            provider: "cursor".into(),
+            enabled: true,
+        };
+        assert_eq!(request.validate(), Err("invalid transcript provider"));
     }
 }

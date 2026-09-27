@@ -115,9 +115,11 @@ needs comparison against a larger set of captured transcript cases. Provider
 JSONL replay now seeks backward for the last requested lines instead of
 scanning entire historical logs.
 When an explicit settings document enables Codex or Claude transcript
-monitoring, the service now discovers their default transcript directories at
-startup; explicit `--transcript` paths still take precedence. Changes to that
-setting while the service is running are not yet reflected in source selection.
+monitoring, the service discovers their default transcript directories;
+explicit `--transcript` paths still take precedence. The service now applies
+transcript setting changes while running and preserves JSONL recovery cursors.
+The CLI can change those settings with `service-transcript`, and the tray has
+Codex and Claude transcript toggles backed by service IPC.
 
 The development service can load and atomically update the legacy
 `latest.json` status schema when launched with `--state PATH`. State output is
@@ -224,7 +226,7 @@ must validate the new review flow. This follows the current
 [official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
 
 Further origin parity, production relay launch, production provider hook installation,
-settings-controlled transcript selection, production device discovery,
+production device discovery,
 physical device selection, virtual device output, full status bar settings and
 controls, native helpers, full CLI parity, and release packaging still need
 implementation before cutover. The Python application

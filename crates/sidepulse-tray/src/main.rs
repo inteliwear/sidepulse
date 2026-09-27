@@ -26,6 +26,9 @@ struct TrayView {
     brightness_items: Vec<(MenuItem, u8)>,
     display_status: MenuItem,
     display_items: Vec<(MenuItem, &'static str)>,
+    transcript_status: MenuItem,
+    transcript_items: Vec<(MenuItem, &'static str)>,
+    transcript_enabled: Option<(bool, bool)>,
     #[cfg(target_os = "macos")]
     sleep_status: MenuItem,
     #[cfg(target_os = "macos")]
@@ -48,6 +51,11 @@ impl TrayView {
         let display_status = MenuItem::new("Device display unavailable", false, None);
         let display_items =
             DISPLAY_CHOICES.map(|choice| (MenuItem::new(choice.label, false, None), choice.value));
+        let transcript_status = MenuItem::new("Transcript monitoring unavailable", false, None);
+        let transcript_items = [
+            (MenuItem::new("Codex transcripts", false, None), "codex"),
+            (MenuItem::new("Claude transcripts", false, None), "claude"),
+        ];
         #[cfg(target_os = "macos")]
         let sleep_status = MenuItem::new("Sleep prevention unavailable", false, None);
         #[cfg(target_os = "macos")]
@@ -61,6 +69,10 @@ impl TrayView {
         }
         menu.append(&display_status)?;
         for (item, _) in &display_items {
+            menu.append(item)?;
+        }
+        menu.append(&transcript_status)?;
+        for (item, _) in &transcript_items {
             menu.append(item)?;
         }
         #[cfg(target_os = "macos")]
@@ -86,6 +98,9 @@ impl TrayView {
             brightness_items,
             display_status,
             display_items: display_items.into(),
+            transcript_status,
+            transcript_items: transcript_items.into(),
+            transcript_enabled: None,
             #[cfg(target_os = "macos")]
             sleep_status,
             #[cfg(target_os = "macos")]
@@ -124,6 +139,7 @@ impl TrayView {
         self.visible_rows = 0;
         self.show_brightness(None);
         self.show_display_mode(None);
+        self.show_transcript_monitoring(None);
         #[cfg(target_os = "macos")]
         self.show_sleep_policy(None);
         self.show_devices(&[], None)?;
@@ -179,6 +195,50 @@ impl TrayView {
             .iter()
             .find(|(item, _)| event.id == *item.id())
             .map(|(_, value)| *value)
+    }
+
+    fn show_transcript_monitoring(&mut self, enabled: Option<(bool, bool)>) {
+        self.transcript_status.set_text(if enabled.is_some() {
+            "Transcript monitoring"
+        } else {
+            "Transcript monitoring unavailable"
+        });
+        for (item, provider) in &self.transcript_items {
+            item.set_enabled(enabled.is_some());
+            let active = enabled.is_some_and(
+                |(codex, claude)| {
+                    if *provider == "codex" { codex } else { claude }
+                },
+            );
+            let label = if *provider == "codex" {
+                "Codex transcripts"
+            } else {
+                "Claude transcripts"
+            };
+            item.set_text(if active {
+                format!("✓ {label}")
+            } else {
+                label.to_owned()
+            });
+        }
+        self.transcript_enabled = enabled;
+    }
+
+    fn transcript_for_menu_event(&self, event: &MenuEvent) -> Option<(&'static str, bool)> {
+        let (codex, claude) = self.transcript_enabled?;
+        self.transcript_items
+            .iter()
+            .find(|(item, _)| event.id == *item.id())
+            .map(|(_, provider)| {
+                (
+                    *provider,
+                    if *provider == "codex" {
+                        !codex
+                    } else {
+                        !claude
+                    },
+                )
+            })
     }
 
     #[cfg(target_os = "macos")]
@@ -363,6 +423,55 @@ fn send_display_mode(endpoint: &str, mode: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+fn fetch_transcript_monitoring(endpoint: &str) -> Result<Option<(bool, bool)>, Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 10,
+        kind: RequestKind::Settings,
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { settings, .. } => {
+            let monitoring = settings.get("transcript_monitoring");
+            Ok(Some((
+                monitoring
+                    .and_then(|value| value.get("codex"))
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+                monitoring
+                    .and_then(|value| value.get("claude"))
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            )))
+        }
+        ServerPayload::Error { .. } => Ok(None),
+        _ => Err("service did not return settings".into()),
+    }
+}
+
+fn send_transcript_monitoring(
+    endpoint: &str,
+    provider: &str,
+    enabled: bool,
+) -> Result<(), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 11,
+        kind: RequestKind::SetTranscriptMonitoring {
+            provider: provider.to_owned(),
+            enabled,
+        },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { .. } => Ok(()),
+        ServerPayload::Error { message, .. } => Err(message.into()),
+        _ => Err("service did not update transcript monitoring".into()),
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn fetch_sleep_policy(endpoint: &str) -> Result<Option<String>, Box<dyn Error>> {
     let request = ClientRequest {
@@ -449,6 +558,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             Option<String>,
             Option<(Vec<DeviceInfo>, Option<String>)>,
             Option<String>,
+            Option<(bool, bool)>,
         ),
         Menu(MenuEvent),
     }
@@ -477,6 +587,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                             let brightness = fetch_brightness(&endpoint).ok().flatten();
                             let display_mode = fetch_display_mode(&endpoint).ok().flatten();
                             let devices = fetch_devices(&endpoint).ok();
+                            let transcript_monitoring =
+                                fetch_transcript_monitoring(&endpoint).ok().flatten();
                             #[cfg(target_os = "macos")]
                             let sleep_policy = fetch_sleep_policy(&endpoint).ok().flatten();
                             #[cfg(target_os = "windows")]
@@ -488,6 +600,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                                     display_mode,
                                     devices,
                                     sleep_policy,
+                                    transcript_monitoring,
                                 ))
                                 .is_err()
                             {
@@ -504,6 +617,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 display_mode,
                 devices,
                 sleep_policy,
+                transcript_monitoring,
             )) => {
                 #[cfg(target_os = "windows")]
                 let _ = &sleep_policy;
@@ -517,9 +631,10 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                         let _ = view.show_snapshot(&snapshot);
                     }
                     last_state = Some(state);
-                    if let Some(view) = &view {
+                    if let Some(view) = &mut view {
                         view.show_brightness(brightness);
                         view.show_display_mode(display_mode.as_deref());
+                        view.show_transcript_monitoring(transcript_monitoring);
                         #[cfg(target_os = "macos")]
                         view.show_sleep_policy(sleep_policy.as_deref());
                     }
@@ -549,6 +664,15 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 *flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Menu(event)) => {
+                if let Some((provider, enabled)) = view
+                    .as_ref()
+                    .and_then(|view| view.transcript_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    std::thread::spawn(move || {
+                        let _ = send_transcript_monitoring(&endpoint, provider, enabled);
+                    });
+                }
                 #[cfg(target_os = "macos")]
                 if let Some(policy) = view
                     .as_ref()
@@ -606,6 +730,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 }
                 view.show_brightness(fetch_brightness(&endpoint).ok().flatten());
                 view.show_display_mode(fetch_display_mode(&endpoint).ok().flatten().as_deref());
+                view.show_transcript_monitoring(
+                    fetch_transcript_monitoring(&endpoint).ok().flatten(),
+                );
                 let devices = fetch_devices(&endpoint).ok();
                 if last_devices != devices {
                     if let Some((ref entries, ref active)) = devices {
@@ -630,6 +757,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             }
             if let Some(brightness) = view.brightness_for_menu_event(&event) {
                 let _ = send_brightness(&endpoint, brightness);
+            } else if let Some((provider, enabled)) = view.transcript_for_menu_event(&event) {
+                let _ = send_transcript_monitoring(&endpoint, provider, enabled);
             } else if let Some(mode) = view.display_for_menu_event(&event) {
                 let _ = send_display_mode(&endpoint, mode);
             } else if let Some(root) = view.device_for_menu_event(&event) {

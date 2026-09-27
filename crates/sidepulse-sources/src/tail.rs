@@ -130,6 +130,33 @@ impl SourceTailer {
         events.sort_by_key(|event| event.logged_at);
         Ok(events)
     }
+
+    /// Reconfigure optional transcript sources without resetting JSONL cursors.
+    pub fn sync_transcripts(&mut self, sources: &[SourceSpec]) -> io::Result<Vec<SourceSpec>> {
+        let desired: Vec<_> = sources
+            .iter()
+            .filter(|source| is_transcript_provider(&source.provider))
+            .collect();
+        let added: Vec<_> = desired
+            .iter()
+            .filter(|source| {
+                !self
+                    .transcripts
+                    .iter()
+                    .any(|cursor| cursor.source() == **source)
+            })
+            .map(|source| (*source).clone())
+            .collect();
+        let new_cursors = added
+            .iter()
+            .cloned()
+            .map(TranscriptCursor::new)
+            .collect::<io::Result<Vec<_>>>()?;
+        self.transcripts
+            .retain(|cursor| desired.contains(&cursor.source()));
+        self.transcripts.extend(new_cursors);
+        Ok(added)
+    }
 }
 
 #[cfg(unix)]
@@ -185,5 +212,42 @@ mod tests {
         fs::write(&path, b"{\"logged_at\":\"2026-09-27T12:00:01Z\",\"hook_event_name\":\"Stop\",\"session_id\":\"a\"}\n").unwrap();
         assert_eq!(tailer.poll().unwrap()[0].event_name, "Stop");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn transcript_reconfiguration_keeps_jsonl_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("claude.jsonl");
+        fs::write(&log, b"").unwrap();
+        let source = SourceSpec {
+            provider: "claude".into(),
+            path: log.clone(),
+        };
+        let transcript = SourceSpec {
+            provider: "codex-transcripts".into(),
+            path: dir.path().join("sessions"),
+        };
+        let mut tailer = SourceTailer::new(std::slice::from_ref(&source)).unwrap();
+        fs::write(&log, b"{\"logged_at\":\"2026-09-27T12:00:00Z\",\"hook_event_name\":\"PreToolUse\",\"session_id\":\"a\"}\n").unwrap();
+        assert_eq!(
+            tailer
+                .sync_transcripts(&[source.clone(), transcript.clone()])
+                .unwrap(),
+            vec![transcript.clone()]
+        );
+        assert_eq!(tailer.poll().unwrap()[0].event_name, "PreToolUse");
+        assert!(
+            tailer
+                .sync_transcripts(&[source.clone(), transcript.clone()])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            tailer
+                .sync_transcripts(std::slice::from_ref(&source))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(tailer.transcripts.is_empty());
     }
 }
