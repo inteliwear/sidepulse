@@ -82,9 +82,10 @@ now renders the mode, active agents, and a quit action. It polls and reconnects
 to the service; its UI event loop is native on macOS and Windows and uses the
 KSNI tray backend on Linux. The development tray compiled and stayed running
 during a macOS smoke test with a temporary Rust service and hook event.
-Visual behavior on macOS and build and runtime behavior on Linux and Windows
-still need validation. These executables are not installed by the existing
-setup flow.
+Rust formatting, linting, and workspace tests pass in CI on macOS, Linux, and
+Windows. Visual behavior on macOS and runtime UI and device behavior on Linux
+and Windows still need validation. These executables are not installed by the
+existing setup flow.
 
 The `sidepulse-device` crate now owns the default LED programs, program
 validation, candidate discovery, and synced writes. An explicitly configured
