@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>AdapterDetails</key>
+		<dict>
+			<key>AdapterVoltage</key>
+			<integer>20000</integer>
+			<key>Current</key>
+			<integer>4800</integer>
+			<key>FamilyCode</key>
+			<integer>3758112769</integer>
+			<key>Manufacturer</key>
+			<string>Test Maker</string>
+			<key>Model</key>
+			<string>Model A</string>
+			<key>Name</key>
+			<string>Test Adapter</string>
+			<key>SerialString</key>
+			<string>fixture-serial</string>
+			<key>UsbHvcMenu</key>
+			<array>
+				<dict>
+					<key>MaxCurrent</key>
+					<integer>3000</integer>
+					<key>MaxVoltage</key>
+					<integer>5000</integer>
+				</dict>
+				<dict>
+					<key>MaxCurrent</key>
+					<integer>4800</integer>
+					<key>MaxVoltage</key>
+					<integer>20000</integer>
+				</dict>
+			</array>
+			<key>Watts</key>
+			<integer>96</integer>
+		</dict>
+		<key>Amperage</key>
+		<integer>1000</integer>
+		<key>AppleRawCurrentCapacity</key>
+		<integer>4000</integer>
+		<key>AppleRawMaxCapacity</key>
+		<integer>8000</integer>
+		<key>AvgTimeToEmpty</key>
+		<integer>-1</integer>
+		<key>AvgTimeToFull</key>
+		<integer>45</integer>
+		<key>BatteryInstalled</key>
+		<true/>
+		<key>CurrentCapacity</key>
+		<integer>50</integer>
+		<key>CycleCount</key>
+		<integer>12</integer>
+		<key>DesignCapacity</key>
+		<integer>10000</integer>
+		<key>ExternalConnected</key>
+		<true/>
+		<key>FullyCharged</key>
+		<false/>
+		<key>IsCharging</key>
+		<true/>
+		<key>Temperature</key>
+		<integer>3030</integer>
+		<key>Voltage</key>
+		<integer>12000</integer>
+	</dict>
+</array>
+</plist>

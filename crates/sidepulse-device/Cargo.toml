@@ -7,6 +7,10 @@ repository.workspace = true
 
 [dependencies]
 sidepulse-core = { path = "../sidepulse-core" }
+plist = "1.10"
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Power", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_WindowsProgramming"] }

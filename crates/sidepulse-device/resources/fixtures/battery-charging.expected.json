@@ -1,0 +1,43 @@
+{
+  "percent": 50,
+  "is_charging": true,
+  "is_charged": false,
+  "is_plugged": true,
+  "battery_present": true,
+  "voltage": 12.0,
+  "amperage": 1.0,
+  "battery_watts": 12.0,
+  "time_to_full": 45,
+  "time_to_empty": -1,
+  "cycle_count": 12,
+  "temperature_c": 30.3,
+  "design_capacity_mah": 10000,
+  "max_capacity_mah": 8000,
+  "current_capacity_mah": 4000,
+  "health_percent": 80,
+  "condition": "Normal",
+  "adapter_connected": true,
+  "adapter_watts": 96,
+  "adapter_voltage": 20.0,
+  "adapter_current": 4.8,
+  "adapter_power": 96.0,
+  "adapter_name": "Test Adapter",
+  "adapter_manufacturer": "Test Maker",
+  "adapter_model": "Model A",
+  "adapter_serial": "fixture-serial",
+  "adapter_family": "USB-C Power Delivery",
+  "pd_profiles": [
+    {
+      "voltage": 5.0,
+      "current": 3.0,
+      "watts": 15.0
+    },
+    {
+      "voltage": 20.0,
+      "current": 4.8,
+      "watts": 96.0
+    }
+  ],
+  "full_charge_watts": 140.0,
+  "charge_speed_ratio": 0.6857142857142857
+}

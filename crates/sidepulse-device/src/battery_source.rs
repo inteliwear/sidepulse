@@ -6,42 +6,7 @@ use crate::battery::BatteryState;
 
 #[cfg(target_os = "macos")]
 pub fn read_battery_state() -> io::Result<Option<BatteryState>> {
-    use std::process::Command;
-
-    let output = Command::new("pmset").args(["-g", "batt"]).output()?;
-    if !output.status.success() {
-        return Err(io::Error::other("pmset could not read battery status"));
-    }
-    Ok(parse_pmset(&String::from_utf8_lossy(&output.stdout)))
-}
-
-#[cfg(target_os = "macos")]
-fn parse_pmset(text: &str) -> Option<BatteryState> {
-    let line = text.lines().find(|line| line.contains('%'))?;
-    let percent_start = line.find('%')?;
-    let digits = line[..percent_start]
-        .chars()
-        .rev()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    let percent = digits.parse::<i32>().ok()?;
-    let lower = line.to_ascii_lowercase();
-    let plugged = text
-        .lines()
-        .next()
-        .is_some_and(|first| first.contains("AC Power"));
-    Some(BatteryState {
-        percent,
-        is_plugged: plugged,
-        is_charging: lower.contains("charging")
-            && !lower.contains("discharging")
-            && !lower.contains("not charging"),
-        is_charged: lower.contains("charged") || percent >= 100,
-        ..Default::default()
-    })
+    Ok(crate::battery_diagnostics::read_battery_snapshot(None)?.led_state())
 }
 
 #[cfg(target_os = "linux")]
@@ -128,19 +93,6 @@ pub fn read_battery_state() -> io::Result<Option<BatteryState>> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn parses_mac_power_states() {
-        use super::*;
-        let charging = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=123)\t57%; charging; 1:30 remaining\n";
-        let state = parse_pmset(charging).unwrap();
-        assert_eq!(state.percent, 57);
-        assert!(state.is_plugged && state.is_charging);
-        let battery = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=123)\t80%; discharging; 3:00 remaining\n";
-        let state = parse_pmset(battery).unwrap();
-        assert!(!state.is_plugged && !state.is_charging);
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn reads_linux_sysfs_battery_and_ac_state() {

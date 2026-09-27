@@ -15,6 +15,7 @@ path = "src/hook.rs"
 
 [dependencies]
 sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-device = { path = "../sidepulse-device" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-sources = { path = "../sidepulse-sources" }
 sidepulse-hook-config = { path = "../sidepulse-hook-config" }

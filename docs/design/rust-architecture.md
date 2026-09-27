@@ -116,8 +116,8 @@ development service can write one device with `--device PATH` and optional
 `--brightness 0-255`. The service polls its own state and skips unchanged
 programs; the tray never touches the device file. A macOS smoke test passed
 from the Rust hook through the service into `LEDS.LED` in a temporary folder.
-Physical hardware behavior, automatic selection, and all custom animation
-styles remain to be ported.
+Physical hardware behavior still needs validation. Automatic selection and
+saved animation styles are covered below; profile editing remains UI work.
 
 The development CLI now shares one fail-open hook handler between
 `sidepulse-next hook-log`, `sidepulse-next agent-monitor hook-log`, and
@@ -194,12 +194,19 @@ compact program previews. Its behavior is tested against the existing Python
 rules. No platform window consumes this model yet; macOS notch rendering and
 Windows/Linux virtual display adapters remain separate UI work.
 The device layer also has the portable battery LED program policy, including
-partial fills and charging pulses. Basic macOS, Linux, and Windows battery
-readers supply charge percentage and power state. When saved per-device settings
+partial fills and charging pulses. The macOS reader now parses the native
+`ioreg` battery plist, including charger power, negotiated profiles, capacity,
+health, and a cached model-based charger baseline. Its artificial fixture
+matches the legacy Python JSON snapshot. `sidepulse-next battery status`
+provides the legacy JSON fields, saved charger baseline, and `--full-watts`
+override; a live macOS comparison matched the stable fields and JSON keys.
+Linux and Windows readers supply charge percentage and power state while
+unavailable richer diagnostics remain explicitly unknown.
+When saved per-device settings
 select battery display, the service writes that program instead of the agent
 program, without UI ownership of the device. The CLI and tray can switch the
 saved per-device display between agent and battery through IPC. Power-change
-previews, custom display modes, and richer legacy battery diagnostics remain
+previews, custom display modes, and the battery configure/LED CLI routes remain
 pending.
 All bundled LED animation programs are now copied into the Rust device crate.
 The service resolves saved per-mode agent styles, including custom programs
