@@ -10,6 +10,7 @@ use sidepulse_core::AgentMode;
 pub mod animations;
 pub mod battery;
 pub mod battery_diagnostics;
+pub mod battery_preview;
 pub mod battery_source;
 pub mod virtual_led;
 #[cfg(windows)]

@@ -135,8 +135,12 @@ pub fn parse_ioreg_battery_plist(
     data: &[u8],
     full_charge_watts: f64,
 ) -> io::Result<BatterySnapshot> {
-    let value = Value::from_reader(Cursor::new(data))
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let value = if data.iter().all(u8::is_ascii_whitespace) {
+        Value::Array(Vec::new())
+    } else {
+        Value::from_reader(Cursor::new(data))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+    };
     let mut snapshot = value
         .as_array()
         .and_then(|rows| rows.first())
@@ -456,6 +460,10 @@ mod tests {
 
     #[test]
     fn absent_battery_and_power_fallbacks_remain_explicit() {
+        let empty = parse_ioreg_battery_plist(b"", 140.0).unwrap();
+        assert!(!empty.battery_present);
+        assert_eq!(empty.full_charge_watts, 140.0);
+        assert!(parse_ioreg_battery_plist(b"corrupt plist", 140.0).is_err());
         let missing = parse_ioreg_battery_plist(
             b"<?xml version=\"1.0\"?><plist version=\"1.0\"><array/></plist>",
             100.0,

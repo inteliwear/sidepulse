@@ -206,8 +206,19 @@ When saved per-device settings
 select battery display, the service writes that program instead of the agent
 program, without UI ownership of the device. The CLI and tray can switch the
 saved per-device display between agent and battery through IPC. Power-change
-previews, custom display modes, and the battery configure/LED CLI routes remain
-pending.
+previews now run in the service through a portable transition policy, including
+the seven-second default and return to agent output. Battery queries run in a
+separate worker so they do not delay device synchronization or IPC. Empty
+macOS battery-query output is treated as no battery, covering desktop hosts.
+Manual (`custom`) display mode leaves existing device output untouched,
+including during previews. All three tray adapters offer this choice and a
+power-change-preview toggle through the shared model and service requests.
+`sidepulse-next battery configure --endpoint ENDPOINT` (or
+`SIDEPULSE_NEXT_ENDPOINT`) updates the legacy battery settings atomically
+through the service, preserving unknown settings. Its process test exercises
+the actual CLI and service on each target platform. Global display defaults
+remain separate from saved per-device choices, matching the Python settings.
+The battery LED CLI route remains pending.
 All bundled LED animation programs are now copied into the Rust device crate.
 The service resolves saved per-mode agent styles, including custom programs
 from the legacy settings `animations` directory, then validates and writes the

@@ -6,9 +6,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
-use sidepulse_core::AgentMode;
 #[cfg(any(target_os = "macos", test))]
 use sidepulse_core::AwakePolicy;
+use sidepulse_core::{AgentMode, BatterySettingsPatch, ChargerBaseline};
 use sidepulse_device::animations::builtin_animation;
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
@@ -69,6 +69,62 @@ impl SettingsStore {
             .and_then(|battery| battery.get("full_charge_watts"))
             .and_then(Value::as_f64)
             .filter(|watts| watts.is_finite() && *watts > 0.0)
+    }
+
+    pub fn battery_preview_settings(&self) -> (bool, f64) {
+        let battery = self.document.get("battery_monitoring");
+        let enabled = battery
+            .and_then(|value| value.get("show_on_power_change"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let seconds = battery
+            .and_then(|value| value.get("power_change_preview_seconds"))
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite())
+            .unwrap_or(7.0)
+            .max(0.0);
+        (enabled, seconds)
+    }
+
+    pub fn set_battery_settings(&mut self, patch: &BatterySettingsPatch) -> io::Result<()> {
+        patch
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut updated = self.document.clone();
+        if let Some(mode) = &patch.display {
+            updated.insert("led_display".into(), json!(mode));
+        }
+        let battery = updated
+            .entry("battery_monitoring")
+            .or_insert_with(|| json!({}));
+        let object = battery.as_object_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "battery_monitoring must be an object",
+            )
+        })?;
+        if let Some(baseline) = patch.full_charge_watts {
+            object.insert(
+                "full_charge_watts".into(),
+                match baseline {
+                    ChargerBaseline::Auto => Value::Null,
+                    ChargerBaseline::Watts { watts } => json!(watts),
+                },
+            );
+        }
+        if let Some(enabled) = patch.show_on_power_change {
+            object.insert("show_on_power_change".into(), json!(enabled));
+        }
+        if let Some(seconds) = patch.power_change_preview_seconds {
+            object.insert("power_change_preview_seconds".into(), json!(seconds));
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
     }
 
     #[cfg(any(target_os = "macos", test))]
@@ -309,7 +365,7 @@ impl SettingsStore {
         mode: &str,
         brightness: u8,
     ) -> io::Result<()> {
-        if !matches!(mode, "agent" | "battery") {
+        if !matches!(mode, "agent" | "battery" | "custom") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported display mode",

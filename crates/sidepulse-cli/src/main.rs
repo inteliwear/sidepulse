@@ -150,8 +150,8 @@ fn main() -> ExitCode {
                 eprintln!("usage: sidepulse-next service-display ENDPOINT agent|battery");
                 return ExitCode::from(2);
             };
-            if !matches!(mode.as_str(), "agent" | "battery") {
-                eprintln!("sidepulse-next: display mode must be agent or battery");
+            if !matches!(mode.as_str(), "agent" | "battery" | "custom") {
+                eprintln!("sidepulse-next: display mode must be agent, battery, or custom");
                 return ExitCode::from(2);
             }
             service_settings_request(&endpoint, RequestKind::SetDisplayMode { mode })

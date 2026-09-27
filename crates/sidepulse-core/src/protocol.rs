@@ -25,6 +25,7 @@ pub enum RequestKind {
     SelectDevice { root: String },
     SetBrightness { brightness: u8 },
     SetDisplayMode { mode: String },
+    SetBatterySettings { patch: BatterySettingsPatch },
     SetSleepPolicy { policy: String },
     SetTranscriptMonitoring { provider: String, enabled: bool },
     Subscribe,
@@ -79,6 +80,45 @@ pub struct DeviceInfo {
     pub label: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChargerBaseline {
+    Auto,
+    Watts { watts: f64 },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BatterySettingsPatch {
+    pub display: Option<String>,
+    pub full_charge_watts: Option<ChargerBaseline>,
+    pub show_on_power_change: Option<bool>,
+    pub power_change_preview_seconds: Option<f64>,
+}
+
+impl BatterySettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .display
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "agent" | "battery" | "custom"))
+        {
+            return Err("invalid display mode");
+        }
+        if let Some(ChargerBaseline::Watts { watts }) = self.full_charge_watts
+            && (!watts.is_finite() || watts <= 0.0)
+        {
+            return Err("invalid charger wattage");
+        }
+        if self
+            .power_change_preview_seconds
+            .is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0)
+        {
+            return Err("invalid power-change preview duration");
+        }
+        Ok(())
+    }
+}
+
 impl ClientRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.version != PROTOCOL_VERSION {
@@ -95,10 +135,12 @@ impl ClientRequest {
             return Err("invalid relay event");
         }
         if let RequestKind::SetDisplayMode { mode } = &self.kind
-            && mode != "agent"
-            && mode != "battery"
+            && !matches!(mode.as_str(), "agent" | "battery" | "custom")
         {
             return Err("invalid display mode");
+        }
+        if let RequestKind::SetBatterySettings { patch } = &self.kind {
+            patch.validate()?;
         }
         if let RequestKind::SetSleepPolicy { policy } = &self.kind
             && !matches!(policy.as_str(), "never" | "agents" | "always")
@@ -175,6 +217,10 @@ mod tests {
         assert_eq!(request.validate(), Ok(()));
         request.kind = RequestKind::SetDisplayMode {
             mode: "custom".into(),
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetDisplayMode {
+            mode: "invalid".into(),
         };
         assert_eq!(request.validate(), Err("invalid display mode"));
         request.kind = RequestKind::SetSleepPolicy {

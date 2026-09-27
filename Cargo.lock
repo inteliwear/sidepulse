@@ -1979,6 +1979,7 @@ dependencies = [
  "interprocess",
  "serde_json",
  "sidepulse-core",
+ "sidepulse-daemon",
  "sidepulse-device",
  "sidepulse-hook-config",
  "sidepulse-ipc",

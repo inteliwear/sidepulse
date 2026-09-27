@@ -5,8 +5,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use sidepulse_core::{
-    ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage,
-    ServerPayload,
+    BatterySettingsPatch, ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION,
+    RequestKind, ServerMessage, ServerPayload,
 };
 #[cfg(target_os = "macos")]
 use sidepulse_ui_model::SLEEP_CHOICES;
@@ -30,6 +30,8 @@ struct TrayView {
     transcript_status: MenuItem,
     transcript_items: Vec<(MenuItem, &'static str)>,
     transcript_enabled: Option<(bool, bool)>,
+    battery_preview_item: MenuItem,
+    battery_preview_enabled: Option<bool>,
     #[cfg(target_os = "macos")]
     sleep_status: MenuItem,
     #[cfg(target_os = "macos")]
@@ -57,6 +59,7 @@ impl TrayView {
             (MenuItem::new("Codex transcripts", false, None), "codex"),
             (MenuItem::new("Claude transcripts", false, None), "claude"),
         ];
+        let battery_preview_item = MenuItem::new("Show battery when power changes", false, None);
         #[cfg(target_os = "macos")]
         let sleep_status = MenuItem::new("Sleep prevention unavailable", false, None);
         #[cfg(target_os = "macos")]
@@ -76,6 +79,7 @@ impl TrayView {
         for (item, _) in &transcript_items {
             menu.append(item)?;
         }
+        menu.append(&battery_preview_item)?;
         #[cfg(target_os = "macos")]
         {
             menu.append(&sleep_status)?;
@@ -102,6 +106,8 @@ impl TrayView {
             transcript_status,
             transcript_items: transcript_items.into(),
             transcript_enabled: None,
+            battery_preview_item,
+            battery_preview_enabled: None,
             #[cfg(target_os = "macos")]
             sleep_status,
             #[cfg(target_os = "macos")]
@@ -142,6 +148,7 @@ impl TrayView {
         self.show_brightness(None);
         self.show_display_mode(None);
         self.show_transcript_monitoring(None);
+        self.show_battery_preview(None);
         #[cfg(target_os = "macos")]
         self.show_sleep_policy(None);
         self.show_devices(&[], None)?;
@@ -241,6 +248,24 @@ impl TrayView {
                     },
                 )
             })
+    }
+
+    fn show_battery_preview(&mut self, enabled: Option<bool>) {
+        self.battery_preview_item.set_enabled(enabled.is_some());
+        self.battery_preview_item
+            .set_text(if enabled == Some(true) {
+                "✓ Show battery when power changes"
+            } else {
+                "Show battery when power changes"
+            });
+        self.battery_preview_enabled = enabled;
+    }
+
+    fn battery_preview_for_menu_event(&self, event: &MenuEvent) -> Option<bool> {
+        (event.id == *self.battery_preview_item.id())
+            .then_some(self.battery_preview_enabled)
+            .flatten()
+            .map(|enabled| !enabled)
     }
 
     #[cfg(target_os = "macos")]
@@ -420,6 +445,26 @@ fn send_transcript_monitoring(
     }
 }
 
+fn send_battery_preview(endpoint: &str, enabled: bool) -> Result<(), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 12,
+        kind: RequestKind::SetBatterySettings {
+            patch: BatterySettingsPatch {
+                show_on_power_change: Some(enabled),
+                ..Default::default()
+            },
+        },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { .. } => Ok(()),
+        ServerPayload::Error { message, .. } => Err(message.into()),
+        _ => Err("service did not update battery preview".into()),
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn send_sleep_policy(endpoint: &str, policy: &str) -> Result<(), Box<dyn Error>> {
     let request = ClientRequest {
@@ -532,6 +577,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     }
                     last_state = Some(state);
                     if let Some(view) = &mut view {
+                        view.show_battery_preview(
+                            controls.as_ref().map(|state| state.battery_power_preview),
+                        );
                         view.show_brightness(controls.as_ref().and_then(|state| state.brightness));
                         view.show_display_mode(
                             controls
@@ -576,6 +624,15 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 *flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Menu(event)) => {
+                if let Some(enabled) = view
+                    .as_ref()
+                    .and_then(|view| view.battery_preview_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    std::thread::spawn(move || {
+                        let _ = send_battery_preview(&endpoint, enabled);
+                    });
+                }
                 if let Some((provider, enabled)) = view
                     .as_ref()
                     .and_then(|view| view.transcript_for_menu_event(&event))
@@ -641,6 +698,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     view.show_snapshot(&snapshot)?;
                 }
                 let controls = fetch_controls(&endpoint).ok();
+                view.show_battery_preview(
+                    controls.as_ref().map(|state| state.battery_power_preview),
+                );
                 view.show_brightness(controls.as_ref().and_then(|state| state.brightness));
                 view.show_display_mode(
                     controls
@@ -676,6 +736,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             }
             if let Some(brightness) = view.brightness_for_menu_event(&event) {
                 let _ = send_brightness(&endpoint, brightness);
+            } else if let Some(enabled) = view.battery_preview_for_menu_event(&event) {
+                let _ = send_battery_preview(&endpoint, enabled);
             } else if let Some((provider, enabled)) = view.transcript_for_menu_event(&event) {
                 let _ = send_transcript_monitoring(&endpoint, provider, enabled);
             } else if let Some(mode) = view.display_for_menu_event(&event) {

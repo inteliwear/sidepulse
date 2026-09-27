@@ -67,6 +67,7 @@ pub struct TrayControls {
     pub codex_transcripts: bool,
     pub claude_transcripts: bool,
     pub sleep_policy: Option<String>,
+    pub battery_power_preview: bool,
 }
 
 impl TrayControls {
@@ -92,6 +93,11 @@ impl TrayControls {
                 .and_then(|value| value.get("claude"))
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
+            battery_power_preview: settings
+                .get("battery_monitoring")
+                .and_then(|value| value.get("show_on_power_change"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true),
             sleep_policy: Some(
                 settings
                     .get("sleep_prevention_policy")
@@ -138,7 +144,7 @@ pub struct DisplayChoice {
     pub value: &'static str,
 }
 
-pub const DISPLAY_CHOICES: [DisplayChoice; 2] = [
+pub const DISPLAY_CHOICES: [DisplayChoice; 3] = [
     DisplayChoice {
         label: "Agent status",
         value: "agent",
@@ -146,6 +152,10 @@ pub const DISPLAY_CHOICES: [DisplayChoice; 2] = [
     DisplayChoice {
         label: "Battery level",
         value: "battery",
+    },
+    DisplayChoice {
+        label: "Manual output",
+        value: "custom",
     },
 ];
 

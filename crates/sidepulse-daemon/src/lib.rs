@@ -8,17 +8,19 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::prelude::*;
 use sidepulse_core::{
-    ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
-    ServerMessage, ServerPayload, parse_log_line, parse_relay_message,
+    BatterySettingsPatch, ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot,
+    PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload, parse_log_line,
+    parse_relay_message,
 };
 use sidepulse_device::animations::program_for_style;
 use sidepulse_device::battery::{BatteryState, program_for_battery};
+use sidepulse_device::battery_preview::BatteryPreview;
 use sidepulse_device::battery_source::read_battery_state;
 use sidepulse_device::led_count_for_target;
 use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
@@ -48,6 +50,7 @@ pub struct Service {
     settings: Arc<Mutex<Option<SettingsStore>>>,
     seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
     relay_publisher: Arc<Mutex<Option<RelayPublisher>>>,
+    battery_preview: Arc<Mutex<BatteryPreview>>,
 }
 
 #[derive(Default)]
@@ -240,6 +243,14 @@ impl Service {
         store.set_transcript_enabled(provider, enabled)
     }
 
+    pub fn set_battery_settings(&self, patch: &BatterySettingsPatch) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_battery_settings(patch)
+    }
+
     #[cfg(target_os = "macos")]
     pub fn set_sleep_policy(&self, policy: &str) -> io::Result<()> {
         let mut settings = self.settings.lock().map_err(poisoned)?;
@@ -266,26 +277,44 @@ impl Service {
 
     /// Only the service calls this; tray and CLI clients receive read-only snapshots.
     pub fn sync_device(&self) -> io::Result<Option<bool>> {
-        let battery_display = {
-            let device = self.device.lock().map_err(poisoned)?;
-            let settings = self.settings.lock().map_err(poisoned)?;
-            device.as_ref().is_some_and(|output| {
-                settings
-                    .as_ref()
-                    .is_some_and(|store| store.display_for_device(output.target()) == "battery")
-            })
-        };
-        let battery = if battery_display {
-            read_battery_state()?
-        } else {
-            None
-        };
-        self.sync_device_with_battery(battery)
+        let battery = self.battery_preview.lock().map_err(poisoned)?.latest;
+        self.render_device_with_battery_at(battery, Instant::now())
+    }
+
+    fn accept_battery(&self, battery: Option<BatteryState>, now: Instant) -> io::Result<()> {
+        let (enabled, seconds) = self
+            .settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map_or((true, 7.0), SettingsStore::battery_preview_settings);
+        self.battery_preview
+            .lock()
+            .map_err(poisoned)?
+            .observe(battery, enabled, seconds, now);
+        Ok(())
     }
 
     pub fn sync_device_with_battery(
         &self,
         battery: Option<BatteryState>,
+    ) -> io::Result<Option<bool>> {
+        self.sync_device_with_battery_at(battery, Instant::now())
+    }
+
+    fn sync_device_with_battery_at(
+        &self,
+        battery: Option<BatteryState>,
+        now: Instant,
+    ) -> io::Result<Option<bool>> {
+        self.accept_battery(battery, now)?;
+        self.render_device_with_battery_at(battery, now)
+    }
+
+    fn render_device_with_battery_at(
+        &self,
+        battery: Option<BatteryState>,
+        now: Instant,
     ) -> io::Result<Option<bool>> {
         let mode = self.snapshot()?.aggregate.mode;
         let mut device = self.device.lock().map_err(poisoned)?;
@@ -293,9 +322,19 @@ impl Service {
         let Some(output) = device.as_mut() else {
             return Ok(None);
         };
-        let battery_display = settings
+        let configured = settings
             .as_ref()
-            .is_some_and(|store| store.display_for_device(output.target()) == "battery");
+            .map_or("agent", |store| store.display_for_device(output.target()));
+        let display = self
+            .battery_preview
+            .lock()
+            .map_err(poisoned)?
+            .display(configured, now)
+            .to_owned();
+        if display == "custom" {
+            return Ok(Some(false));
+        }
+        let battery_display = display == "battery";
         if battery_display && battery.is_none() {
             return Ok(Some(false));
         }
@@ -596,6 +635,40 @@ impl Service {
                     },
                 )
             }
+            RequestKind::SetBatterySettings { patch } => {
+                let payload = match self
+                    .set_battery_settings(&patch)
+                    .and_then(|_| self.settings_snapshot())
+                {
+                    Ok(Some(settings)) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                        display_mode: settings.display_mode,
+                    },
+                    Ok(None) => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                    Err(error) => ServerPayload::Error {
+                        code: if error.kind() == io::ErrorKind::AlreadyExists {
+                            "settings_conflict"
+                        } else {
+                            "settings_update_failed"
+                        }
+                        .into(),
+                        message: error.to_string(),
+                    },
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::SetSleepPolicy { policy } => {
                 #[cfg(target_os = "macos")]
                 let payload = match self
@@ -857,11 +930,16 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         )
                     };
                     let state = power_service.snapshot()?;
-                    let battery = read_battery_state()?.map(|state| BatteryPower {
-                        percent: f64::from(state.percent),
-                        present: true,
-                        plugged_in: state.is_plugged,
-                    });
+                    let battery = power_service
+                        .battery_preview
+                        .lock()
+                        .map_err(poisoned)?
+                        .latest
+                        .map(|state| BatteryPower {
+                            percent: f64::from(state.percent),
+                            present: true,
+                            plugged_in: state.is_plugged,
+                        });
                     let observation = power::observe()?;
                     let plan = plan_sleep(SleepInputs {
                         policy,
@@ -1004,6 +1082,27 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         let message = error.to_string();
                         if last_error.as_deref() != Some(message.as_str()) {
                             eprintln!("sidepulse-next-service: device output: {message}");
+                        }
+                        last_error = Some(message);
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    }
+    if device.is_some() || auto_device || power_control {
+        let battery_service = service.clone();
+        std::thread::spawn(move || {
+            let mut last_error = None;
+            loop {
+                let result = read_battery_state()
+                    .and_then(|battery| battery_service.accept_battery(battery, Instant::now()));
+                match result {
+                    Ok(()) => last_error = None,
+                    Err(error) => {
+                        let message = error.to_string();
+                        if last_error.as_deref() != Some(message.as_str()) {
+                            eprintln!("sidepulse-next-service: battery: {message}");
                         }
                         last_error = Some(message);
                     }
@@ -1363,5 +1462,89 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn service_previews_power_changes_then_resumes_agents_without_overwriting_manual_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let device = directory.path().join("SidePulseDot");
+        fs::create_dir(&device).unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"battery_monitoring":{"custom":"keep"},"unknown":9}"#,
+        )
+        .unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service.configure_device(&device, 255).unwrap();
+        let now = Instant::now();
+        let battery = BatteryState {
+            percent: 50,
+            ..Default::default()
+        };
+        service
+            .sync_device_with_battery_at(Some(battery), now)
+            .unwrap();
+        let agent_program = fs::read(device.join("LEDS.LED")).unwrap();
+        let plugged = BatteryState {
+            is_plugged: true,
+            ..battery
+        };
+        assert_eq!(
+            service
+                .sync_device_with_battery_at(Some(plugged), now)
+                .unwrap(),
+            Some(true)
+        );
+        assert_ne!(fs::read(device.join("LEDS.LED")).unwrap(), agent_program);
+        service
+            .sync_device_with_battery_at(Some(plugged), now + Duration::from_secs(7))
+            .unwrap();
+        assert_eq!(fs::read(device.join("LEDS.LED")).unwrap(), agent_program);
+        service.set_display_mode("custom").unwrap();
+        fs::write(device.join("LEDS.LED"), "manual program").unwrap();
+        assert_eq!(
+            service
+                .sync_device_with_battery_at(Some(battery), now + Duration::from_secs(8))
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            fs::read_to_string(device.join("LEDS.LED")).unwrap(),
+            "manual program"
+        );
+        service
+            .set_battery_settings(&BatterySettingsPatch {
+                full_charge_watts: Some(sidepulse_core::ChargerBaseline::Watts { watts: 140.0 }),
+                show_on_power_change: Some(false),
+                power_change_preview_seconds: Some(3.0),
+                ..Default::default()
+            })
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["unknown"], 9);
+        assert_eq!(saved["battery_monitoring"]["custom"], "keep");
+        assert_eq!(saved["battery_monitoring"]["full_charge_watts"], 140.0);
+        assert_eq!(saved["devices"][0]["led_display"], "custom");
+        let bytes = fs::read(&path).unwrap();
+        assert!(
+            service
+                .set_battery_settings(&BatterySettingsPatch {
+                    full_charge_watts: Some(sidepulse_core::ChargerBaseline::Watts {
+                        watts: f64::NAN
+                    }),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        service
+            .set_battery_settings(&BatterySettingsPatch {
+                full_charge_watts: Some(sidepulse_core::ChargerBaseline::Auto),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(service.settings_snapshot().unwrap().unwrap().document["battery_monitoring"]["full_charge_watts"].is_null());
     }
 }

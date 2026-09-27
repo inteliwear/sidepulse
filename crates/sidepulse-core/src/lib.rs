@@ -21,7 +21,8 @@ pub use origin::{
     origin_from_terminal_environment, origin_label_from_payload,
 };
 pub use protocol::{
-    ClientRequest, DeviceInfo, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    BatterySettingsPatch, ChargerBaseline, ClientRequest, DeviceInfo, PROTOCOL_VERSION,
+    RequestKind, ServerMessage, ServerPayload,
 };
 pub use provider::{
     canonical_event_name, format_hook_payload, infer_hook_provider, normalize_cursor_payload,
