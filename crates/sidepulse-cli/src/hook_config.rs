@@ -91,6 +91,7 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
                 "backup_path": backup,
                 "dry_run": dry_run,
                 "updated": if dry_run { Some(plan.updated) } else { None },
+                "trust_review_required": provider == "codex" && action == Action::Install,
             }))
             .expect("hook config result serializes")
         );
@@ -113,6 +114,9 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
         );
         if dry_run && plan.changed {
             print!("{}", plan.updated);
+        }
+        if provider == "codex" && action == Action::Install && !dry_run {
+            println!("Review and trust the new SidePulse hooks in Codex with /hooks.");
         }
     }
     ExitCode::SUCCESS
@@ -196,6 +200,7 @@ fn run_all_providers(
                     "backup_path": backup,
                     "dry_run": dry_run,
                     "updated": if dry_run { Some(&plan.updated) } else { None },
+                    "trust_review_required": plan.provider == "codex" && action == Action::Install,
                 })
             })
             .collect();
@@ -221,6 +226,9 @@ fn run_all_providers(
                     "unchanged"
                 }
             );
+        }
+        if action == Action::Install && !dry_run {
+            println!("Review and trust the new SidePulse hooks in Codex with /hooks.");
         }
     }
     ExitCode::SUCCESS

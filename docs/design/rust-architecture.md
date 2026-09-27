@@ -214,8 +214,11 @@ reports of hook events and log paths for all five providers.
 `agent-monitor live` and `watch` now refresh the same Rust monitor view using
 the bounded log reader. Their terminal presentation is simpler than the
 Python dashboard and still needs a final CLI output comparison.
-Codex hook trust refresh and legacy Grok backup relocation still need implementation
-before the native installer can own cutover.
+Codex requires a user trust review for new or changed non-managed hooks. The
+Rust installer reports this step and does not write trust hashes itself. The
+Python installer still has its legacy automatic trust refresh, so cutover
+must validate the new review flow. This follows the current
+[official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
 
 Further origin parity, production relay launch, production provider hook installation,
 settings-controlled transcript selection, production device discovery,
