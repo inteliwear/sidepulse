@@ -171,14 +171,13 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 }
                 last_connected = Some(connected);
             }
-            Event::UserEvent(UserEvent::Menu(event)) => {
+            Event::UserEvent(UserEvent::Menu(event))
                 if view
                     .as_ref()
-                    .is_some_and(|view| event.id == *view.quit.id())
-                {
-                    view.take();
-                    *flow = ControlFlow::Exit;
-                }
+                    .is_some_and(|view| event.id == *view.quit.id()) =>
+            {
+                view.take();
+                *flow = ControlFlow::Exit;
             }
             _ => {}
         }

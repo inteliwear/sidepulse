@@ -334,6 +334,7 @@ pub fn run_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use serde_json::json;
 
     #[cfg(unix)]
