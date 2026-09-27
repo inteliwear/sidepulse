@@ -515,7 +515,24 @@ pub fn run_with_options(
         service.configure_settings(path)?;
     }
     service.load_latest_state()?;
-    let sources = sources_from_environment(logs);
+    let mut source_overrides = logs.to_vec();
+    if let Some(store) = service.settings.lock().map_err(poisoned)?.as_ref() {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        for (provider, relative) in [("codex", ".codex/sessions"), ("claude", ".claude/projects")] {
+            let source_name = format!("{provider}-transcripts");
+            if store.transcript_enabled(provider)
+                && !source_overrides
+                    .iter()
+                    .any(|(name, _)| name == &source_name)
+            {
+                source_overrides.push((source_name, home.join(relative)));
+            }
+        }
+    }
+    let sources = sources_from_environment(&source_overrides);
     let mut tailer = SourceTailer::new(&sources)?;
     service.replay_sources(&sources, 5000)?;
     let recovery_service = service.clone();

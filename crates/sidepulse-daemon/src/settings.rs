@@ -67,6 +67,14 @@ impl SettingsStore {
             .filter(|watts| watts.is_finite() && *watts > 0.0)
     }
 
+    pub fn transcript_enabled(&self, provider: &str) -> bool {
+        self.document
+            .get("transcript_monitoring")
+            .and_then(|monitoring| monitoring.get(provider))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
     pub fn set_brightness_for_device(&mut self, path: &Path, brightness: u8) -> io::Result<()> {
         let mut updated = self.document.clone();
         let devices = updated.entry("devices").or_insert_with(|| json!([]));

@@ -114,6 +114,10 @@ file changes; they remain opt-in as in the Python defaults. The Rust reader
 needs comparison against a larger set of captured transcript cases. Provider
 JSONL replay now seeks backward for the last requested lines instead of
 scanning entire historical logs.
+When an explicit settings document enables Codex or Claude transcript
+monitoring, the service now discovers their default transcript directories at
+startup; explicit `--transcript` paths still take precedence. Changes to that
+setting while the service is running are not yet reflected in source selection.
 
 The development service can load and atomically update the legacy
 `latest.json` status schema when launched with `--state PATH`. State output is
