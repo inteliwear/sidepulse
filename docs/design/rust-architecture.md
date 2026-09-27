@@ -184,9 +184,13 @@ parsers. A read-only macOS service adapter reports the actual lid state,
 active external displays, and system sleep assertions through IPC; the CLI
 can inspect this with `service-power`. It uses CoreGraphics for display state.
 Non-macOS services return an explicit unsupported-platform error for this
-macOS-specific observation. Applying the awake policy, the optional sleep
-helper, and settings and UI controls remains to be ported; this adapter does
-not change system power settings.
+macOS-specific observation. An explicit development `--power-control` service
+option applies the saved awake policy on macOS. The service owns the
+`caffeinate -ims` process and, only when the saved closed-lid override is
+enabled, requests the existing noninteractive `pmset` helper and display
+sleep. The policy uses battery safeguards and CoreGraphics display state.
+No installer enables this option yet. Physical lid transitions, helper
+recovery after a service crash, and UI controls still require validation.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover

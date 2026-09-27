@@ -665,30 +665,108 @@ pub fn run_with_logs_and_device(
 ) -> io::Result<()> {
     run_with_options(
         endpoint,
-        logs,
-        device.map(|(path, brightness)| (path, Some(brightness))),
-        None,
-        None,
-        false,
-        None,
+        RunOptions {
+            logs,
+            device: device.map(|(path, brightness)| (path, Some(brightness))),
+            latest_state_path: None,
+            settings_path: None,
+            auto_device: false,
+            relay_config_path: None,
+            power_control: false,
+        },
     )
 }
 
-pub fn run_with_options(
-    endpoint: &str,
-    logs: &[(String, PathBuf)],
-    device: Option<(&Path, Option<u8>)>,
-    latest_state_path: Option<&Path>,
-    settings_path: Option<&Path>,
-    auto_device: bool,
-    relay_config_path: Option<&Path>,
-) -> io::Result<()> {
+pub struct RunOptions<'a> {
+    pub logs: &'a [(String, PathBuf)],
+    pub device: Option<(&'a Path, Option<u8>)>,
+    pub latest_state_path: Option<&'a Path>,
+    pub settings_path: Option<&'a Path>,
+    pub auto_device: bool,
+    pub relay_config_path: Option<&'a Path>,
+    pub power_control: bool,
+}
+
+pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<()> {
+    let RunOptions {
+        logs,
+        device,
+        latest_state_path,
+        settings_path,
+        auto_device,
+        relay_config_path,
+        power_control,
+    } = options;
+    #[cfg(not(target_os = "macos"))]
+    if power_control {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "power control is available only on macOS",
+        ));
+    }
+    if power_control && settings_path.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--power-control requires --settings",
+        ));
+    }
     let listener = sidepulse_ipc::bind(endpoint)?;
     let service = latest_state_path.map_or_else(Service::new, |path| {
         Service::with_state_path(path.to_path_buf())
     });
     if let Some(path) = settings_path {
         service.configure_settings(path)?;
+    }
+    #[cfg(target_os = "macos")]
+    if power_control {
+        use sidepulse_core::{BatteryPower, SleepInputs, battery_safeguard_active, plan_sleep};
+
+        let power_service = service.clone();
+        std::thread::spawn(move || {
+            let mut controller = power::MacPowerController::new();
+            let mut last_error = None;
+            loop {
+                let result = (|| -> io::Result<()> {
+                    let (policy, threshold, allow_override) = {
+                        let settings = power_service.settings.lock().map_err(poisoned)?;
+                        let store = settings
+                            .as_ref()
+                            .ok_or_else(|| io::Error::other("power settings unavailable"))?;
+                        (
+                            store.sleep_policy(),
+                            store.sleep_battery_threshold(),
+                            store.closed_lid_system_override_enabled(),
+                        )
+                    };
+                    let state = power_service.snapshot()?;
+                    let battery = read_battery_state()?.map(|state| BatteryPower {
+                        percent: f64::from(state.percent),
+                        present: true,
+                        plugged_in: state.is_plugged,
+                    });
+                    let observation = power::observe()?;
+                    let plan = plan_sleep(SleepInputs {
+                        policy,
+                        agents_active: Some(state.aggregate.active_count > 0),
+                        battery_safeguard_active: battery_safeguard_active(battery, threshold),
+                        lid_closed: observation.lid_closed,
+                        external_display_active: observation.external_display_active,
+                    });
+                    controller.sync(plan, allow_override)
+                })();
+                match result {
+                    Ok(()) => last_error = None,
+                    Err(error) => {
+                        let message = error.to_string();
+                        if last_error.as_deref() != Some(message.as_str()) {
+                            eprintln!("sidepulse-next-service: power control: {message}");
+                        }
+                        last_error = Some(message);
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
     }
     if let Some(path) = relay_config_path {
         let path = path.to_path_buf();

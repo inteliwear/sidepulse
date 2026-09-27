@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
         );
         return ExitCode::from(2);
     };
@@ -15,13 +15,14 @@ fn main() -> ExitCode {
     let mut state = None;
     let mut settings = None;
     let mut relay_config = None;
+    let mut power_control = false;
     let mut brightness = None;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
                     );
                     return ExitCode::from(2);
                 };
@@ -71,6 +72,7 @@ fn main() -> ExitCode {
                 };
                 relay_config = Some(PathBuf::from(path));
             }
+            "--power-control" => power_control = true,
             "--brightness" => {
                 let Some(value) = args.next().and_then(|value| value.parse::<u8>().ok()) else {
                     eprintln!("sidepulse-next-service: brightness must be 0-255");
@@ -80,7 +82,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
                 );
                 return ExitCode::from(2);
             }
@@ -94,12 +96,15 @@ fn main() -> ExitCode {
     }
     if let Err(error) = sidepulse_daemon::run_with_options(
         &endpoint,
-        &logs,
-        device.as_deref().map(|path| (path, brightness)),
-        state.as_deref(),
-        settings.as_deref(),
-        auto_device,
-        relay_config.as_deref(),
+        sidepulse_daemon::RunOptions {
+            logs: &logs,
+            device: device.as_deref().map(|path| (path, brightness)),
+            latest_state_path: state.as_deref(),
+            settings_path: settings.as_deref(),
+            auto_device,
+            relay_config_path: relay_config.as_deref(),
+            power_control,
+        },
     ) {
         eprintln!("sidepulse-next-service: {error}");
         return ExitCode::FAILURE;

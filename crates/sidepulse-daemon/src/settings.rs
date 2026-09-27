@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
-use sidepulse_core::AgentMode;
+use sidepulse_core::{AgentMode, AwakePolicy};
 use sidepulse_device::animations::builtin_animation;
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
@@ -67,6 +67,40 @@ impl SettingsStore {
             .and_then(|battery| battery.get("full_charge_watts"))
             .and_then(Value::as_f64)
             .filter(|watts| watts.is_finite() && *watts > 0.0)
+    }
+
+    pub fn sleep_policy(&self) -> AwakePolicy {
+        match self
+            .document
+            .get("sleep_prevention_policy")
+            .and_then(Value::as_str)
+        {
+            Some("never") => AwakePolicy::Never,
+            Some("always") => AwakePolicy::Always,
+            _ => AwakePolicy::Agents,
+        }
+    }
+
+    pub fn sleep_battery_threshold(&self) -> f64 {
+        self.document
+            .get("sleep_prevention")
+            .and_then(|settings| settings.get("min_battery_percent"))
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                self.document
+                    .get("sleep_prevention_min_battery_percent")
+                    .and_then(Value::as_f64)
+            })
+            .filter(|value| value.is_finite())
+            .unwrap_or(20.0)
+            .clamp(0.0, 100.0)
+    }
+
+    pub fn closed_lid_system_override_enabled(&self) -> bool {
+        self.document
+            .get("closed_lid_system_override_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     pub fn transcript_enabled(&self, provider: &str) -> bool {
@@ -362,6 +396,26 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"custom\":2}\n");
+    }
+
+    #[test]
+    fn reads_legacy_sleep_settings_for_service_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            json!({
+                "sleep_prevention_policy": "always",
+                "closed_lid_system_override_enabled": true,
+                "sleep_prevention": {"min_battery_percent": 27.5}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = SettingsStore::load(&path).unwrap();
+        assert_eq!(store.sleep_policy(), AwakePolicy::Always);
+        assert_eq!(store.sleep_battery_threshold(), 27.5);
+        assert!(store.closed_lid_system_override_enabled());
     }
 
     #[test]
