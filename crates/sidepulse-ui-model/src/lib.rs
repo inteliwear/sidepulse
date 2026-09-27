@@ -50,6 +50,47 @@ pub struct TrayState {
     pub stale_rows: Vec<AgentRow>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrightnessChoice {
+    pub label: &'static str,
+    pub value: u8,
+}
+
+pub const BRIGHTNESS_CHOICES: [BrightnessChoice; 5] = [
+    BrightnessChoice {
+        label: "Off",
+        value: 0,
+    },
+    BrightnessChoice {
+        label: "25%",
+        value: 64,
+    },
+    BrightnessChoice {
+        label: "50%",
+        value: 128,
+    },
+    BrightnessChoice {
+        label: "75%",
+        value: 192,
+    },
+    BrightnessChoice {
+        label: "100%",
+        value: 255,
+    },
+];
+
+pub fn brightness_label(current: Option<u8>) -> String {
+    current.map_or_else(
+        || "Device brightness unavailable".into(),
+        |value| {
+            format!(
+                "Device brightness: {}%",
+                ((u16::from(value) * 100 + 127) / 255)
+            )
+        },
+    )
+}
+
 impl TrayState {
     pub fn from_snapshot(snapshot: &MonitorSnapshot) -> Self {
         let aggregate = &snapshot.aggregate;

@@ -120,6 +120,16 @@ opt-in during migration so a trial Rust service cannot overwrite the active
 Python application's state file. The released installer must hand ownership
 of that file to the Rust service during cutover.
 
+The service can also load a legacy settings document with explicit
+`--settings PATH`. It preserves unknown fields and rejects a write if another
+process changed the document after startup. A device started with `--device`
+uses its saved brightness unless `--brightness` overrides it. The Rust CLI
+can inspect settings and change brightness through service requests; the
+native tray offers brightness presets through the same requests. The service
+alone saves the setting and writes the LED program. This is the first settings
+control, not complete settings parity. Settings paths remain opt-in during
+migration, and native tray interaction still needs visual runtime validation.
+
 The core now resolves explicit and environment-based agent origins and reads
 legacy structured origin labels from hook payloads. Process ancestry detection
 still needs portable platform adapters. On Unix, the Junie hook now uses process
@@ -148,7 +158,7 @@ remains authoritative for users until the delivery gates above pass.
    providers, preserving unrelated config and backing up changed files.
 2. Finish source parity: transcript edge cases, process ancestry origin,
    Junie correlation, and captured Python-to-Rust transition comparisons.
-3. Port settings, relay, link, battery and sleep policy, custom animations,
+3. Port the remaining settings controls, relay, link, battery and sleep policy, custom animations,
    automatic device selection, and virtual device output into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.

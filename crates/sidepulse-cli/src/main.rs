@@ -70,6 +70,25 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("service-settings") => {
+            let (Some(endpoint), None) = (args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next service-settings ENDPOINT");
+                return ExitCode::from(2);
+            };
+            service_settings_request(&endpoint, RequestKind::Settings)
+        }
+        Some("service-brightness") => {
+            let (Some(endpoint), Some(value), None) = (args.next(), args.next(), args.next())
+            else {
+                eprintln!("usage: sidepulse-next service-brightness ENDPOINT 0-255");
+                return ExitCode::from(2);
+            };
+            let Ok(brightness) = value.parse::<u8>() else {
+                eprintln!("sidepulse-next: brightness must be 0-255");
+                return ExitCode::from(2);
+            };
+            service_settings_request(&endpoint, RequestKind::SetBrightness { brightness })
+        }
         Some("inspect-log") => {
             let (Some(provider), Some(path), at, None) =
                 (args.next(), args.next(), args.next(), args.next())
@@ -114,9 +133,46 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <status | hook-log | install | uninstall> | service-status ENDPOINT | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
+        }
+    }
+}
+
+fn service_settings_request(endpoint: &str, kind: RequestKind) -> ExitCode {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind,
+    };
+    let reply: ServerMessage =
+        match sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)) {
+            Ok(reply) => reply,
+            Err(error) => {
+                eprintln!("sidepulse-next: service unavailable: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    if reply.version != PROTOCOL_VERSION || reply.request_id != Some(1) {
+        eprintln!("sidepulse-next: invalid service response");
+        return ExitCode::FAILURE;
+    }
+    match reply.payload {
+        ServerPayload::Settings { settings, .. } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&settings).expect("settings JSON serializes")
+            );
+            ExitCode::SUCCESS
+        }
+        ServerPayload::Error { code, message } => {
+            eprintln!("sidepulse-next: {code}: {message}");
+            ExitCode::FAILURE
+        }
+        _ => {
+            eprintln!("sidepulse-next: unexpected service reply");
+            ExitCode::FAILURE
         }
     }
 }

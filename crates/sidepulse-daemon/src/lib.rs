@@ -1,5 +1,7 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
+mod settings;
+
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -18,12 +20,21 @@ use sidepulse_ipc::{read_message, write_message};
 use sidepulse_sources::{SourceSpec, SourceTailer, load_recent_events, sources_from_environment};
 use tempfile::NamedTempFile;
 
+use settings::SettingsStore;
+
+pub struct RuntimeSettings {
+    pub document: serde_json::Value,
+    pub active_device: Option<String>,
+    pub brightness: Option<u8>,
+}
+
 #[derive(Clone, Default)]
 pub struct Service {
     monitor: Arc<Mutex<Monitor>>,
     subscribers: Arc<Mutex<Vec<mpsc::SyncSender<()>>>>,
     device: Arc<Mutex<Option<DeviceOutput>>>,
     latest_state_path: Arc<Option<PathBuf>>,
+    settings: Arc<Mutex<Option<SettingsStore>>>,
 }
 
 impl Service {
@@ -73,6 +84,37 @@ impl Service {
 
     pub fn configure_device(&self, path: &Path, brightness: u8) -> io::Result<()> {
         *self.device.lock().map_err(poisoned)? = Some(DeviceOutput::new(path, brightness));
+        Ok(())
+    }
+
+    pub fn configure_settings(&self, path: &Path) -> io::Result<()> {
+        *self.settings.lock().map_err(poisoned)? = Some(SettingsStore::load(path)?);
+        Ok(())
+    }
+
+    pub fn settings_snapshot(&self) -> io::Result<Option<RuntimeSettings>> {
+        let device = self.device.lock().map_err(poisoned)?;
+        let settings = self.settings.lock().map_err(poisoned)?;
+        Ok(settings.as_ref().map(|store| RuntimeSettings {
+            document: store.snapshot(),
+            active_device: device
+                .as_ref()
+                .map(|output| output.target().to_string_lossy().into_owned()),
+            brightness: device.as_ref().map(DeviceOutput::brightness),
+        }))
+    }
+
+    pub fn set_brightness(&self, brightness: u8) -> io::Result<()> {
+        let mut device = self.device.lock().map_err(poisoned)?;
+        let output = device
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no device is configured"))?;
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_brightness_for_device(output.target(), brightness)?;
+        output.set_brightness(brightness);
         Ok(())
     }
 
@@ -162,6 +204,62 @@ impl Service {
                     },
                 },
             ),
+            RequestKind::Settings => {
+                let payload = match self.settings_snapshot()? {
+                    Some(settings) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                    },
+                    None => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::SetBrightness { brightness } => {
+                let payload = match self
+                    .set_brightness(brightness)
+                    .and_then(|_| self.settings_snapshot())
+                {
+                    Ok(Some(settings)) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                    },
+                    Ok(None) => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => ServerPayload::Error {
+                        code: "device_unavailable".into(),
+                        message: error.to_string(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        ServerPayload::Error {
+                            code: "settings_conflict".into(),
+                            message: error.to_string(),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::IngestHook { provider, line } => {
                 let record = serde_json::to_string(&line)
                     .ok()
@@ -261,19 +359,29 @@ pub fn run_with_logs_and_device(
     logs: &[(String, std::path::PathBuf)],
     device: Option<(&Path, u8)>,
 ) -> io::Result<()> {
-    run_with_options(endpoint, logs, device, None)
+    run_with_options(
+        endpoint,
+        logs,
+        device.map(|(path, brightness)| (path, Some(brightness))),
+        None,
+        None,
+    )
 }
 
 pub fn run_with_options(
     endpoint: &str,
     logs: &[(String, PathBuf)],
-    device: Option<(&Path, u8)>,
+    device: Option<(&Path, Option<u8>)>,
     latest_state_path: Option<&Path>,
+    settings_path: Option<&Path>,
 ) -> io::Result<()> {
     let listener = sidepulse_ipc::bind(endpoint)?;
     let service = latest_state_path.map_or_else(Service::new, |path| {
         Service::with_state_path(path.to_path_buf())
     });
+    if let Some(path) = settings_path {
+        service.configure_settings(path)?;
+    }
     service.load_latest_state()?;
     let sources = sources_from_environment(logs);
     let mut tailer = SourceTailer::new(&sources)?;
@@ -301,6 +409,15 @@ pub fn run_with_options(
         }
     });
     if let Some((path, brightness)) = device {
+        let brightness = match brightness {
+            Some(brightness) => brightness,
+            None => service
+                .settings
+                .lock()
+                .map_err(poisoned)?
+                .as_ref()
+                .map_or(255, |store| store.brightness_for_device(path)),
+        };
         service.configure_device(path, brightness)?;
         let output_service = service.clone();
         std::thread::spawn(move || {

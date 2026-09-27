@@ -19,6 +19,8 @@ pub struct ClientRequest {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum RequestKind {
     Snapshot,
+    Settings,
+    SetBrightness { brightness: u8 },
     Subscribe,
     IngestHook { provider: String, line: Value },
 }
@@ -35,10 +37,22 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
-    Snapshot { state: MonitorSnapshot },
-    StateChanged { state: MonitorSnapshot },
+    Snapshot {
+        state: MonitorSnapshot,
+    },
+    Settings {
+        settings: Value,
+        active_device: Option<String>,
+        brightness: Option<u8>,
+    },
+    StateChanged {
+        state: MonitorSnapshot,
+    },
     Ack,
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 impl ClientRequest {

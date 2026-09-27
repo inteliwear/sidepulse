@@ -255,6 +255,14 @@ impl DeviceOutput {
         &self.target
     }
 
+    pub fn brightness(&self) -> u8 {
+        self.brightness
+    }
+
+    pub fn set_brightness(&mut self, brightness: u8) {
+        self.brightness = brightness;
+    }
+
     pub fn sync(&mut self, mode: AgentMode) -> io::Result<bool> {
         let program = program_for_mode(mode, led_count_for_target(&self.target), self.brightness);
         validate_led_text(&program)?;

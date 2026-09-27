@@ -7,7 +7,7 @@ use std::time::Duration;
 use sidepulse_core::{
     ClientRequest, MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
 };
-use sidepulse_ui_model::{StatusIcon, TrayState};
+use sidepulse_ui_model::{BRIGHTNESS_CHOICES, StatusIcon, TrayState, brightness_label};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -15,6 +15,8 @@ struct TrayView {
     tray: TrayIcon,
     menu: Menu,
     status: MenuItem,
+    brightness_status: MenuItem,
+    brightness_items: Vec<(MenuItem, u8)>,
     quit: MenuItem,
     visible_rows: usize,
 }
@@ -24,8 +26,18 @@ impl TrayView {
         let menu = Menu::new();
         let status = MenuItem::new("Connecting to SidePulse…", false, None);
         let separator = PredefinedMenuItem::separator();
+        let brightness_status = MenuItem::new("Device brightness unavailable", false, None);
+        let brightness_items = BRIGHTNESS_CHOICES
+            .iter()
+            .map(|choice| (MenuItem::new(choice.label, false, None), choice.value))
+            .collect::<Vec<_>>();
+        let controls_separator = PredefinedMenuItem::separator();
         let quit = MenuItem::new("Quit SidePulse tray", true, None);
-        menu.append_items(&[&status, &separator, &quit])?;
+        menu.append_items(&[&status, &separator, &brightness_status])?;
+        for (item, _) in &brightness_items {
+            menu.append(item)?;
+        }
+        menu.append_items(&[&controls_separator, &quit])?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon(StatusIcon::Unknown)?)
@@ -35,6 +47,8 @@ impl TrayView {
             tray,
             menu,
             status,
+            brightness_status,
+            brightness_items,
             quit,
             visible_rows: 0,
         })
@@ -67,7 +81,32 @@ impl TrayView {
             self.menu.remove_at(1);
         }
         self.visible_rows = 0;
+        self.show_brightness(None);
         Ok(())
+    }
+
+    fn show_brightness(&self, brightness: Option<u8>) {
+        self.brightness_status
+            .set_text(brightness_label(brightness));
+        for (item, value) in &self.brightness_items {
+            item.set_enabled(brightness.is_some());
+            let label = BRIGHTNESS_CHOICES
+                .iter()
+                .find(|choice| choice.value == *value)
+                .map_or("Brightness", |choice| choice.label);
+            item.set_text(if brightness == Some(*value) {
+                format!("✓ {label}")
+            } else {
+                label.to_owned()
+            });
+        }
+    }
+
+    fn brightness_for_menu_event(&self, event: &MenuEvent) -> Option<u8> {
+        self.brightness_items
+            .iter()
+            .find(|(item, _)| event.id == *item.id())
+            .map(|(_, value)| *value)
     }
 }
 
@@ -115,13 +154,47 @@ fn fetch_snapshot(endpoint: &str) -> Result<MonitorSnapshot, Box<dyn Error>> {
     }
 }
 
+fn fetch_brightness(endpoint: &str) -> Result<Option<u8>, Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 2,
+        kind: RequestKind::Settings,
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings {
+            active_device: Some(_),
+            brightness,
+            ..
+        } => Ok(brightness),
+        ServerPayload::Error { .. } => Ok(None),
+        _ => Err("service did not return settings".into()),
+    }
+}
+
+fn send_brightness(endpoint: &str, brightness: u8) -> Result<(), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 3,
+        kind: RequestKind::SetBrightness { brightness },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { .. } => Ok(()),
+        ServerPayload::Error { message, .. } => Err(message.into()),
+        _ => Err("service did not update brightness".into()),
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     enum UserEvent {
-        Snapshot(Option<Box<MonitorSnapshot>>),
+        Snapshot(Option<Box<MonitorSnapshot>>, Option<u8>),
         Menu(MenuEvent),
     }
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -131,6 +204,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     }));
     let mut worker_proxy = Some(event_loop.create_proxy());
     let mut worker_endpoint = Some(endpoint);
+    let control_endpoint = worker_endpoint.as_ref().expect("endpoint is set").clone();
     let mut view: Option<TrayView> = None;
     let mut last_connected = None;
     let mut last_state: Option<TrayState> = None;
@@ -144,7 +218,11 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     std::thread::spawn(move || {
                         loop {
                             let snapshot = fetch_snapshot(&endpoint).ok().map(Box::new);
-                            if proxy.send_event(UserEvent::Snapshot(snapshot)).is_err() {
+                            let brightness = fetch_brightness(&endpoint).ok().flatten();
+                            if proxy
+                                .send_event(UserEvent::Snapshot(snapshot, brightness))
+                                .is_err()
+                            {
                                 break;
                             }
                             std::thread::sleep(Duration::from_secs(1));
@@ -152,7 +230,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
-            Event::UserEvent(UserEvent::Snapshot(snapshot)) => {
+            Event::UserEvent(UserEvent::Snapshot(snapshot, brightness)) => {
                 let connected = snapshot.is_some();
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
@@ -163,6 +241,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                         let _ = view.show_snapshot(&snapshot);
                     }
                     last_state = Some(state);
+                    if let Some(view) = &view {
+                        view.show_brightness(brightness);
+                    }
                 } else if last_connected != Some(false) {
                     if let Some(view) = &mut view {
                         let _ = view.show_disconnected();
@@ -178,6 +259,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             {
                 view.take();
                 *flow = ControlFlow::Exit;
+            }
+            Event::UserEvent(UserEvent::Menu(event)) => {
+                if let Some(brightness) = view
+                    .as_ref()
+                    .and_then(|view| view.brightness_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    std::thread::spawn(move || {
+                        let _ = send_brightness(&endpoint, brightness);
+                    });
+                }
             }
             _ => {}
         }
@@ -196,6 +288,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 if last_state.as_ref() != Some(&state) {
                     view.show_snapshot(&snapshot)?;
                 }
+                view.show_brightness(fetch_brightness(&endpoint).ok().flatten());
                 last_state = Some(state);
                 connected = true;
             }
@@ -206,10 +299,13 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             }
             Err(_) => {}
         }
-        if let Ok(event) = MenuEvent::receiver().try_recv()
-            && event.id == *view.quit.id()
-        {
-            break;
+        if let Ok(event) = MenuEvent::receiver().try_recv() {
+            if event.id == *view.quit.id() {
+                break;
+            }
+            if let Some(brightness) = view.brightness_for_menu_event(&event) {
+                let _ = send_brightness(&endpoint, brightness);
+            }
         }
         std::thread::sleep(Duration::from_secs(1));
     }
