@@ -27,17 +27,19 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some("status") => sidepulse_cli::run_status(args),
+            Some("watch" | "live") => sidepulse_cli::run_watch(args),
             Some("doctor") => sidepulse_cli::run_doctor(args),
             Some("install") => sidepulse_cli::run_hook_config("install", args),
             Some("uninstall") => sidepulse_cli::run_hook_config("uninstall", args),
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next agent-monitor <doctor | status | hook-log | install | uninstall>"
+                    "usage: sidepulse-next agent-monitor <doctor | status | watch | live | hook-log | install | uninstall>"
                 );
                 ExitCode::from(2)
             }
         },
         Some("status") => sidepulse_cli::run_status(args),
+        Some("watch" | "live") => sidepulse_cli::run_watch(args),
         Some("doctor") => sidepulse_cli::run_doctor(args),
         Some("service-status") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {

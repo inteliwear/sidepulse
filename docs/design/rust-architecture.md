@@ -165,6 +165,9 @@ changed after planning. The development CLI exposes those plans with explicit
 dry run, apply, and uninstall. No production hook config has been changed.
 The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
 reports of hook events and log paths for all five providers.
+`agent-monitor live` and `watch` now refresh the same Rust monitor view using
+the bounded log reader. Their terminal presentation is simpler than the
+Python dashboard and still needs a final CLI output comparison.
 Codex hook trust refresh and legacy Grok file cleanup still need implementation
 before the native installer can own cutover.
 

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::env;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -38,30 +40,13 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut overrides = options
-        .logs
-        .into_iter()
-        .map(|(provider, path)| (provider.to_owned(), path))
-        .collect::<Vec<_>>();
-    overrides.extend(
-        options
-            .transcripts
-            .into_iter()
-            .map(|(provider, path)| (format!("{provider}-transcripts"), path)),
-    );
-    let sources = sources_from_environment(&overrides);
-    let events = match load_recent_events(&sources, options.max_lines) {
-        Ok(events) => events,
+    let (snapshot, sources) = match collect_snapshot(&options) {
+        Ok(result) => result,
         Err(error) => {
             eprintln!("sidepulse-next status: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let mut monitor = Monitor::new(options.policy);
-    for event in &events {
-        monitor.ingest(event);
-    }
-    let snapshot = monitor.snapshot(Utc::now());
     if options.json {
         let output = snapshot_json(&snapshot, &sources);
         println!(
@@ -69,9 +54,91 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
             serde_json::to_string_pretty(&output).expect("status JSON serializes")
         );
     } else {
-        print_snapshot(&snapshot, &sources, options.include_stale);
+        print_snapshot(&snapshot, &sources, options.include_stale, None);
     }
     ExitCode::SUCCESS
+}
+
+fn collect_snapshot(options: &Options) -> io::Result<(MonitorSnapshot, Vec<SourceSpec>)> {
+    let mut overrides = options
+        .logs
+        .iter()
+        .map(|(provider, path)| (provider.to_string(), path.clone()))
+        .collect::<Vec<_>>();
+    overrides.extend(
+        options
+            .transcripts
+            .iter()
+            .map(|(provider, path)| (format!("{provider}-transcripts"), path.clone())),
+    );
+    let sources = sources_from_environment(&overrides);
+    let events = load_recent_events(&sources, options.max_lines)?;
+    let mut monitor = Monitor::new(options.policy);
+    for event in &events {
+        monitor.ingest(event);
+    }
+    let snapshot = monitor.snapshot(Utc::now());
+    Ok((snapshot, sources))
+}
+
+pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {
+    let mut interval = 1.0;
+    let mut recent_seconds = 3600.0;
+    let mut status_args = Vec::new();
+    let mut args = args;
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--interval" | "--recent-seconds" => {
+                let Some(value) = args.next() else {
+                    eprintln!("sidepulse-next watch: {flag} needs a value");
+                    return ExitCode::from(2);
+                };
+                let Ok(number) = value.parse::<f64>() else {
+                    eprintln!("sidepulse-next watch: invalid {flag}: {value}");
+                    return ExitCode::from(2);
+                };
+                if !number.is_finite() || number <= 0.0 || (flag == "--interval" && number > 3600.0)
+                {
+                    eprintln!("sidepulse-next watch: invalid {flag}: {value}");
+                    return ExitCode::from(2);
+                }
+                if flag == "--interval" {
+                    interval = number;
+                } else {
+                    recent_seconds = number;
+                }
+            }
+            "--no-color" => {}
+            _ => status_args.push(flag),
+        }
+    }
+    let options = match parse_args(status_args.into_iter()) {
+        Ok(options) if !options.json => options,
+        Ok(_) => {
+            eprintln!("sidepulse-next watch: --json is not supported");
+            return ExitCode::from(2);
+        }
+        Err(message) => {
+            eprintln!("sidepulse-next watch: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    loop {
+        match collect_snapshot(&options) {
+            Ok((snapshot, sources)) => {
+                print!("\x1b[2J\x1b[H");
+                print_snapshot(
+                    &snapshot,
+                    &sources,
+                    options.include_stale,
+                    Some(recent_seconds),
+                );
+                let _ = io::stdout().flush();
+            }
+            Err(error) => eprintln!("sidepulse-next watch: {error}"),
+        }
+        std::thread::sleep(Duration::from_secs_f64(interval));
+    }
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -179,7 +246,12 @@ fn describe_status(status: &AgentStatus, now: DateTime<Utc>) -> String {
     text
 }
 
-fn print_snapshot(snapshot: &MonitorSnapshot, sources: &[SourceSpec], include_stale: bool) {
+fn print_snapshot(
+    snapshot: &MonitorSnapshot,
+    sources: &[SourceSpec],
+    include_stale: bool,
+    recent_seconds: Option<f64>,
+) {
     println!(
         "Aggregate: {} ({} active, {} stale)",
         snapshot.aggregate.mode.label(),
@@ -210,6 +282,12 @@ fn print_snapshot(snapshot: &MonitorSnapshot, sources: &[SourceSpec], include_st
     });
     let mut any = false;
     for status in statuses {
+        if !include_stale
+            && recent_seconds
+                .is_some_and(|seconds| status.age_seconds(snapshot.collected_at) > seconds)
+        {
+            continue;
+        }
         any = true;
         println!("  {}", describe_status(status, snapshot.collected_at));
     }
