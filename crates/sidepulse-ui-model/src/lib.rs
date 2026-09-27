@@ -60,7 +60,7 @@ pub struct TrayState {
     pub stale_rows: Vec<AgentRow>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrayControls {
     pub brightness: Option<u8>,
     pub display_mode: Option<String>,
@@ -68,6 +68,7 @@ pub struct TrayControls {
     pub claude_transcripts: bool,
     pub sleep_policy: Option<String>,
     pub battery_power_preview: bool,
+    pub recent_session_retention_seconds: f64,
 }
 
 impl TrayControls {
@@ -83,6 +84,12 @@ impl TrayControls {
         };
         let monitoring = settings.get("transcript_monitoring");
         Some(Self {
+            recent_session_retention_seconds: legacy_nonnegative_setting(
+                settings,
+                "agent_list",
+                "recent_session_retention_seconds",
+                48.0 * 3600.0,
+            ),
             brightness: active_device.as_ref().and(*brightness),
             display_mode: active_device.as_ref().and(display_mode.clone()),
             codex_transcripts: monitoring
@@ -114,6 +121,8 @@ pub struct SettingsView {
     pub controls: TrayControls,
     pub full_charge_watts: Option<f64>,
     pub power_change_preview_seconds: f64,
+    pub idle_timeout_seconds: f64,
+    pub sleep_min_battery_percent: f64,
 }
 
 impl SettingsView {
@@ -124,6 +133,19 @@ impl SettingsView {
         };
         let battery = settings.get("battery_monitoring");
         Some(Self {
+            idle_timeout_seconds: legacy_nonnegative_setting(
+                settings,
+                "agent_list",
+                "idle_timeout_seconds",
+                3600.0,
+            ),
+            sleep_min_battery_percent: legacy_nonnegative_setting(
+                settings,
+                "sleep_prevention",
+                "min_battery_percent",
+                20.0,
+            )
+            .min(100.0),
             controls,
             full_charge_watts: battery
                 .and_then(|value| value.get("full_charge_watts"))
@@ -137,6 +159,27 @@ impl SettingsView {
                 .max(0.0),
         })
     }
+}
+
+fn legacy_nonnegative_setting(
+    settings: &serde_json::Value,
+    group: &str,
+    key: &str,
+    default: f64,
+) -> f64 {
+    let legacy_key = if group == "sleep_prevention" {
+        "sleep_prevention_min_battery_percent"
+    } else {
+        key
+    };
+    settings
+        .get(group)
+        .and_then(|value| value.get(key))
+        .or_else(|| settings.get(legacy_key))
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+        .max(0.0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +278,13 @@ impl TrayState {
     }
 
     pub fn from_snapshot(snapshot: &MonitorSnapshot) -> Self {
+        Self::from_snapshot_with_retention(snapshot, 48.0 * 3600.0)
+    }
+
+    pub fn from_snapshot_with_retention(
+        snapshot: &MonitorSnapshot,
+        retention_seconds: f64,
+    ) -> Self {
         let aggregate = &snapshot.aggregate;
         let mode = aggregate.mode;
         let title = match aggregate.active_count {
@@ -262,7 +312,15 @@ impl TrayState {
             tooltip,
             active_count: aggregate.active_count,
             rows: snapshot.statuses.iter().map(agent_row).collect(),
-            stale_rows: snapshot.stale_statuses.iter().map(agent_row).collect(),
+            stale_rows: snapshot
+                .stale_statuses
+                .iter()
+                .filter(|status| {
+                    status.mode == AgentMode::Completed
+                        && status.age_seconds(snapshot.collected_at) <= retention_seconds
+                })
+                .map(agent_row)
+                .collect(),
         }
     }
 }
@@ -358,5 +416,38 @@ mod tests {
             label: Some("SidePulse Dot".into()),
         };
         assert_eq!(device_display_name(&device), "SidePulse Dot");
+    }
+
+    #[test]
+    fn recent_sessions_include_only_completed_sessions_within_saved_retention() {
+        let now = Utc::now();
+        let mut monitor = Monitor::default();
+        for (session, event, age) in [
+            ("recent", "Stop", 7200),
+            ("old", "Stop", 3 * 86400),
+            ("stale-tool", "PreToolUse", 7200),
+        ] {
+            monitor.ingest(
+                &parse_log_line(
+                    "claude",
+                    &json!({
+                        "session_id": session,
+                        "hook_event_name": event,
+                        "logged_at": (now - chrono::Duration::seconds(age)).to_rfc3339(),
+                    })
+                    .to_string(),
+                )
+                .unwrap(),
+            );
+        }
+        let snapshot = monitor.snapshot(now);
+        let defaults = TrayState::from_snapshot(&snapshot);
+        assert_eq!(defaults.stale_rows.len(), 1);
+        assert!(defaults.stale_rows[0].id.ends_with(":recent"));
+        assert!(
+            TrayState::from_snapshot_with_retention(&snapshot, 3600.0)
+                .stale_rows
+                .is_empty()
+        );
     }
 }

@@ -6,8 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 sidepulse-core = { path = "../sidepulse-core" }
 
 [dev-dependencies]
 chrono.workspace = true
-serde_json.workspace = true

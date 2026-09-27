@@ -197,6 +197,48 @@ fn main() -> ExitCode {
             };
             service_settings_request(&endpoint, RequestKind::SetSleepPolicy { policy })
         }
+        Some("service-sleep-safeguard") => {
+            let (Some(endpoint), Some(value), None) = (args.next(), args.next(), args.next())
+            else {
+                eprintln!("usage: sidepulse-next service-sleep-safeguard ENDPOINT 0-100");
+                return ExitCode::from(2);
+            };
+            let Ok(percent) = value.parse::<f64>() else {
+                return ExitCode::from(2);
+            };
+            let patch = sidepulse_core::SleepSettingsPatch {
+                min_battery_percent: Some(percent),
+                ..Default::default()
+            };
+            if let Err(error) = patch.validate() {
+                eprintln!("sidepulse-next: {error}");
+                return ExitCode::from(2);
+            }
+            service_settings_request(&endpoint, RequestKind::SetSleepSettings { patch })
+        }
+        Some("service-agent-list") => {
+            let (Some(endpoint), Some(idle), Some(retention), None) =
+                (args.next(), args.next(), args.next(), args.next())
+            else {
+                eprintln!(
+                    "usage: sidepulse-next service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS"
+                );
+                return ExitCode::from(2);
+            };
+            let (Ok(idle), Ok(retention)) = (idle.parse::<f64>(), retention.parse::<f64>()) else {
+                eprintln!("sidepulse-next: agent-list durations must be numbers");
+                return ExitCode::from(2);
+            };
+            let patch = sidepulse_core::AgentListSettingsPatch {
+                idle_timeout_seconds: Some(idle * 60.0),
+                recent_session_retention_seconds: Some(retention * 3600.0),
+            };
+            if let Err(error) = patch.validate() {
+                eprintln!("sidepulse-next: {error}");
+                return ExitCode::from(2);
+            }
+            service_settings_request(&endpoint, RequestKind::SetAgentListSettings { patch })
+        }
         Some("service-transcript") => {
             let (Some(endpoint), Some(provider), Some(state), None) =
                 (args.next(), args.next(), args.next(), args.next())

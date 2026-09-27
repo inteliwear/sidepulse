@@ -14,9 +14,9 @@ use chrono::Utc;
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::prelude::*;
 use sidepulse_core::{
-    BatterySettingsPatch, ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot,
-    PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload, parse_log_line,
-    parse_relay_message,
+    AgentListSettingsPatch, BatterySettingsPatch, ClientRequest, DeviceInfo, HookEvent, Monitor,
+    MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    SleepSettingsPatch, parse_log_line, parse_relay_message,
 };
 use sidepulse_device::animations::program_for_style;
 use sidepulse_device::battery::{BatteryState, program_for_battery};
@@ -249,6 +249,45 @@ impl Service {
             io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
         })?;
         store.set_battery_settings(patch)
+    }
+
+    pub fn set_agent_list_settings(&self, patch: &AgentListSettingsPatch) -> io::Result<()> {
+        {
+            let mut settings = self.settings.lock().map_err(poisoned)?;
+            let store = settings.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?;
+            store.set_agent_list_settings(patch)?;
+        }
+        self.subscribers
+            .lock()
+            .map_err(poisoned)?
+            .retain(|subscriber| {
+                !matches!(
+                    subscriber.try_send(()),
+                    Err(mpsc::TrySendError::Disconnected(()))
+                )
+            });
+        Ok(())
+    }
+
+    pub fn set_sleep_settings(&self, patch: &SleepSettingsPatch) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            let mut settings = self.settings.lock().map_err(poisoned)?;
+            let store = settings.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?;
+            store.set_sleep_settings(patch)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = patch;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "sleep prevention is available only on macOS",
+            ))
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -635,11 +674,18 @@ impl Service {
                     },
                 )
             }
-            RequestKind::SetBatterySettings { patch } => {
-                let payload = match self
-                    .set_battery_settings(&patch)
-                    .and_then(|_| self.settings_snapshot())
-                {
+            kind @ (RequestKind::SetBatterySettings { .. }
+            | RequestKind::SetAgentListSettings { .. }
+            | RequestKind::SetSleepSettings { .. }) => {
+                let result = match kind {
+                    RequestKind::SetBatterySettings { patch } => self.set_battery_settings(&patch),
+                    RequestKind::SetAgentListSettings { patch } => {
+                        self.set_agent_list_settings(&patch)
+                    }
+                    RequestKind::SetSleepSettings { patch } => self.set_sleep_settings(&patch),
+                    _ => unreachable!(),
+                };
+                let payload = match result.and_then(|_| self.settings_snapshot()) {
                     Ok(Some(settings)) => ServerPayload::Settings {
                         settings: settings.document,
                         active_device: settings.active_device,
@@ -651,10 +697,10 @@ impl Service {
                         message: "the service was started without --settings".into(),
                     },
                     Err(error) => ServerPayload::Error {
-                        code: if error.kind() == io::ErrorKind::AlreadyExists {
-                            "settings_conflict"
-                        } else {
-                            "settings_update_failed"
+                        code: match error.kind() {
+                            io::ErrorKind::AlreadyExists => "settings_conflict",
+                            io::ErrorKind::Unsupported => "unsupported_platform",
+                            _ => "settings_update_failed",
                         }
                         .into(),
                         message: error.to_string(),
@@ -797,7 +843,21 @@ impl Service {
     }
 
     pub fn snapshot(&self) -> io::Result<MonitorSnapshot> {
-        Ok(self.monitor.lock().map_err(poisoned)?.snapshot(Utc::now()))
+        self.snapshot_at(Utc::now())
+    }
+
+    fn snapshot_at(&self, now: chrono::DateTime<Utc>) -> io::Result<MonitorSnapshot> {
+        let policy = self
+            .settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map_or_else(Default::default, SettingsStore::monitoring_policy);
+        Ok(self
+            .monitor
+            .lock()
+            .map_err(poisoned)?
+            .snapshot_with_policy(now, policy))
     }
 }
 
@@ -1430,6 +1490,51 @@ mod tests {
             std::fs::read_to_string(device.join("LEDS.LED")).unwrap(),
             program
         );
+    }
+
+    #[test]
+    fn saved_monitor_timeout_changes_live_state_without_rebuilding_monitor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"idle_timeout_seconds":45,"agent_list":{"custom":"keep"},"unknown":9}"#,
+        )
+        .unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        let event = parse_log_line("claude", r#"{"hook_event_name":"PreToolUse","session_id":"policy","logged_at":"2026-09-27T12:00:00Z"}"#).unwrap();
+        service.ingest_record(&event).unwrap();
+        let now = event.logged_at + chrono::Duration::minutes(10);
+        assert_eq!(service.snapshot_at(now).unwrap().aggregate.active_count, 0);
+        let (sent, received) = mpsc::sync_channel(1);
+        service.subscribers.lock().unwrap().push(sent);
+        service
+            .set_agent_list_settings(&AgentListSettingsPatch {
+                idle_timeout_seconds: Some(1200.0),
+                recent_session_retention_seconds: Some(7200.0),
+            })
+            .unwrap();
+        received.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(service.snapshot_at(now).unwrap().aggregate.active_count, 1);
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["agent_list"]["custom"], "keep");
+        assert_eq!(
+            saved["agent_list"]["recent_session_retention_seconds"],
+            7200.0
+        );
+        assert_eq!(saved["unknown"], 9);
+        let before = fs::read(&path).unwrap();
+        assert!(
+            service
+                .set_agent_list_settings(&AgentListSettingsPatch {
+                    idle_timeout_seconds: Some(f64::INFINITY),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(service.snapshot_at(now).unwrap().aggregate.active_count, 1);
     }
 
     #[test]

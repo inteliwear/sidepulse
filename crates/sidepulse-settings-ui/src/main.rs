@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use eframe::egui;
 use sidepulse_core::{
-    BatterySettingsPatch, ChargerBaseline, ClientRequest, DeviceInfo, MonitorSnapshot,
-    PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    AgentListSettingsPatch, BatterySettingsPatch, ChargerBaseline, ClientRequest, DeviceInfo,
+    MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
 };
 use sidepulse_ui_model::{DISPLAY_CHOICES, SettingsView, TrayState, device_display_name};
 
@@ -21,8 +21,16 @@ enum Update {
     State(Result<Box<ServiceState>, String>),
     Saved {
         result: Result<(), String>,
-        battery: bool,
+        draft: DraftKind,
     },
+}
+
+#[derive(Clone, Copy)]
+enum DraftKind {
+    None,
+    Battery,
+    Monitoring,
+    Sleep,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -61,9 +69,13 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return devices.".into());
     };
+    let activity = TrayState::from_snapshot_with_retention(
+        &snapshot,
+        settings.controls.recent_session_retention_seconds,
+    );
     Ok(ServiceState {
         settings,
-        activity: TrayState::from_snapshot(&snapshot),
+        activity,
         devices,
         active_device,
     })
@@ -82,12 +94,17 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
             }
             match pending.recv_timeout(Duration::from_secs(1)) {
                 Ok(kind) => {
-                    let battery = matches!(kind, RequestKind::SetBatterySettings { .. });
+                    let draft = match kind {
+                        RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
+                        RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
+                        RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
+                        _ => DraftKind::None,
+                    };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
                         ServerPayload::Settings { .. } | ServerPayload::Devices { .. } => Ok(()),
                         _ => Err("The service did not confirm the change.".into()),
                     });
-                    if updates.send(Update::Saved { result, battery }).is_err() {
+                    if updates.send(Update::Saved { result, draft }).is_err() {
                         break;
                     }
                 }
@@ -123,6 +140,13 @@ struct SettingsApp {
     preview_seconds: f64,
     brightness: u8,
     brightness_dragging: bool,
+    monitoring_dirty: bool,
+    monitoring_saving: bool,
+    idle_minutes: f64,
+    retention_hours: f64,
+    sleep_dirty: bool,
+    sleep_saving: bool,
+    sleep_battery_percent: f64,
 }
 
 impl SettingsApp {
@@ -143,6 +167,13 @@ impl SettingsApp {
             preview_seconds: 7.0,
             brightness: 255,
             brightness_dragging: false,
+            monitoring_dirty: false,
+            monitoring_saving: false,
+            idle_minutes: 60.0,
+            retention_hours: 48.0,
+            sleep_dirty: false,
+            sleep_saving: false,
+            sleep_battery_percent: 20.0,
         }
     }
 
@@ -168,15 +199,39 @@ impl SettingsApp {
                     if !self.brightness_dragging {
                         self.brightness = state.settings.controls.brightness.unwrap_or(255);
                     }
+                    if !self.monitoring_dirty {
+                        self.idle_minutes = state.settings.idle_timeout_seconds / 60.0;
+                        self.retention_hours =
+                            state.settings.controls.recent_session_retention_seconds / 3600.0;
+                    }
+                    if !self.sleep_dirty {
+                        self.sleep_battery_percent = state.settings.sleep_min_battery_percent;
+                    }
                     self.state = Some(*state);
                 }
                 Update::State(Err(_)) => self.connected = false,
-                Update::Saved { result, battery } => {
-                    if battery {
-                        self.battery_saving = false;
-                        if result.is_ok() {
-                            self.battery_dirty = false;
+                Update::Saved { result, draft } => {
+                    let success = result.is_ok();
+                    match draft {
+                        DraftKind::Battery => {
+                            self.battery_saving = false;
+                            if success {
+                                self.battery_dirty = false;
+                            }
                         }
+                        DraftKind::Monitoring => {
+                            self.monitoring_saving = false;
+                            if success {
+                                self.monitoring_dirty = false;
+                            }
+                        }
+                        DraftKind::Sleep => {
+                            self.sleep_saving = false;
+                            if success {
+                                self.sleep_dirty = false;
+                            }
+                        }
+                        DraftKind::None => {}
                     }
                     self.message = Some(match result {
                         Ok(()) => ("Saved".into(), false),
@@ -370,6 +425,54 @@ impl SettingsApp {
                 });
             }
         }
+        ui.add_space(20.0);
+        ui.add_enabled_ui(!self.monitoring_saving, |ui| {
+            ui.strong("Agent list");
+            ui.horizontal(|ui| {
+                ui.label("Consider inactive after");
+                self.monitoring_dirty |= ui
+                    .add(
+                        egui::DragValue::new(&mut self.idle_minutes)
+                            .range(0.0..=525600.0)
+                            .suffix(" minutes"),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Keep completed sessions for");
+                self.monitoring_dirty |= ui
+                    .add(
+                        egui::DragValue::new(&mut self.retention_hours)
+                            .range(0.0..=8760.0)
+                            .suffix(" hours"),
+                    )
+                    .changed();
+            });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        self.monitoring_dirty,
+                        egui::Button::new("Save agent list settings"),
+                    )
+                    .clicked()
+                {
+                    self.send(RequestKind::SetAgentListSettings {
+                        patch: AgentListSettingsPatch {
+                            idle_timeout_seconds: Some(self.idle_minutes * 60.0),
+                            recent_session_retention_seconds: Some(self.retention_hours * 3600.0),
+                        },
+                    });
+                    self.monitoring_saving = true;
+                }
+                if ui
+                    .add_enabled(self.monitoring_dirty, egui::Button::new("Reset changes"))
+                    .clicked()
+                {
+                    self.monitoring_dirty = false;
+                }
+            });
+        });
     }
 
     fn sleep(&mut self, ui: &mut egui::Ui) {
@@ -392,6 +495,35 @@ impl SettingsApp {
                     });
                 }
             }
+            ui.add_space(16.0);
+            ui.add_enabled_ui(!self.sleep_saving, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Allow sleep when battery falls below");
+                    self.sleep_dirty |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.sleep_battery_percent)
+                                .range(0.0..=100.0)
+                                .suffix("%"),
+                        )
+                        .changed();
+                });
+                ui.weak("The safeguard applies while your Mac is running on battery power.");
+                if ui
+                    .add_enabled(
+                        self.sleep_dirty,
+                        egui::Button::new("Save battery safeguard"),
+                    )
+                    .clicked()
+                {
+                    self.send(RequestKind::SetSleepSettings {
+                        patch: sidepulse_core::SleepSettingsPatch {
+                            min_battery_percent: Some(self.sleep_battery_percent),
+                            ..Default::default()
+                        },
+                    });
+                    self.sleep_saving = true;
+                }
+            });
             ui.add_space(16.0);
             ui.weak("These preferences apply when sleep prevention is enabled.");
         }

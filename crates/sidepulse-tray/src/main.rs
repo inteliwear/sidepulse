@@ -122,8 +122,7 @@ impl TrayView {
         })
     }
 
-    fn show_snapshot(&mut self, snapshot: &MonitorSnapshot) -> Result<(), Box<dyn Error>> {
-        let state = TrayState::from_snapshot(snapshot);
+    fn show_snapshot(&mut self, state: &TrayState) -> Result<(), Box<dyn Error>> {
         self.status.set_text(&state.tooltip);
         self.tray.set_tooltip(Some(&state.tooltip))?;
         self.tray.set_icon(Some(icon(state.icon)?))?;
@@ -132,8 +131,17 @@ impl TrayView {
             self.menu.remove_at(1);
         }
         self.visible_rows = 0;
-        for row in state.rows.iter().take(12) {
-            let item = MenuItem::new(format!("{} — {}", row.title, row.subtitle), false, None);
+        for row in state.rows.iter().chain(&state.stale_rows).take(12) {
+            let item = MenuItem::new(
+                format!(
+                    "{}{} — {}",
+                    if row.stale { "Recent · " } else { "" },
+                    row.title,
+                    row.subtitle
+                ),
+                false,
+                None,
+            );
             self.menu.insert(&item, 1 + self.visible_rows)?;
             self.visible_rows += 1;
         }
@@ -599,11 +607,14 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 let connected = snapshot.is_some();
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
-                    let state = TrayState::from_snapshot(&snapshot);
+                    let retention = controls.as_ref().map_or(48.0 * 3600.0, |controls| {
+                        controls.recent_session_retention_seconds
+                    });
+                    let state = TrayState::from_snapshot_with_retention(&snapshot, retention);
                     if last_state.as_ref() != Some(&state)
                         && let Some(view) = &mut view
                     {
-                        let _ = view.show_snapshot(&snapshot);
+                        let _ = view.show_snapshot(&state);
                     }
                     last_state = Some(state);
                     if let Some(view) = &mut view {
@@ -730,11 +741,14 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     loop {
         match fetch_snapshot(&endpoint) {
             Ok(snapshot) => {
-                let state = TrayState::from_snapshot(&snapshot);
-                if last_state.as_ref() != Some(&state) {
-                    view.show_snapshot(&snapshot)?;
-                }
                 let controls = fetch_controls(&endpoint).ok();
+                let retention = controls.as_ref().map_or(48.0 * 3600.0, |controls| {
+                    controls.recent_session_retention_seconds
+                });
+                let state = TrayState::from_snapshot_with_retention(&snapshot, retention);
+                if last_state.as_ref() != Some(&state) {
+                    view.show_snapshot(&state)?;
+                }
                 view.show_battery_preview(
                     controls.as_ref().map(|state| state.battery_power_preview),
                 );

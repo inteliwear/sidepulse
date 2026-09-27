@@ -87,6 +87,14 @@ output, visible external-edit conflicts, retained edits, and reconnecting
 after a service restart. Animation editing, session-opening preferences,
 history, relay controls, virtual display, and broader sleep controls still
 need implementation.
+The service now applies saved idle timeouts to snapshots immediately, without
+rebuilding its monitor or losing pending permissions. The shared presentation
+model includes only completed stale sessions within the configured recent
+retention, matching Python menu rules. The window can save these durations and
+the macOS battery sleep safeguard through validated requests; the development
+CLI exposes `service-agent-list` and `service-sleep-safeguard` for the same
+operations. Sleep controls still report an unsupported-platform error on
+Windows and Linux.
 
 ## Current migration state
 

@@ -26,6 +26,8 @@ pub enum RequestKind {
     SetBrightness { brightness: u8 },
     SetDisplayMode { mode: String },
     SetBatterySettings { patch: BatterySettingsPatch },
+    SetAgentListSettings { patch: AgentListSettingsPatch },
+    SetSleepSettings { patch: SleepSettingsPatch },
     SetSleepPolicy { policy: String },
     SetTranscriptMonitoring { provider: String, enabled: bool },
     Subscribe,
@@ -119,6 +121,54 @@ impl BatterySettingsPatch {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentListSettingsPatch {
+    pub idle_timeout_seconds: Option<f64>,
+    pub recent_session_retention_seconds: Option<f64>,
+}
+
+impl AgentListSettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if [
+            self.idle_timeout_seconds,
+            self.recent_session_retention_seconds,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|seconds| !seconds.is_finite() || seconds < 0.0)
+        {
+            Err("invalid agent-list duration")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SleepSettingsPatch {
+    pub policy: Option<String>,
+    pub min_battery_percent: Option<f64>,
+}
+
+impl SleepSettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .policy
+            .as_deref()
+            .is_some_and(|policy| !matches!(policy, "never" | "agents" | "always"))
+        {
+            return Err("invalid sleep policy");
+        }
+        if self
+            .min_battery_percent
+            .is_some_and(|percent| !percent.is_finite() || !(0.0..=100.0).contains(&percent))
+        {
+            return Err("invalid sleep battery safeguard");
+        }
+        Ok(())
+    }
+}
+
 impl ClientRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.version != PROTOCOL_VERSION {
@@ -140,6 +190,12 @@ impl ClientRequest {
             return Err("invalid display mode");
         }
         if let RequestKind::SetBatterySettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetAgentListSettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetSleepSettings { patch } = &self.kind {
             patch.validate()?;
         }
         if let RequestKind::SetSleepPolicy { policy } = &self.kind

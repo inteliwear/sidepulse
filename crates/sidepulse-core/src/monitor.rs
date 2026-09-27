@@ -189,30 +189,37 @@ impl Monitor {
     }
 
     pub fn snapshot(&self, now: DateTime<Utc>) -> MonitorSnapshot {
+        self.snapshot_with_policy(now, self.policy)
+    }
+
+    pub fn snapshot_with_policy(
+        &self,
+        now: DateTime<Utc>,
+        policy: MonitoringPolicy,
+    ) -> MonitorSnapshot {
         let mut fresh = Vec::new();
         let mut stale = Vec::new();
         for original in self.statuses.values() {
             let mut status = original.clone();
             if status.mode == AgentMode::Working
                 && status.event_name == "PostToolUse"
-                && self.policy.post_tool_working_visible_seconds >= 0.0
-                && status.age_seconds(now) > self.policy.post_tool_working_visible_seconds
+                && policy.post_tool_working_visible_seconds >= 0.0
+                && status.age_seconds(now) > policy.post_tool_working_visible_seconds
             {
                 status.mode = AgentMode::Completed;
             }
             let age = status.age_seconds(now);
             let expired = match status.mode {
-                AgentMode::Completed if self.policy.completed_visible_seconds >= 0.0 => {
-                    age > self.policy.completed_visible_seconds
+                AgentMode::Completed if policy.completed_visible_seconds >= 0.0 => {
+                    age > policy.completed_visible_seconds
                 }
-                AgentMode::IdleReady if self.policy.idle_visible_seconds >= 0.0 => {
-                    age > self.policy.idle_visible_seconds
+                AgentMode::IdleReady if policy.idle_visible_seconds >= 0.0 => {
+                    age > policy.idle_visible_seconds
                 }
-                AgentMode::ToolRunning if self.policy.tool_running_timeout_seconds > 0.0 => {
-                    age > self.policy.stale_after_seconds
-                        || age > self.policy.tool_running_timeout_seconds
+                AgentMode::ToolRunning if policy.tool_running_timeout_seconds > 0.0 => {
+                    age > policy.stale_after_seconds || age > policy.tool_running_timeout_seconds
                 }
-                _ => age > self.policy.stale_after_seconds,
+                _ => age > policy.stale_after_seconds,
             };
             status.stale = expired;
             if expired {

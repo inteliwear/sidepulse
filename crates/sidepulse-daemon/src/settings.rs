@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 #[cfg(any(target_os = "macos", test))]
 use sidepulse_core::AwakePolicy;
-use sidepulse_core::{AgentMode, BatterySettingsPatch, ChargerBaseline};
+#[cfg(any(target_os = "macos", test))]
+use sidepulse_core::SleepSettingsPatch;
+use sidepulse_core::{
+    AgentListSettingsPatch, AgentMode, BatterySettingsPatch, ChargerBaseline, MonitoringPolicy,
+};
 use sidepulse_device::animations::builtin_animation;
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
@@ -140,6 +144,80 @@ impl SettingsStore {
         }
     }
 
+    pub fn monitoring_policy(&self) -> MonitoringPolicy {
+        let seconds = self
+            .document
+            .get("agent_list")
+            .and_then(|value| value.get("idle_timeout_seconds"))
+            .or_else(|| self.document.get("idle_timeout_seconds"))
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite())
+            .unwrap_or(3600.0)
+            .max(0.0);
+        MonitoringPolicy {
+            stale_after_seconds: seconds,
+            ..Default::default()
+        }
+    }
+
+    pub fn set_agent_list_settings(&mut self, patch: &AgentListSettingsPatch) -> io::Result<()> {
+        patch
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut updated = self.document.clone();
+        let agent_list = updated
+            .entry("agent_list")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "agent_list must be an object")
+            })?;
+        if let Some(seconds) = patch.idle_timeout_seconds {
+            agent_list.insert("idle_timeout_seconds".into(), json!(seconds));
+        }
+        if let Some(seconds) = patch.recent_session_retention_seconds {
+            agent_list.insert("recent_session_retention_seconds".into(), json!(seconds));
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub fn set_sleep_settings(&mut self, patch: &SleepSettingsPatch) -> io::Result<()> {
+        patch
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut updated = self.document.clone();
+        if let Some(policy) = &patch.policy {
+            updated.insert("sleep_prevention_policy".into(), json!(policy));
+        }
+        if let Some(percent) = patch.min_battery_percent {
+            let sleep = updated
+                .entry("sleep_prevention")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "sleep_prevention must be an object",
+                    )
+                })?;
+            sleep.insert("min_battery_percent".into(), json!(percent));
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     #[cfg(any(target_os = "macos", test))]
     pub fn sleep_battery_threshold(&self) -> f64 {
         self.document
@@ -166,21 +244,10 @@ impl SettingsStore {
 
     #[cfg(any(target_os = "macos", test))]
     pub fn set_sleep_policy(&mut self, policy: &str) -> io::Result<()> {
-        if !matches!(policy, "never" | "agents" | "always") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid sleep policy",
-            ));
-        }
-        let mut updated = self.document.clone();
-        updated.insert("sleep_prevention_policy".into(), json!(policy));
-        self.original = Some(write_atomic(
-            &self.path,
-            &Value::Object(updated.clone()),
-            self.original.as_deref(),
-        )?);
-        self.document = updated;
-        Ok(())
+        self.set_sleep_settings(&SleepSettingsPatch {
+            policy: Some(policy.into()),
+            ..Default::default()
+        })
     }
 
     pub fn transcript_enabled(&self, provider: &str) -> bool {
@@ -545,6 +612,25 @@ mod tests {
         store.set_sleep_policy("never").unwrap();
         assert_eq!(store.sleep_policy(), AwakePolicy::Never);
         assert_eq!(store.snapshot()["sleep_prevention_policy"], "never");
+        store
+            .set_sleep_settings(&SleepSettingsPatch {
+                min_battery_percent: Some(35.0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(store.sleep_battery_threshold(), 35.0);
+        assert_eq!(store.sleep_policy(), AwakePolicy::Never);
+        assert!(store.closed_lid_system_override_enabled());
+        let before = fs::read(&path).unwrap();
+        assert!(
+            store
+                .set_sleep_settings(&SleepSettingsPatch {
+                    min_battery_percent: Some(101.0),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
