@@ -630,3 +630,48 @@ fn service_reports_read_only_mac_power_state() {
     assert!(matches!(reply.payload, ServerPayload::Power { .. }));
     drop(server);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn service_updates_sleep_policy_without_starting_power_control() {
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let settings = directory.path().join("settings.json");
+    fs::write(
+        &settings,
+        r#"{"sleep_prevention_policy":"agents","unknown":true}"#,
+    )
+    .unwrap();
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--settings")
+            .arg(&settings)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 15,
+        kind: RequestKind::SetSleepPolicy {
+            policy: "never".into(),
+        },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    assert!(matches!(reply.payload, ServerPayload::Settings { .. }));
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(saved["sleep_prevention_policy"], "never");
+    assert_eq!(saved["unknown"], true);
+    drop(server);
+}

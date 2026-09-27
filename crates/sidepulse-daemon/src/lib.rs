@@ -231,6 +231,15 @@ impl Service {
         store.set_display_for_device(output.target(), mode, output.brightness())
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn set_sleep_policy(&self, policy: &str) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_sleep_policy(policy)
+    }
+
     pub fn ingest_relay_message(&self, text: &str) -> io::Result<bool> {
         let Some(event) = parse_relay_message(text) else {
             return Ok(false);
@@ -532,6 +541,51 @@ impl Service {
                         }
                     }
                     Err(error) => return Err(error),
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::SetSleepPolicy { policy } => {
+                #[cfg(target_os = "macos")]
+                let payload = match self
+                    .set_sleep_policy(&policy)
+                    .and_then(|_| self.settings_snapshot())
+                {
+                    Ok(Some(settings)) => ServerPayload::Settings {
+                        settings: settings.document,
+                        active_device: settings.active_device,
+                        brightness: settings.brightness,
+                        display_mode: settings.display_mode,
+                    },
+                    Ok(None) => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: "the service was started without --settings".into(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => ServerPayload::Error {
+                        code: "settings_unavailable".into(),
+                        message: error.to_string(),
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        ServerPayload::Error {
+                            code: "settings_conflict".into(),
+                            message: error.to_string(),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                #[cfg(not(target_os = "macos"))]
+                let payload = {
+                    let _ = policy;
+                    ServerPayload::Error {
+                        code: "unsupported_platform".into(),
+                        message: "sleep prevention is available only on macOS".into(),
+                    }
                 };
                 write_message(
                     &mut stream,

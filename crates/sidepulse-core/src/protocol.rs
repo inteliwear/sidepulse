@@ -25,6 +25,7 @@ pub enum RequestKind {
     SelectDevice { root: String },
     SetBrightness { brightness: u8 },
     SetDisplayMode { mode: String },
+    SetSleepPolicy { policy: String },
     Subscribe,
     IngestHook { provider: String, line: Value },
     IngestRelay { message: Value },
@@ -96,6 +97,11 @@ impl ClientRequest {
         {
             return Err("invalid display mode");
         }
+        if let RequestKind::SetSleepPolicy { policy } = &self.kind
+            && !matches!(policy.as_str(), "never" | "agents" | "always")
+        {
+            return Err("invalid sleep policy");
+        }
         if let RequestKind::SelectDevice { root } = &self.kind
             && root.is_empty()
         {
@@ -154,5 +160,13 @@ mod tests {
             mode: "custom".into(),
         };
         assert_eq!(request.validate(), Err("invalid display mode"));
+        request.kind = RequestKind::SetSleepPolicy {
+            policy: "agents".into(),
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetSleepPolicy {
+            policy: "automatic".into(),
+        };
+        assert_eq!(request.validate(), Err("invalid sleep policy"));
     }
 }

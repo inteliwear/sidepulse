@@ -108,6 +108,25 @@ impl SettingsStore {
             .unwrap_or(false)
     }
 
+    #[cfg(any(target_os = "macos", test))]
+    pub fn set_sleep_policy(&mut self, policy: &str) -> io::Result<()> {
+        if !matches!(policy, "never" | "agents" | "always") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid sleep policy",
+            ));
+        }
+        let mut updated = self.document.clone();
+        updated.insert("sleep_prevention_policy".into(), json!(policy));
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn transcript_enabled(&self, provider: &str) -> bool {
         self.document
             .get("transcript_monitoring")
@@ -421,6 +440,10 @@ mod tests {
         assert_eq!(store.sleep_policy(), AwakePolicy::Always);
         assert_eq!(store.sleep_battery_threshold(), 27.5);
         assert!(store.closed_lid_system_override_enabled());
+        let mut store = store;
+        store.set_sleep_policy("never").unwrap();
+        assert_eq!(store.sleep_policy(), AwakePolicy::Never);
+        assert_eq!(store.snapshot()["sleep_prevention_policy"], "never");
     }
 
     #[test]

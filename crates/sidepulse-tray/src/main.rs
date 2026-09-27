@@ -8,6 +8,8 @@ use sidepulse_core::{
     ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage,
     ServerPayload,
 };
+#[cfg(target_os = "macos")]
+use sidepulse_ui_model::SLEEP_CHOICES;
 use sidepulse_ui_model::{
     BRIGHTNESS_CHOICES, DISPLAY_CHOICES, StatusIcon, TrayState, brightness_label,
 };
@@ -24,6 +26,10 @@ struct TrayView {
     brightness_items: Vec<(MenuItem, u8)>,
     display_status: MenuItem,
     display_items: Vec<(MenuItem, &'static str)>,
+    #[cfg(target_os = "macos")]
+    sleep_status: MenuItem,
+    #[cfg(target_os = "macos")]
+    sleep_items: Vec<(MenuItem, &'static str)>,
     quit: MenuItem,
     visible_rows: usize,
 }
@@ -42,6 +48,11 @@ impl TrayView {
         let display_status = MenuItem::new("Device display unavailable", false, None);
         let display_items =
             DISPLAY_CHOICES.map(|choice| (MenuItem::new(choice.label, false, None), choice.value));
+        #[cfg(target_os = "macos")]
+        let sleep_status = MenuItem::new("Sleep prevention unavailable", false, None);
+        #[cfg(target_os = "macos")]
+        let sleep_items =
+            SLEEP_CHOICES.map(|choice| (MenuItem::new(choice.label, false, None), choice.value));
         let controls_separator = PredefinedMenuItem::separator();
         let quit = MenuItem::new("Quit SidePulse tray", true, None);
         menu.append_items(&[&status, &separator, &device_status, &brightness_status])?;
@@ -51,6 +62,13 @@ impl TrayView {
         menu.append(&display_status)?;
         for (item, _) in &display_items {
             menu.append(item)?;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            menu.append(&sleep_status)?;
+            for (item, _) in &sleep_items {
+                menu.append(item)?;
+            }
         }
         menu.append_items(&[&controls_separator, &quit])?;
         let tray = TrayIconBuilder::new()
@@ -68,6 +86,10 @@ impl TrayView {
             brightness_items,
             display_status,
             display_items: display_items.into(),
+            #[cfg(target_os = "macos")]
+            sleep_status,
+            #[cfg(target_os = "macos")]
+            sleep_items: sleep_items.into(),
             quit,
             visible_rows: 0,
         })
@@ -102,6 +124,8 @@ impl TrayView {
         self.visible_rows = 0;
         self.show_brightness(None);
         self.show_display_mode(None);
+        #[cfg(target_os = "macos")]
+        self.show_sleep_policy(None);
         self.show_devices(&[], None)?;
         Ok(())
     }
@@ -155,6 +179,35 @@ impl TrayView {
             .iter()
             .find(|(item, _)| event.id == *item.id())
             .map(|(_, value)| *value)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn show_sleep_policy(&self, policy: Option<&str>) {
+        self.sleep_status.set_text(if policy.is_some() {
+            "Prevent system sleep"
+        } else {
+            "Sleep prevention unavailable"
+        });
+        for (item, value) in &self.sleep_items {
+            item.set_enabled(policy.is_some());
+            let label = SLEEP_CHOICES
+                .iter()
+                .find(|choice| choice.value == *value)
+                .map_or("Sleep policy", |choice| choice.label);
+            item.set_text(if policy == Some(*value) {
+                format!("✓ {label}")
+            } else {
+                label.to_owned()
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sleep_policy_for_menu_event(&self, event: &MenuEvent) -> Option<&'static str> {
+        self.sleep_items
+            .iter()
+            .find(|(item, _)| event.id == *item.id())
+            .map(|(_, policy)| *policy)
     }
 
     fn show_devices(
@@ -310,6 +363,46 @@ fn send_display_mode(endpoint: &str, mode: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn fetch_sleep_policy(endpoint: &str) -> Result<Option<String>, Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 8,
+        kind: RequestKind::Settings,
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { settings, .. } => Ok(Some(
+            settings
+                .get("sleep_prevention_policy")
+                .and_then(|value| value.as_str())
+                .unwrap_or("agents")
+                .to_owned(),
+        )),
+        ServerPayload::Error { .. } => Ok(None),
+        _ => Err("service did not return settings".into()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn send_sleep_policy(endpoint: &str, policy: &str) -> Result<(), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 9,
+        kind: RequestKind::SetSleepPolicy {
+            policy: policy.to_owned(),
+        },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Settings { .. } => Ok(()),
+        ServerPayload::Error { message, .. } => Err(message.into()),
+        _ => Err("service did not update sleep policy".into()),
+    }
+}
+
 fn fetch_devices(endpoint: &str) -> Result<(Vec<DeviceInfo>, Option<String>), Box<dyn Error>> {
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
@@ -355,6 +448,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             Option<u8>,
             Option<String>,
             Option<(Vec<DeviceInfo>, Option<String>)>,
+            Option<String>,
         ),
         Menu(MenuEvent),
     }
@@ -383,12 +477,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                             let brightness = fetch_brightness(&endpoint).ok().flatten();
                             let display_mode = fetch_display_mode(&endpoint).ok().flatten();
                             let devices = fetch_devices(&endpoint).ok();
+                            #[cfg(target_os = "macos")]
+                            let sleep_policy = fetch_sleep_policy(&endpoint).ok().flatten();
+                            #[cfg(target_os = "windows")]
+                            let sleep_policy = None;
                             if proxy
                                 .send_event(UserEvent::Snapshot(
                                     snapshot,
                                     brightness,
                                     display_mode,
                                     devices,
+                                    sleep_policy,
                                 ))
                                 .is_err()
                             {
@@ -399,7 +498,15 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
-            Event::UserEvent(UserEvent::Snapshot(snapshot, brightness, display_mode, devices)) => {
+            Event::UserEvent(UserEvent::Snapshot(
+                snapshot,
+                brightness,
+                display_mode,
+                devices,
+                sleep_policy,
+            )) => {
+                #[cfg(target_os = "windows")]
+                let _ = &sleep_policy;
                 let connected = snapshot.is_some();
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
@@ -413,6 +520,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     if let Some(view) = &view {
                         view.show_brightness(brightness);
                         view.show_display_mode(display_mode.as_deref());
+                        #[cfg(target_os = "macos")]
+                        view.show_sleep_policy(sleep_policy.as_deref());
                     }
                     if last_devices != devices {
                         if let Some((ref entries, ref active)) = devices
@@ -440,6 +549,16 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 *flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Menu(event)) => {
+                #[cfg(target_os = "macos")]
+                if let Some(policy) = view
+                    .as_ref()
+                    .and_then(|view| view.sleep_policy_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    std::thread::spawn(move || {
+                        let _ = send_sleep_policy(&endpoint, policy);
+                    });
+                }
                 if let Some(brightness) = view
                     .as_ref()
                     .and_then(|view| view.brightness_for_menu_event(&event))

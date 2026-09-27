@@ -190,7 +190,10 @@ option applies the saved awake policy on macOS. The service owns the
 enabled, requests the existing noninteractive `pmset` helper and display
 sleep. The policy uses battery safeguards and CoreGraphics display state.
 No installer enables this option yet. Physical lid transitions, helper
-recovery after a service crash, and UI controls still require validation.
+recovery after a service crash, and the broader settings UI still require
+validation. The service can now update the saved awake policy through IPC;
+`service-sleep-policy` and the macOS tray use that request. The tray remains a
+client and never calls power commands directly.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
