@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use sidepulse_core::AgentMode;
 
+pub mod animations;
 pub mod battery;
 pub mod battery_source;
 pub mod virtual_led;

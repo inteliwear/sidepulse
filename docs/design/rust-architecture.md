@@ -163,6 +163,10 @@ program, without UI ownership of the device. The CLI and tray can switch the
 saved per-device display between agent and battery through IPC. Power-change
 previews, custom display modes, and richer legacy battery diagnostics remain
 pending.
+All bundled LED animation programs are now copied into the Rust device crate.
+The service resolves saved per-mode agent styles, including custom programs
+from the legacy settings `animations` directory, then validates and writes the
+selected program. Editing animation profiles in the native UI remains open.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover

@@ -15,6 +15,7 @@ use sidepulse_core::{
     ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
     ServerMessage, ServerPayload, parse_log_line,
 };
+use sidepulse_device::animations::program_for_style;
 use sidepulse_device::battery::{BatteryState, program_for_battery};
 use sidepulse_device::battery_source::read_battery_state;
 use sidepulse_device::led_count_for_target;
@@ -248,7 +249,19 @@ impl Service {
             );
             return output.sync_program(&program).map(Some);
         }
-        output.sync(mode).map(Some)
+        if let Some(store) = settings.as_ref() {
+            let (style, custom) = store.animation_for_mode(mode)?;
+            let program = program_for_style(
+                mode,
+                led_count_for_target(output.target()),
+                output.brightness(),
+                &style,
+                &custom,
+            )?;
+            output.sync_program(&program).map(Some)
+        } else {
+            output.sync(mode).map(Some)
+        }
     }
 
     /// Rebuild monitor state from the durable provider log after a restart.
@@ -991,6 +1004,38 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(device.join("LEDS.LED")).unwrap(),
             program
+        );
+    }
+
+    #[test]
+    fn service_uses_saved_agent_animation() {
+        let directory = tempfile::tempdir().unwrap();
+        let device = directory.path().join("SidePulseDot");
+        std::fs::create_dir(&device).unwrap();
+        let settings = directory.path().join("settings.json");
+        std::fs::write(
+            &settings,
+            serde_json::json!({
+                "agent_animations": {"idle_ready": {"style": "kitt-red"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let service = Service::new();
+        service.configure_settings(&settings).unwrap();
+        service.configure_device(&device, 255).unwrap();
+        assert_eq!(service.sync_device_with_battery(None).unwrap(), Some(true));
+        let program = std::fs::read_to_string(device.join("LEDS.LED")).unwrap();
+        assert_eq!(
+            program,
+            sidepulse_device::animations::program_for_style(
+                sidepulse_core::AgentMode::IdleReady,
+                2,
+                255,
+                "kitt-red",
+                ""
+            )
+            .unwrap()
         );
     }
 }

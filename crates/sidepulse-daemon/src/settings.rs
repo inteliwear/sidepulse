@@ -6,6 +6,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
+use sidepulse_core::AgentMode;
+use sidepulse_device::animations::builtin_animation;
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
 
@@ -73,6 +75,99 @@ impl SettingsStore {
             .and_then(|monitoring| monitoring.get(provider))
             .and_then(Value::as_bool)
             .unwrap_or(false)
+    }
+
+    pub fn animation_for_mode(&self, mode: AgentMode) -> io::Result<(String, String)> {
+        let key = match mode {
+            AgentMode::IdleReady => "idle_ready",
+            AgentMode::Working => "working",
+            AgentMode::ToolRunning => "tool_running",
+            AgentMode::WaitingForInput => "waiting_for_input",
+            AgentMode::LongTaskProgress => "long_task_progress",
+            AgentMode::BlockedError => "blocked_error",
+            AgentMode::Completed => "completed",
+            AgentMode::Unknown => "unknown",
+        };
+        let default = match mode {
+            AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress => {
+                "cyan-roll"
+            }
+            AgentMode::WaitingForInput | AgentMode::BlockedError => "amber-pulse",
+            AgentMode::Completed => "cyan-complete",
+            _ => "idle-pulse",
+        };
+        let selected = self
+            .document
+            .get("agent_animations")
+            .and_then(|animations| {
+                animations.get(key).or_else(|| {
+                    matches!(mode, AgentMode::ToolRunning | AgentMode::LongTaskProgress)
+                        .then(|| animations.get("working"))
+                        .flatten()
+                })
+            })
+            .and_then(|setting| setting.get("style"))
+            .and_then(Value::as_str)
+            .unwrap_or(default);
+        if selected == "default" {
+            return Ok((default.to_owned(), String::new()));
+        }
+        if selected == "custom" {
+            let program = self
+                .document
+                .get("agent_animations")
+                .and_then(|animations| animations.get(key))
+                .and_then(|setting| setting.get("custom_program"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            return Ok(("custom".into(), program.to_owned()));
+        }
+        if selected.starts_with("custom:") {
+            let Some(custom) = self
+                .document
+                .get("custom_agent_animations")
+                .and_then(|items| items.get(selected))
+            else {
+                return Ok((default.to_owned(), String::new()));
+            };
+            let file = custom.get("file").and_then(Value::as_str);
+            let file_program = file.and_then(|file| {
+                let path = Path::new(file);
+                (path.file_name().is_some_and(|name| name == file)
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("LED")))
+                .then(|| {
+                    self.path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join("animations")
+                        .join(file)
+                })
+            });
+            let program = if let Some(path) = file_program {
+                fs::read_to_string(path).ok().or_else(|| {
+                    custom
+                        .get("program")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+            } else {
+                custom
+                    .get("program")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            };
+            return Ok(program.map_or_else(
+                || (default.to_owned(), String::new()),
+                |program| ("custom".into(), program),
+            ));
+        }
+        if builtin_animation(selected, 8).is_some() {
+            Ok((selected.to_owned(), String::new()))
+        } else {
+            Ok((default.to_owned(), String::new()))
+        }
     }
 
     pub fn set_brightness_for_device(&mut self, path: &Path, brightness: u8) -> io::Result<()> {
@@ -267,5 +362,48 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"custom\":2}\n");
+    }
+
+    #[test]
+    fn resolves_bundled_and_saved_custom_animation() {
+        let directory = tempfile::tempdir().unwrap();
+        let animations = directory.path().join("animations");
+        fs::create_dir(&animations).unwrap();
+        fs::write(animations.join("custom.LED"), "#123456 200ms ease\n").unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            json!({
+                "agent_animations": {
+                    "working": {"style": "custom:demo"},
+                    "waiting_for_input": {"style": "ember-attention"}
+                },
+                "custom_agent_animations": {
+                    "custom:demo": {"name": "Demo", "file": "custom.LED"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = SettingsStore::load(&path).unwrap();
+        assert_eq!(
+            store.animation_for_mode(AgentMode::Working).unwrap(),
+            ("custom".into(), "#123456 200ms ease\n".into())
+        );
+        assert_eq!(
+            store.animation_for_mode(AgentMode::ToolRunning).unwrap().0,
+            "custom"
+        );
+        assert_eq!(
+            store
+                .animation_for_mode(AgentMode::WaitingForInput)
+                .unwrap()
+                .0,
+            "ember-attention"
+        );
+        assert_eq!(
+            store.animation_for_mode(AgentMode::Completed).unwrap().0,
+            "cyan-complete"
+        );
     }
 }

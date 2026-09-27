@@ -1,0 +1,4 @@
+off 80ms cosine
+0:#00E5FF 320ms pulse 0ms; 1:#00E5FF 320ms pulse 85ms; 2:#00E5FF 320ms pulse 170ms; 3:#00E5FF 320ms pulse 255ms; 4:#00E5FF 320ms pulse 340ms; 5:#00E5FF 320ms pulse 425ms; 6:#00E5FF 320ms pulse 510ms; 7:#00E5FF 320ms pulse 595ms
+6:#00E5FF 320ms pulse 0ms; 5:#00E5FF 320ms pulse 85ms; 4:#00E5FF 320ms pulse 170ms; 3:#00E5FF 320ms pulse 255ms; 2:#00E5FF 320ms pulse 340ms; 1:#00E5FF 320ms pulse 425ms; 0:#00E5FF 320ms pulse 510ms
+repeat
