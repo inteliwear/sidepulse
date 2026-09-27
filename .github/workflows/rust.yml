@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
 
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: ${{ matrix.os }}
