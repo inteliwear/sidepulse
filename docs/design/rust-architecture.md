@@ -142,6 +142,12 @@ snapshot. The Junie hook uses that ancestry to match terminal events to the
 right recent session on both platforms. Captured cross-platform process trees
 still need parity checks, especially Windows app versus CLI identification.
 
+The `sidepulse-device::virtual_led` module now holds the portable virtual LED
+pixel rules: status and battery colors, spatial blending, tone mapping, and
+compact program previews. Its behavior is tested against the existing Python
+rules. No platform window consumes this model yet; macOS notch rendering and
+Windows/Linux virtual display adapters remain separate UI work.
+
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
 preserving unrelated hooks, idempotence, backups, and rejecting a config that

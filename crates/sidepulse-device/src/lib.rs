@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use sidepulse_core::AgentMode;
 
+pub mod virtual_led;
+
 pub const DEFAULT_FILE_NAME: &str = "LEDS.LED";
 pub const MAX_LED_BYTES: usize = 512;
 pub const MAX_LED_LINES: usize = 20;

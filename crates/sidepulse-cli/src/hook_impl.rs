@@ -322,8 +322,10 @@ fn process_ancestry() -> Vec<ProcessInfo> {
         return Vec::new();
     }
     let mut entries = HashMap::new();
-    let mut entry = PROCESSENTRY32W::default();
-    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
         loop {
             let end = entry
