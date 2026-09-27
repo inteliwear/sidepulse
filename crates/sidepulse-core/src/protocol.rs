@@ -26,6 +26,7 @@ pub enum RequestKind {
     SetDisplayMode { mode: String },
     Subscribe,
     IngestHook { provider: String, line: Value },
+    IngestRelay { message: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +80,11 @@ impl ClientRequest {
             && (provider.is_empty() || !line.is_object())
         {
             return Err("invalid hook event");
+        }
+        if let RequestKind::IngestRelay { message } = &self.kind
+            && !message.is_object()
+        {
+            return Err("invalid relay event");
         }
         if let RequestKind::SetDisplayMode { mode } = &self.kind
             && mode != "agent"

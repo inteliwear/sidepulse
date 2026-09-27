@@ -371,3 +371,68 @@ fn service_lists_and_selects_mounted_devices() {
     assert_eq!(active_device.as_deref(), second.join("LEDS.LED").to_str());
     drop(server);
 }
+
+#[test]
+fn service_ingests_remote_relay_event_through_ipc() {
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let message = serde_json::json!({
+        "v": 1,
+        "type": "agent_event",
+        "event_id": "remote-1",
+        "source": {"name": "Laptop"},
+        "provider": "claude",
+        "line": {
+            "hook_event_name": "PreToolUse",
+            "session_id": "remote-session",
+            "logged_at": chrono::Utc::now().to_rfc3339()
+        }
+    });
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 11,
+        kind: RequestKind::IngestRelay {
+            message: message.clone(),
+        },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    assert!(matches!(reply.payload, ServerPayload::Ack));
+    let state = snapshot(endpoint).unwrap();
+    assert_eq!(
+        state.statuses[0].agent_id,
+        "claude:agent:relay:Laptop:remote-session"
+    );
+    assert_eq!(state.statuses[0].origin.as_deref(), Some("Laptop"));
+    let mut duplicate = message;
+    duplicate["line"]["hook_event_name"] = "Stop".into();
+    let duplicate = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 12,
+        kind: RequestKind::IngestRelay { message: duplicate },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &duplicate, Duration::from_secs(2)).unwrap();
+    assert!(matches!(reply.payload, ServerPayload::Ack));
+    assert_eq!(
+        snapshot(endpoint).unwrap().statuses[0].mode,
+        state.statuses[0].mode
+    );
+    drop(server);
+}

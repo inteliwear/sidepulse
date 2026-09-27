@@ -10,6 +10,7 @@ mod monitor;
 mod origin;
 mod protocol;
 mod provider;
+mod relay;
 
 pub use audit::status_audit_record;
 pub use model::{AgentMode, AgentStatus, AggregateStatus, HookEvent, MonitorSnapshot};
@@ -25,3 +26,4 @@ pub use provider::{
     canonical_event_name, format_hook_payload, infer_hook_provider, normalize_cursor_payload,
     parse_log_line,
 };
+pub use relay::{RelayEvent, parse_relay_message};

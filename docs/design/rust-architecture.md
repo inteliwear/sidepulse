@@ -167,6 +167,11 @@ All bundled LED animation programs are now copied into the Rust device crate.
 The service resolves saved per-mode agent styles, including custom programs
 from the legacy settings `animations` directory, then validates and writes the
 selected program. Editing animation profiles in the native UI remains open.
+The core now validates and annotates legacy relay `agent_event` envelopes.
+The service accepts these events through its local IPC and ignores repeated
+event IDs using a bounded cache. This path has an end-to-end service test;
+relay configuration, outbound publishing, and inbound network streaming remain
+to be ported.
 
 The `sidepulse-hook-config` crate can build install and uninstall plans for
 Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
@@ -188,7 +193,7 @@ Python dashboard and still needs a final CLI output comparison.
 Codex hook trust refresh and legacy Grok backup relocation still need implementation
 before the native installer can own cutover.
 
-Further origin parity, relay delivery, production provider hook installation,
+Further origin parity, relay network delivery, production provider hook installation,
 settings-controlled transcript selection, production device discovery,
 physical device selection, virtual device output, full status bar settings and
 controls, native helpers, full CLI parity, and release packaging still need

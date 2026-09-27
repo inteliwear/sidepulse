@@ -2,6 +2,7 @@
 
 mod settings;
 
+use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use interprocess::local_socket::Stream;
 use interprocess::local_socket::prelude::*;
 use sidepulse_core::{
     ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
-    ServerMessage, ServerPayload, parse_log_line,
+    ServerMessage, ServerPayload, parse_log_line, parse_relay_message,
 };
 use sidepulse_device::animations::program_for_style;
 use sidepulse_device::battery::{BatteryState, program_for_battery};
@@ -40,6 +41,31 @@ pub struct Service {
     device: Arc<Mutex<Option<DeviceOutput>>>,
     latest_state_path: Arc<Option<PathBuf>>,
     settings: Arc<Mutex<Option<SettingsStore>>>,
+    seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
+}
+
+#[derive(Default)]
+struct SeenRelayEvents {
+    ids: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl SeenRelayEvents {
+    fn contains(&self, event_id: &str) -> bool {
+        self.ids.contains(event_id)
+    }
+
+    fn insert(&mut self, event_id: String) {
+        if !self.ids.insert(event_id.clone()) {
+            return;
+        }
+        self.order.push_back(event_id);
+        while self.order.len() > 2048 {
+            if let Some(oldest) = self.order.pop_front() {
+                self.ids.remove(&oldest);
+            }
+        }
+    }
 }
 
 impl Service {
@@ -502,6 +528,37 @@ impl Service {
                         },
                     )
                 }
+            }
+            RequestKind::IngestRelay { message } => {
+                let event = parse_relay_message(&message.to_string());
+                let payload = if let Some(event) = event {
+                    if let Some(record) = parse_log_line(&event.provider, &event.line.to_string()) {
+                        let mut seen = self.seen_relay_events.lock().map_err(poisoned)?;
+                        if !seen.contains(&event.event_id) {
+                            self.ingest_record(&record)?;
+                            seen.insert(event.event_id);
+                        }
+                        ServerPayload::Ack
+                    } else {
+                        ServerPayload::Error {
+                            code: "invalid_relay_event".into(),
+                            message: "the relay event could not be parsed".into(),
+                        }
+                    }
+                } else {
+                    ServerPayload::Error {
+                        code: "invalid_relay_event".into(),
+                        message: "the relay event could not be parsed".into(),
+                    }
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
             }
             RequestKind::Subscribe => {
                 // One pending wakeup is sufficient: subscribers always fetch
