@@ -5,7 +5,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use sidepulse_core::{
-    ClientRequest, MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage,
+    ServerPayload,
 };
 use sidepulse_ui_model::{
     BRIGHTNESS_CHOICES, DISPLAY_CHOICES, StatusIcon, TrayState, brightness_label,
@@ -17,6 +18,8 @@ struct TrayView {
     tray: TrayIcon,
     menu: Menu,
     status: MenuItem,
+    device_status: MenuItem,
+    device_items: Vec<(MenuItem, String)>,
     brightness_status: MenuItem,
     brightness_items: Vec<(MenuItem, u8)>,
     display_status: MenuItem,
@@ -30,6 +33,7 @@ impl TrayView {
         let menu = Menu::new();
         let status = MenuItem::new("Connecting to SidePulse…", false, None);
         let separator = PredefinedMenuItem::separator();
+        let device_status = MenuItem::new("No devices", false, None);
         let brightness_status = MenuItem::new("Device brightness unavailable", false, None);
         let brightness_items = BRIGHTNESS_CHOICES
             .iter()
@@ -40,7 +44,7 @@ impl TrayView {
             DISPLAY_CHOICES.map(|choice| (MenuItem::new(choice.label, false, None), choice.value));
         let controls_separator = PredefinedMenuItem::separator();
         let quit = MenuItem::new("Quit SidePulse tray", true, None);
-        menu.append_items(&[&status, &separator, &brightness_status])?;
+        menu.append_items(&[&status, &separator, &device_status, &brightness_status])?;
         for (item, _) in &brightness_items {
             menu.append(item)?;
         }
@@ -58,6 +62,8 @@ impl TrayView {
             tray,
             menu,
             status,
+            device_status,
+            device_items: Vec::new(),
             brightness_status,
             brightness_items,
             display_status,
@@ -96,6 +102,7 @@ impl TrayView {
         self.visible_rows = 0;
         self.show_brightness(None);
         self.show_display_mode(None);
+        self.show_devices(&[], None)?;
         Ok(())
     }
 
@@ -148,6 +155,44 @@ impl TrayView {
             .iter()
             .find(|(item, _)| event.id == *item.id())
             .map(|(_, value)| *value)
+    }
+
+    fn show_devices(
+        &mut self,
+        devices: &[DeviceInfo],
+        active: Option<&str>,
+    ) -> Result<(), Box<dyn Error>> {
+        for (item, _) in self.device_items.drain(..) {
+            self.menu.remove(&item)?;
+        }
+        self.device_status.set_text(if devices.is_empty() {
+            "No devices".to_owned()
+        } else {
+            format!("Devices ({})", devices.len())
+        });
+        for (index, device) in devices.iter().enumerate() {
+            let name = std::path::Path::new(&device.root)
+                .file_name()
+                .map_or(device.root.as_str().into(), |name| {
+                    name.to_string_lossy().into_owned()
+                });
+            let label = if active == Some(device.target.as_str()) {
+                format!("✓ {name}")
+            } else {
+                name
+            };
+            let item = MenuItem::new(label, true, None);
+            self.menu.insert(&item, 3 + self.visible_rows + index)?;
+            self.device_items.push((item, device.root.clone()));
+        }
+        Ok(())
+    }
+
+    fn device_for_menu_event(&self, event: &MenuEvent) -> Option<&str> {
+        self.device_items
+            .iter()
+            .find(|(item, _)| event.id == *item.id())
+            .map(|(_, root)| root.as_str())
     }
 }
 
@@ -265,13 +310,52 @@ fn send_display_mode(endpoint: &str, mode: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+fn fetch_devices(endpoint: &str) -> Result<(Vec<DeviceInfo>, Option<String>), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 6,
+        kind: RequestKind::Devices,
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Devices {
+            devices,
+            active_device,
+        } => Ok((devices, active_device)),
+        _ => Err("service did not return devices".into()),
+    }
+}
+
+fn send_device_selection(endpoint: &str, root: &str) -> Result<(), Box<dyn Error>> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 7,
+        kind: RequestKind::SelectDevice {
+            root: root.to_owned(),
+        },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))?;
+    match response.payload {
+        ServerPayload::Devices { .. } => Ok(()),
+        ServerPayload::Error { message, .. } => Err(message.into()),
+        _ => Err("service did not select device".into()),
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
     enum UserEvent {
-        Snapshot(Option<Box<MonitorSnapshot>>, Option<u8>, Option<String>),
+        Snapshot(
+            Option<Box<MonitorSnapshot>>,
+            Option<u8>,
+            Option<String>,
+            Option<(Vec<DeviceInfo>, Option<String>)>,
+        ),
         Menu(MenuEvent),
     }
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -285,6 +369,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     let mut view: Option<TrayView> = None;
     let mut last_connected = None;
     let mut last_state: Option<TrayState> = None;
+    let mut last_devices: Option<(Vec<DeviceInfo>, Option<String>)> = None;
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
@@ -297,8 +382,14 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                             let snapshot = fetch_snapshot(&endpoint).ok().map(Box::new);
                             let brightness = fetch_brightness(&endpoint).ok().flatten();
                             let display_mode = fetch_display_mode(&endpoint).ok().flatten();
+                            let devices = fetch_devices(&endpoint).ok();
                             if proxy
-                                .send_event(UserEvent::Snapshot(snapshot, brightness, display_mode))
+                                .send_event(UserEvent::Snapshot(
+                                    snapshot,
+                                    brightness,
+                                    display_mode,
+                                    devices,
+                                ))
                                 .is_err()
                             {
                                 break;
@@ -308,7 +399,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
-            Event::UserEvent(UserEvent::Snapshot(snapshot, brightness, display_mode)) => {
+            Event::UserEvent(UserEvent::Snapshot(snapshot, brightness, display_mode, devices)) => {
                 let connected = snapshot.is_some();
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
@@ -323,11 +414,20 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                         view.show_brightness(brightness);
                         view.show_display_mode(display_mode.as_deref());
                     }
+                    if last_devices != devices {
+                        if let Some((ref entries, ref active)) = devices
+                            && let Some(view) = &mut view
+                        {
+                            let _ = view.show_devices(entries, active.as_deref());
+                        }
+                        last_devices = devices;
+                    }
                 } else if last_connected != Some(false) {
                     if let Some(view) = &mut view {
                         let _ = view.show_disconnected();
                     }
                     last_state = None;
+                    last_devices = None;
                 }
                 last_connected = Some(connected);
             }
@@ -356,6 +456,15 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     std::thread::spawn(move || {
                         let _ = send_display_mode(&endpoint, mode);
                     });
+                } else if let Some(root) = view
+                    .as_ref()
+                    .and_then(|view| view.device_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    let root = root.to_owned();
+                    std::thread::spawn(move || {
+                        let _ = send_device_selection(&endpoint, &root);
+                    });
                 }
             }
             _ => {}
@@ -368,6 +477,7 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     let mut view = TrayView::new()?;
     let mut last_state: Option<TrayState> = None;
     let mut connected = true;
+    let mut last_devices: Option<(Vec<DeviceInfo>, Option<String>)> = None;
     loop {
         match fetch_snapshot(&endpoint) {
             Ok(snapshot) => {
@@ -377,12 +487,20 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 }
                 view.show_brightness(fetch_brightness(&endpoint).ok().flatten());
                 view.show_display_mode(fetch_display_mode(&endpoint).ok().flatten().as_deref());
+                let devices = fetch_devices(&endpoint).ok();
+                if last_devices != devices {
+                    if let Some((ref entries, ref active)) = devices {
+                        view.show_devices(entries, active.as_deref())?;
+                    }
+                    last_devices = devices;
+                }
                 last_state = Some(state);
                 connected = true;
             }
             Err(_) if connected => {
                 view.show_disconnected()?;
                 last_state = None;
+                last_devices = None;
                 connected = false;
             }
             Err(_) => {}
@@ -395,6 +513,8 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 let _ = send_brightness(&endpoint, brightness);
             } else if let Some(mode) = view.display_for_menu_event(&event) {
                 let _ = send_display_mode(&endpoint, mode);
+            } else if let Some(root) = view.device_for_menu_event(&event) {
+                let _ = send_device_selection(&endpoint, root);
             }
         }
         std::thread::sleep(Duration::from_secs(1));

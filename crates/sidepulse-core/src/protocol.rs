@@ -20,6 +20,8 @@ pub struct ClientRequest {
 pub enum RequestKind {
     Snapshot,
     Settings,
+    Devices,
+    SelectDevice { root: String },
     SetBrightness { brightness: u8 },
     SetDisplayMode { mode: String },
     Subscribe,
@@ -47,6 +49,10 @@ pub enum ServerPayload {
         brightness: Option<u8>,
         display_mode: Option<String>,
     },
+    Devices {
+        devices: Vec<DeviceInfo>,
+        active_device: Option<String>,
+    },
     StateChanged {
         state: MonitorSnapshot,
     },
@@ -55,6 +61,13 @@ pub enum ServerPayload {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub root: String,
+    pub target: String,
+    pub reason: String,
 }
 
 impl ClientRequest {
@@ -72,6 +85,11 @@ impl ClientRequest {
             && mode != "battery"
         {
             return Err("invalid display mode");
+        }
+        if let RequestKind::SelectDevice { root } = &self.kind
+            && root.is_empty()
+        {
+            return Err("invalid device root");
         }
         Ok(())
     }

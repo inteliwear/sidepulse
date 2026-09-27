@@ -310,3 +310,64 @@ fn service_updates_settings_and_device_from_one_request() {
     drop(server);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn service_lists_and_selects_mounted_devices() {
+    let directory = tempfile::tempdir().unwrap();
+    let mounts = directory.path().join("mounts");
+    let first = mounts.join("SidePulseDot A");
+    let second = mounts.join("SidePulseDot B");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(first.join("LEDS.LED"), "off").unwrap();
+    fs::write(second.join("LEDS.LED"), "off").unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--auto-device")
+            .env("SIDEPULSE_MOUNT_ROOTS", &mounts)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot(endpoint).is_none() {
+        assert!(Instant::now() < deadline, "service did not start");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 9,
+        kind: RequestKind::Devices,
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    let ServerPayload::Devices {
+        devices,
+        active_device,
+    } = reply.payload
+    else {
+        panic!("service did not list devices")
+    };
+    assert_eq!(devices.len(), 2);
+    assert_eq!(active_device.as_deref(), first.join("LEDS.LED").to_str());
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 10,
+        kind: RequestKind::SelectDevice {
+            root: second.to_string_lossy().into_owned(),
+        },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    let ServerPayload::Devices { active_device, .. } = reply.payload else {
+        panic!("service did not select device")
+    };
+    assert_eq!(active_device.as_deref(), second.join("LEDS.LED").to_str());
+    drop(server);
+}

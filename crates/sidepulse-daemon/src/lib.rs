@@ -12,7 +12,7 @@ use chrono::Utc;
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::prelude::*;
 use sidepulse_core::{
-    ClientRequest, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
+    ClientRequest, DeviceInfo, HookEvent, Monitor, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
     ServerMessage, ServerPayload, parse_log_line,
 };
 use sidepulse_device::battery::{BatteryState, program_for_battery};
@@ -116,6 +116,40 @@ impl Service {
             None
         };
         Ok(true)
+    }
+
+    pub fn available_devices(&self) -> io::Result<(Vec<DeviceInfo>, Option<String>)> {
+        let devices = discover_devices(&default_mount_roots())
+            .into_iter()
+            .map(|candidate| DeviceInfo {
+                root: candidate.root.to_string_lossy().into_owned(),
+                target: candidate.target.to_string_lossy().into_owned(),
+                reason: candidate.reason,
+            })
+            .collect();
+        let active = self
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map(|output| output.target().to_string_lossy().into_owned());
+        Ok((devices, active))
+    }
+
+    pub fn select_device(&self, root: &str) -> io::Result<()> {
+        let candidate = discover_devices(&default_mount_roots())
+            .into_iter()
+            .find(|candidate| candidate.root.to_string_lossy() == root)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device is not mounted"))?;
+        let brightness = self
+            .settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map_or(255, |store| store.brightness_for_device(&candidate.root));
+        *self.device.lock().map_err(poisoned)? =
+            Some(DeviceOutput::new(&candidate.root, brightness));
+        Ok(())
     }
 
     pub fn configure_settings(&self, path: &Path) -> io::Result<()> {
@@ -296,6 +330,44 @@ impl Service {
                     },
                 },
             ),
+            RequestKind::Devices => {
+                let (devices, active_device) = self.available_devices()?;
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload: ServerPayload::Devices {
+                            devices,
+                            active_device,
+                        },
+                    },
+                )
+            }
+            RequestKind::SelectDevice { root } => {
+                let payload = match self.select_device(&root) {
+                    Ok(()) => {
+                        let (devices, active_device) = self.available_devices()?;
+                        ServerPayload::Devices {
+                            devices,
+                            active_device,
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => ServerPayload::Error {
+                        code: "device_unavailable".into(),
+                        message: error.to_string(),
+                    },
+                    Err(error) => return Err(error),
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::Settings => {
                 let payload = match self.settings_snapshot()? {
                     Some(settings) => ServerPayload::Settings {

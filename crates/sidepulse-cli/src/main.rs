@@ -81,6 +81,20 @@ fn main() -> ExitCode {
             };
             service_settings_request(&endpoint, RequestKind::Settings)
         }
+        Some("service-devices") => {
+            let (Some(endpoint), None) = (args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next service-devices ENDPOINT");
+                return ExitCode::from(2);
+            };
+            service_devices_request(&endpoint, RequestKind::Devices)
+        }
+        Some("service-select") => {
+            let (Some(endpoint), Some(root), None) = (args.next(), args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next service-select ENDPOINT DEVICE_ROOT");
+                return ExitCode::from(2);
+            };
+            service_devices_request(&endpoint, RequestKind::SelectDevice { root })
+        }
         Some("service-brightness") => {
             let (Some(endpoint), Some(value), None) = (args.next(), args.next(), args.next())
             else {
@@ -148,7 +162,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }
@@ -178,6 +192,48 @@ fn service_settings_request(endpoint: &str, kind: RequestKind) -> ExitCode {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&settings).expect("settings JSON serializes")
+            );
+            ExitCode::SUCCESS
+        }
+        ServerPayload::Error { code, message } => {
+            eprintln!("sidepulse-next: {code}: {message}");
+            ExitCode::FAILURE
+        }
+        _ => {
+            eprintln!("sidepulse-next: unexpected service reply");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn service_devices_request(endpoint: &str, kind: RequestKind) -> ExitCode {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 6,
+        kind,
+    };
+    let reply = match sidepulse_ipc::request::<_, ServerMessage>(
+        endpoint,
+        &request,
+        Duration::from_secs(2),
+    ) {
+        Ok(reply) => reply,
+        Err(error) => {
+            eprintln!("sidepulse-next: service unavailable: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match reply.payload {
+        ServerPayload::Devices {
+            devices,
+            active_device,
+        } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"devices": devices, "active_device": active_device})
+                )
+                .unwrap()
             );
             ExitCode::SUCCESS
         }

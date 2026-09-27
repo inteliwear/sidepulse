@@ -139,6 +139,9 @@ selected device while mounted, and reconnects after removal and return.
 It uses each device's saved brightness. Windows discovery recognizes a drive
 root containing `LEDS.LED`; volume-label discovery and physical-device runtime
 validation remain open.
+The service now exposes its discovered devices and accepts a selection over
+IPC. The CLI can list or select them, and the native tray renders the same
+choices. Only the service changes its active `DeviceOutput`.
 
 The core now resolves explicit, environment, and process-based agent origins
 and reads legacy structured origin labels from hook payloads. The hook reads
