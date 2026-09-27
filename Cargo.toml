@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sidepulse-core", "crates/sidepulse-sources", "crates/sidepulse-hook-config", "crates/sidepulse-ipc", "crates/sidepulse-daemon", "crates/sidepulse-cli", "crates/sidepulse-ui-model", "crates/sidepulse-tray", "crates/sidepulse-device", "crates/sidepulse-relay"]
+members = ["crates/sidepulse-core", "crates/sidepulse-sources", "crates/sidepulse-hook-config", "crates/sidepulse-ipc", "crates/sidepulse-daemon", "crates/sidepulse-cli", "crates/sidepulse-ui-model", "crates/sidepulse-tray", "crates/sidepulse-device", "crates/sidepulse-relay", "crates/sidepulse-installer"]
 resolver = "3"
 
 [workspace.package]

@@ -91,6 +91,15 @@ on macOS and runtime UI and device behavior on Linux
 and Windows still need validation. These executables are not installed by the
 existing setup flow.
 
+The `sidepulse-installer` crate can assemble those binaries into a new,
+isolated preview directory with a settings file, state directory, manifest,
+and platform launch definitions. macOS gets LaunchAgent plists, Linux gets
+systemd user units, and Windows gets PowerShell launch scripts. The
+`sidepulse-next-stage` command supports a dry run and refuses to overwrite an
+existing preview. It does not register startup jobs, install hooks, use the
+existing settings file, or enable physical device output. This is a staging
+step for native installation and rollback testing, not a production cutover.
+
 The `sidepulse-device` crate now owns the default LED programs, program
 validation, candidate discovery, and synced writes. An explicitly configured
 development service can write one device with `--device PATH` and optional
@@ -247,7 +256,7 @@ remains authoritative for users until the delivery gates above pass.
    into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
-5. Cover the remaining CLI entry points and package native service, hook,
-   tray, and installer binaries for all three operating systems.
+5. Cover the remaining CLI entry points, turn the staged native binaries into
+   installable, signed packages, and implement platform startup registration.
 6. Verify upgrades and rollback against an existing Python setup, then switch
    hook and state-file ownership only after the delivery gates pass.

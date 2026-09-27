@@ -1,0 +1,436 @@
+//! Side-by-side Rust preview bundle. It never registers startup jobs or changes
+//! the installed Python application's hooks, settings, or device ownership.
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tempfile::Builder;
+
+const BINARIES: [&str; 4] = [
+    "sidepulse-next",
+    "sidepulse-next-hook",
+    "sidepulse-next-service",
+    "sidepulse-next-tray",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Macos,
+    Linux,
+    Windows,
+}
+
+impl Platform {
+    pub fn current() -> io::Result<Self> {
+        match std::env::consts::OS {
+            "macos" => Ok(Self::Macos),
+            "linux" => Ok(Self::Linux),
+            "windows" => Ok(Self::Windows),
+            other => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("preview staging is unavailable on {other}"),
+            )),
+        }
+    }
+
+    fn executable_suffix(self) -> &'static str {
+        if self == Self::Windows { ".exe" } else { "" }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageManifest {
+    pub schema_version: u8,
+    pub platform: Platform,
+    pub stage_dir: PathBuf,
+    pub endpoint: String,
+    pub binaries: Vec<PathBuf>,
+    pub service_command: Vec<String>,
+    pub tray_command: Vec<String>,
+    pub launch_files: Vec<PathBuf>,
+    pub enabled: bool,
+}
+
+pub struct StagePlan {
+    source_dir: PathBuf,
+    manifest: StageManifest,
+}
+
+impl StagePlan {
+    pub fn new(source_dir: &Path, stage_dir: &Path, platform: Platform) -> io::Result<Self> {
+        let source_dir = fs::canonicalize(source_dir)?;
+        let stage_dir = absolute_stage_path(stage_dir)?;
+        if fs::symlink_metadata(&stage_dir).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "stage directory already exists",
+            ));
+        }
+        let bin_dir = stage_dir.join("bin");
+        let binaries = BINARIES
+            .iter()
+            .map(|name| {
+                let filename = format!("{name}{}", platform.executable_suffix());
+                let source = source_dir.join(&filename);
+                let metadata = fs::symlink_metadata(&source)?;
+                if !metadata.file_type().is_file() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("not a regular binary: {}", source.display()),
+                    ));
+                }
+                Ok(bin_dir.join(filename))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let endpoint = endpoint_for_stage(&stage_dir, platform);
+        let service_command = vec![
+            binaries[2].to_string_lossy().into_owned(),
+            endpoint.clone(),
+            "--state".into(),
+            stage_dir
+                .join("state/latest.json")
+                .to_string_lossy()
+                .into_owned(),
+            "--settings".into(),
+            stage_dir
+                .join("settings.json")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        let tray_command = vec![binaries[3].to_string_lossy().into_owned(), endpoint.clone()];
+        let launch_files = match platform {
+            Platform::Macos => vec![
+                stage_dir.join("launch/io.sidepulse.next.service.plist"),
+                stage_dir.join("launch/io.sidepulse.next.tray.plist"),
+            ],
+            Platform::Linux => vec![
+                stage_dir.join("launch/sidepulse-next.service"),
+                stage_dir.join("launch/sidepulse-next-tray.service"),
+            ],
+            Platform::Windows => vec![
+                stage_dir.join("launch/start-service.ps1"),
+                stage_dir.join("launch/start-tray.ps1"),
+            ],
+        };
+        Ok(Self {
+            source_dir,
+            manifest: StageManifest {
+                schema_version: 1,
+                platform,
+                stage_dir,
+                endpoint,
+                binaries,
+                service_command,
+                tray_command,
+                launch_files,
+                enabled: false,
+            },
+        })
+    }
+
+    pub fn manifest(&self) -> &StageManifest {
+        &self.manifest
+    }
+
+    pub fn stage(&self) -> io::Result<&StageManifest> {
+        let final_dir = &self.manifest.stage_dir;
+        if fs::symlink_metadata(final_dir).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "stage directory already exists",
+            ));
+        }
+        let parent = final_dir.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stage directory needs a parent",
+            )
+        })?;
+        let temporary = Builder::new()
+            .prefix(".sidepulse-next-stage-")
+            .tempdir_in(parent)?;
+        fs::create_dir(temporary.path().join("bin"))?;
+        fs::create_dir(temporary.path().join("state"))?;
+        fs::create_dir(temporary.path().join("launch"))?;
+        for binary in &self.manifest.binaries {
+            let filename = binary.file_name().expect("binary has filename");
+            let source = self.source_dir.join(filename);
+            let metadata = fs::symlink_metadata(&source)?;
+            if !metadata.file_type().is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("not a regular binary: {}", source.display()),
+                ));
+            }
+            fs::copy(&source, temporary.path().join("bin").join(filename))?;
+        }
+        fs::write(temporary.path().join("settings.json"), b"{}\n")?;
+        let rendered = render_launch_files(&self.manifest);
+        for (path, contents) in self.manifest.launch_files.iter().zip(rendered) {
+            fs::write(
+                temporary
+                    .path()
+                    .join("launch")
+                    .join(path.file_name().unwrap()),
+                contents,
+            )?;
+        }
+        let mut manifest_file = fs::File::create(temporary.path().join("manifest.json"))?;
+        serde_json::to_writer_pretty(&mut manifest_file, &self.manifest)?;
+        manifest_file.write_all(b"\n")?;
+        manifest_file.sync_all()?;
+        fs::rename(temporary.path(), final_dir)?;
+        Ok(&self.manifest)
+    }
+}
+
+fn absolute_stage_path(path: &Path) -> io::Result<PathBuf> {
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "stage directory needs a name")
+    })?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let absolute = fs::canonicalize(parent)?.join(name);
+    if absolute.to_string_lossy().chars().any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "stage path contains a control character",
+        ));
+    }
+    Ok(absolute)
+}
+
+fn endpoint_for_stage(stage: &Path, platform: Platform) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in stage.to_string_lossy().as_bytes() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+    }
+    if platform == Platform::Windows {
+        format!("sidepulse-next-preview-{hash:016x}")
+    } else {
+        let endpoint = stage
+            .join("state/events.sock")
+            .to_string_lossy()
+            .into_owned();
+        if endpoint.len() <= 95 {
+            endpoint
+        } else {
+            format!("/tmp/sidepulse-next-{hash:016x}.sock")
+        }
+    }
+}
+
+fn render_launch_files(manifest: &StageManifest) -> [String; 2] {
+    match manifest.platform {
+        Platform::Macos => [
+            render_plist(
+                "io.sidepulse.next.service",
+                &manifest.service_command,
+                &manifest.stage_dir,
+            ),
+            render_plist(
+                "io.sidepulse.next.tray",
+                &manifest.tray_command,
+                &manifest.stage_dir,
+            ),
+        ],
+        Platform::Linux => [
+            render_systemd(
+                "SidePulse Rust preview service",
+                &manifest.service_command,
+                false,
+            ),
+            render_systemd("SidePulse Rust preview tray", &manifest.tray_command, true),
+        ],
+        Platform::Windows => [
+            render_powershell(&manifest.service_command),
+            render_powershell(&manifest.tray_command),
+        ],
+    }
+}
+
+fn render_plist(label: &str, command: &[String], working_directory: &Path) -> String {
+    let arguments = command
+        .iter()
+        .map(|part| format!("    <string>{}</string>\n", xml_escape(part)))
+        .collect::<String>();
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>{label}</string>\n  <key>ProgramArguments</key>\n  <array>\n{arguments}  </array>\n  <key>WorkingDirectory</key><string>{}</string>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict>\n</plist>\n",
+        xml_escape(&working_directory.to_string_lossy())
+    )
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn render_systemd(description: &str, command: &[String], tray: bool) -> String {
+    let command = command
+        .iter()
+        .map(|part| systemd_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let dependency = if tray {
+        "After=sidepulse-next.service\nRequires=sidepulse-next.service\n"
+    } else {
+        "After=network-online.target\n"
+    };
+    format!(
+        "[Unit]\nDescription={description}\n{dependency}\n[Service]\nExecStart={command}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
+    )
+}
+
+fn systemd_quote(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+    )
+}
+
+fn render_powershell(command: &[String]) -> String {
+    let parts = command
+        .iter()
+        .map(|part| format!("'{}'", part.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("& {parts}\r\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_binaries(source: &Path, platform: Platform) {
+        fs::create_dir(source).unwrap();
+        for name in BINARIES {
+            fs::write(
+                source.join(format!("{name}{}", platform.executable_suffix())),
+                b"preview-binary",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn stages_isolated_bundles_for_all_platforms() {
+        for platform in [Platform::Macos, Platform::Linux, Platform::Windows] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("source");
+            dummy_binaries(&source, platform);
+            let destination = directory.path().join("preview & 'test'");
+            let plan = StagePlan::new(&source, &destination, platform).unwrap();
+            assert!(!destination.exists());
+            assert!(!plan.manifest().enabled);
+            let manifest = plan.stage().unwrap();
+            assert_eq!(manifest.binaries.len(), 4);
+            assert_eq!(manifest.launch_files.len(), 2);
+            assert!(destination.join("state").is_dir());
+            assert_eq!(
+                fs::read(destination.join("settings.json")).unwrap(),
+                b"{}\n"
+            );
+            for binary in &manifest.binaries {
+                assert_eq!(fs::read(binary).unwrap(), b"preview-binary");
+            }
+            for launch_file in &manifest.launch_files {
+                assert!(launch_file.is_file());
+            }
+            let saved: StageManifest =
+                serde_json::from_slice(&fs::read(destination.join("manifest.json")).unwrap())
+                    .unwrap();
+            assert_eq!(&saved, manifest);
+            assert_eq!(
+                StagePlan::new(&source, &destination, platform)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::AlreadyExists
+            );
+            let rendered = fs::read_to_string(&manifest.launch_files[0]).unwrap();
+            match platform {
+                Platform::Macos => {
+                    assert!(rendered.contains("preview &amp; &apos;test&apos;"));
+                    assert!(rendered.contains("<key>ProgramArguments</key>"));
+                }
+                Platform::Linux => {
+                    assert!(rendered.contains("ExecStart="));
+                    assert!(rendered.contains("preview & 'test'"));
+                }
+                Platform::Windows => {
+                    assert!(rendered.contains("preview & ''test''"));
+                    assert!(rendered.contains("sidepulse-next-service.exe"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_symlink_source_and_existing_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        dummy_binaries(&source, Platform::Linux);
+        let destination = directory.path().join("preview");
+        fs::create_dir(&destination).unwrap();
+        assert_eq!(
+            StagePlan::new(&source, &destination, Platform::Linux)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        fs::remove_dir(&destination).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let service = source.join("sidepulse-next-service");
+            fs::remove_file(&service).unwrap();
+            symlink(source.join("sidepulse-next"), &service).unwrap();
+            assert_eq!(
+                StagePlan::new(&source, &destination, Platform::Linux)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn uses_short_unix_socket_name_when_stage_path_is_long() {
+        let long = PathBuf::from("/tmp").join("x".repeat(180));
+        for platform in [Platform::Macos, Platform::Linux] {
+            let endpoint = endpoint_for_stage(&long, platform);
+            assert!(endpoint.starts_with("/tmp/sidepulse-next-"));
+            assert!(endpoint.len() <= 95);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_stage_path_that_could_break_launch_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        dummy_binaries(&source, Platform::Linux);
+        let path = directory.path().join("bad\nunit");
+        assert_eq!(
+            StagePlan::new(&source, &path, Platform::Linux)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+}
