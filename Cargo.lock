@@ -1902,6 +1902,8 @@ name = "sidepulse-device"
 version = "0.1.0"
 dependencies = [
  "sidepulse-core",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

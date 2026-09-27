@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use sidepulse_core::AgentMode;
 
 pub mod battery;
+pub mod battery_source;
 pub mod virtual_led;
 
 pub const DEFAULT_FILE_NAME: &str = "LEDS.LED";
