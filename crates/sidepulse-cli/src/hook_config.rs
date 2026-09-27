@@ -145,13 +145,30 @@ fn run_all_providers(
             }
         })
         .collect();
-    let plans = match plans {
+    let mut plans = match plans {
         Ok(plans) => plans,
         Err(error) => {
             eprintln!("sidepulse-next: {error}");
             return ExitCode::FAILURE;
         }
     };
+    for legacy_name in ["sidepulse-agent-monitor.json", "sidepulse-cli.json"] {
+        let legacy = home.join(".grok/hooks").join(legacy_name);
+        if legacy.exists() {
+            let log = log_dir.join("grok.jsonl");
+            let plan = match plan_json_hooks("grok", &legacy, &log, hook, Action::Uninstall) {
+                Ok(mut plan) => {
+                    plan.provider = format!("grok legacy {legacy_name}");
+                    plan
+                }
+                Err(error) => {
+                    eprintln!("sidepulse-next: {}: {error}", legacy.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            plans.push(plan);
+        }
+    }
     let backups = if dry_run {
         vec![None; plans.len()]
     } else {

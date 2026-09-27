@@ -57,7 +57,10 @@ fn explicit_home_batch_plans_and_installs_five_providers() {
     let home = directory.path().join("home");
     let logs = directory.path().join("logs");
     fs::create_dir_all(home.join(".claude")).unwrap();
+    fs::create_dir_all(home.join(".grok/hooks")).unwrap();
     fs::write(home.join(".claude/settings.json"), r#"{"theme":"dark"}"#).unwrap();
+    let legacy = home.join(".grok/hooks/sidepulse-agent-monitor.json");
+    fs::write(&legacy, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"},{"type":"command","command":"sidepulse hook-log --log /tmp/old.jsonl"}]}]}}"#).unwrap();
     let hook = directory.path().join("sidepulse-next-hook");
     let run = |action: &str, dry_run: bool| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"));
@@ -82,7 +85,7 @@ fn explicit_home_batch_plans_and_installs_five_providers() {
     };
     assert_eq!(
         run("install", true)["providers"].as_array().unwrap().len(),
-        5
+        6
     );
     assert!(!home.join(".codex/config.toml").exists());
     assert!(
@@ -91,6 +94,18 @@ fn explicit_home_batch_plans_and_installs_five_providers() {
             .unwrap()
             .iter()
             .all(|item| item["changed"] == true)
+    );
+    let legacy_document: Value = serde_json::from_slice(&fs::read(&legacy).unwrap()).unwrap();
+    assert_eq!(
+        legacy_document["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "user-hook"
+    );
+    assert_eq!(
+        legacy_document["hooks"]["Stop"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
     assert!(
         run("install", false)["providers"]
@@ -109,6 +124,7 @@ fn explicit_home_batch_plans_and_installs_five_providers() {
             .as_array()
             .unwrap()
             .iter()
+            .take(5)
             .all(|item| item["changed"] == true)
     );
 }

@@ -170,13 +170,15 @@ dry run, apply, and uninstall. No production hook config has been changed.
 An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route
 now plans all five providers first and restores earlier config files if a
 later apply fails. The test uses a temporary home; live installation still
-awaits trust refresh, legacy Grok cleanup, and upgrade verification.
+awaits trust refresh, full Grok backup-file cleanup, and upgrade verification.
+The batch route removes old SidePulse commands from the two legacy Grok hook
+JSON files while preserving unrelated commands in those files.
 The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
 reports of hook events and log paths for all five providers.
 `agent-monitor live` and `watch` now refresh the same Rust monitor view using
 the bounded log reader. Their terminal presentation is simpler than the
 Python dashboard and still needs a final CLI output comparison.
-Codex hook trust refresh and legacy Grok file cleanup still need implementation
+Codex hook trust refresh and legacy Grok backup relocation still need implementation
 before the native installer can own cutover.
 
 Further origin parity, relay delivery, production provider hook installation,
