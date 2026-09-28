@@ -621,3 +621,27 @@ logged. Native power queries and mutations have deadlines. Windows service stops
 request a graceful IPC shutdown before removing the scheduled task. Real binary
 checks verify both IPC and termination shutdown with isolated logs and files;
 these checks do not activate power control.
+
+## Native CLI compatibility
+
+The staged `bin` directory now also contains native entry points named
+`sidepulse`, `agent-monitor`, `agent-status-bar`, and `sidepulse-reply`. They are
+copies of the corresponding Rust executables, with no Python launcher. The
+multicall CLI routes the original names to their command groups, supports help
+and version flags, and resolves its explicit preview bundle's endpoint when
+connection arguments are omitted. These files have not been added to the
+user's active PATH.
+
+Agent LED monitoring also runs independently of a background service. Provider
+logs, transcripts, replay limits, stale policy, and tool timeout options use the
+shared source reader and core monitor. The CLI retains monitor state across
+new log records, uses the common device and destination modules, supports
+one-shot and continuous previews/writes, restores externally changed output,
+refreshes firmware keepalive, and handles interruption. Explicit connection
+arguments select service-owned rendering and delivery. Standalone source flags
+cannot change the policy of an explicitly selected running service.
+
+Tests compare actual CLI output with captured Python two-LED programs, follow a
+new completion event through the continuous loop, verify custom filenames and
+no writes during previews, and exercise native compatibility names. Staged
+smoke checks now exercise those entry points and require graceful service exit.

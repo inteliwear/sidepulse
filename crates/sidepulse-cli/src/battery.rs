@@ -82,7 +82,7 @@ pub(super) fn parse_full_watts(value: &str) -> Result<ChargerBaseline, &'static 
 }
 
 fn run_configure(mut args: impl Iterator<Item = String>) -> ExitCode {
-    let mut endpoint = env::var("SIDEPULSE_NEXT_ENDPOINT").ok();
+    let mut endpoint = crate::preview_endpoint();
     let mut patch = BatterySettingsPatch::default();
     let mut changed = false;
     while let Some(flag) = args.next() {
@@ -201,7 +201,7 @@ fn run_configure(mut args: impl Iterator<Item = String>) -> ExitCode {
     }
 }
 
-fn saved_full_watts() -> Option<f64> {
+pub(crate) fn saved_full_watts() -> Option<f64> {
     let home = env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)?;

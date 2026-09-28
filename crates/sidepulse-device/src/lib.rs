@@ -1,6 +1,7 @@
 //! Portable SidePulse LED program generation and mounted-device output.
-//! The service owns `DeviceOutput`; UI clients never write device files.
+//! Headless service and CLI tools own `DeviceOutput`; UI clients never write device files.
 
+pub mod delivery;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

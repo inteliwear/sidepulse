@@ -24,6 +24,15 @@ pub use helpers::{run_sd_guard, run_status_bar};
 pub use leds::run_leds;
 pub use lifecycle::{run_lifecycle, run_setup};
 
+pub fn preview_endpoint() -> Option<String> {
+    std::env::var("SIDEPULSE_NEXT_ENDPOINT").ok().or_else(|| {
+        let executable = std::env::current_exe().ok()?;
+        sidepulse_installer::endpoint_from_executable(&executable)
+            .ok()
+            .flatten()
+    })
+}
+
 pub fn run_reply(args: impl Iterator<Item = String>) -> std::process::ExitCode {
     let result = std::env::current_exe().and_then(|path| {
         std::process::Command::new(path.with_file_name(if cfg!(windows) {

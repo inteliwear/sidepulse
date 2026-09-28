@@ -17,6 +17,10 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
     let mut dry_run = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                println!("Usage: sidepulse setup --stage-dir DIR [--source-dir DIR] [--dry-run]");
+                return ExitCode::SUCCESS;
+            }
             "--dry-run" => dry_run = true,
             "--source-dir" | "--stage-dir" => {
                 let Some(value) = args.next() else {
@@ -56,6 +60,12 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
 }
 pub fn run_lifecycle(job: Job, mut args: impl Iterator<Item = String>) -> ExitCode {
     let operation = args.next().unwrap_or_else(|| "status".into());
+    if matches!(operation.as_str(), "--help" | "-h") {
+        println!(
+            "Usage: sidepulse service install|start|stop|uninstall|status|run --stage-dir DIR\n       Add --dry-run to inspect a plan; installation supports --no-start."
+        );
+        return ExitCode::SUCCESS;
+    }
     let mut stage = None;
     let mut directory = None;
     let mut user = None;

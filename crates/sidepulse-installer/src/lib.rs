@@ -24,6 +24,12 @@ const BINARIES: [&str; 9] = [
     "sidepulse-next-sd-guard",
     "sidepulse-next-reply",
 ];
+const ALIASES: [(&str, usize); 4] = [
+    ("sidepulse", 0),
+    ("agent-monitor", 0),
+    ("agent-status-bar", 0),
+    ("sidepulse-reply", 8),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +64,8 @@ pub struct StageManifest {
     pub stage_dir: PathBuf,
     pub endpoint: String,
     pub binaries: Vec<PathBuf>,
+    #[serde(default)]
+    pub aliases: Vec<PathBuf>,
     pub service_command: Vec<String>,
     pub tray_command: Vec<String>,
     pub launch_files: Vec<PathBuf>,
@@ -139,6 +147,12 @@ impl StagePlan {
                 stage_dir,
                 endpoint,
                 binaries,
+                aliases: ALIASES
+                    .iter()
+                    .map(|(name, _)| {
+                        bin_dir.join(format!("{name}{}", platform.executable_suffix()))
+                    })
+                    .collect(),
                 service_command,
                 tray_command,
                 launch_files,
@@ -183,6 +197,16 @@ impl StagePlan {
                 ));
             }
             fs::copy(&source, temporary.path().join("bin").join(filename))?;
+        }
+        for (alias, (_, source)) in self.manifest.aliases.iter().zip(ALIASES) {
+            fs::copy(
+                self.source_dir
+                    .join(self.manifest.binaries[source].file_name().unwrap()),
+                temporary
+                    .path()
+                    .join("bin")
+                    .join(alias.file_name().unwrap()),
+            )?;
         }
         for (bundle, (binary_index, label, identifier, tray)) in
             self.manifest.application_bundles.iter().zip([
@@ -254,11 +278,20 @@ pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
         })
         .collect::<Vec<_>>();
     let expected_endpoint = endpoint_for_stage(&stage_dir, platform);
+    let expected_aliases = ALIASES
+        .iter()
+        .map(|(name, _)| {
+            stage_dir
+                .join("bin")
+                .join(format!("{name}{}", platform.executable_suffix()))
+        })
+        .collect::<Vec<_>>();
     let expected_command =
         service_command_for_stage(&stage_dir, &expected_binaries[2], &expected_endpoint);
     if manifest.stage_dir != stage_dir
         || manifest.platform != platform
         || manifest.binaries != expected_binaries
+        || manifest.aliases != expected_aliases
         || manifest.endpoint != expected_endpoint
         || manifest.service_command != expected_command
     {
@@ -267,7 +300,7 @@ pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
             "bundle manifest does not match its location or isolated service command",
         ));
     }
-    for binary in &manifest.binaries {
+    for binary in manifest.binaries.iter().chain(&manifest.aliases) {
         if !fs::symlink_metadata(binary).is_ok_and(|metadata| metadata.file_type().is_file()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -300,8 +333,34 @@ pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
     Ok(manifest)
 }
 
+/// Locate the selected preview's endpoint when a staged executable or macOS
+/// application is opened without command-line connection arguments.
+pub fn endpoint_from_executable(executable: &Path) -> io::Result<Option<String>> {
+    for ancestor in executable.ancestors().skip(1).take(6) {
+        if ancestor.join("manifest.json").exists() {
+            return read_stage(ancestor).map(|manifest| Some(manifest.endpoint));
+        }
+    }
+    Ok(None)
+}
+
 pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
     let manifest = read_stage(stage_dir)?;
+    for alias in &manifest.aliases {
+        let help = alias
+            .file_stem()
+            .is_some_and(|name| name == "agent-status-bar" || name == "sidepulse-reply");
+        let status = Command::new(alias)
+            .arg(if help { "--help" } else { "version" })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(
+                "a staged compatibility entry point failed",
+            ));
+        }
+    }
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
         request_id: 1,
@@ -367,6 +426,48 @@ pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
             io::ErrorKind::InvalidData,
             "preview service settings or device isolation failed",
         ));
+    }
+    if !Command::new(&manifest.aliases[0])
+        .args(["phone-link", "list"])
+        .env_remove("SIDEPULSE_NEXT_ENDPOINT")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success()
+    {
+        return Err(io::Error::other(
+            "staged CLI did not resolve its preview service endpoint",
+        ));
+    }
+    let response: ServerMessage = sidepulse_ipc::request(
+        &manifest.endpoint,
+        &ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 3,
+            kind: RequestKind::Shutdown,
+        },
+        Duration::from_secs(2),
+    )?;
+    if response.payload != ServerPayload::Ack {
+        return Err(io::Error::other(
+            "preview service did not acknowledge shutdown",
+        ));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.0.try_wait()? {
+            if !status.success() {
+                return Err(io::Error::other("preview service did not stop cleanly"));
+            }
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "preview service did not finish shutdown",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
     Ok(())
 }

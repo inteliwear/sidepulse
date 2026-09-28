@@ -10,6 +10,12 @@ fn fail(error: impl std::fmt::Display) -> ExitCode {
 }
 pub fn run_sd_guard(mut args: impl Iterator<Item = String>) -> ExitCode {
     let operation = args.next().unwrap_or_else(|| "check".into());
+    if matches!(operation.as_str(), "--help" | "-h") {
+        println!(
+            "Usage: sidepulse sdejectguard check|run [--no-mount]\n       sidepulse sdejectguard install|start|stop|uninstall|status --stage-dir DIR [--dry-run]"
+        );
+        return ExitCode::SUCCESS;
+    }
     if matches!(
         operation.as_str(),
         "install" | "start" | "stop" | "uninstall" | "status"
@@ -60,6 +66,12 @@ pub fn run_status_bar(args: impl Iterator<Item = String>) -> ExitCode {
     let args = args.collect::<Vec<_>>();
     let mut args = args.into_iter();
     let operation = args.next().unwrap_or_else(|| "start".into());
+    if matches!(operation.as_str(), "--help" | "-h") {
+        println!(
+            "Usage: sidepulse status-bar start|run [--endpoint ENDPOINT]\n       sidepulse status-bar install|start|stop|uninstall|status --stage-dir DIR [--dry-run]\n       sidepulse status-bar install-sleep-helper|uninstall-sleep-helper|sleep-helper-status [--dry-run]"
+        );
+        return ExitCode::SUCCESS;
+    }
     let remaining = args.collect::<Vec<_>>();
     if matches!(
         operation.as_str(),
@@ -75,7 +87,7 @@ pub fn run_status_bar(args: impl Iterator<Item = String>) -> ExitCode {
     if matches!(operation.as_str(), "start" | "run") {
         let endpoint = match (args.next(), args.next(), args.next()) {
             (Some(flag), Some(endpoint), None) if flag == "--endpoint" => Some(endpoint),
-            (None, None, None) => env::var("SIDEPULSE_NEXT_ENDPOINT").ok(),
+            (None, None, None) => crate::preview_endpoint(),
             _ => None,
         };
         let Some(endpoint) = endpoint else {

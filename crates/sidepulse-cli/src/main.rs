@@ -12,9 +12,26 @@ use sidepulse_core::{
 };
 
 fn main() -> ExitCode {
-    let mut args = env::args().skip(1);
+    let mut arguments = env::args().skip(1).collect::<Vec<_>>();
+    let executable = env::current_exe().ok();
+    match executable
+        .as_ref()
+        .and_then(|path| path.file_stem())
+        .and_then(|name| name.to_str())
+    {
+        Some("agent-monitor") => arguments.insert(0, "agent-monitor".into()),
+        Some("agent-status-bar") => arguments.insert(0, "status-bar".into()),
+        _ => {}
+    }
+    let mut args = arguments.into_iter();
     match args.next().as_deref() {
-        Some("version") if args.next().is_none() => {
+        None | Some("--help" | "-h") => {
+            println!(
+                "SidePulse native preview\n\nUsage: sidepulse-next COMMAND\n\nCommands:\n  agent-monitor   Status, live monitoring, LEDs, and provider hooks\n  battery         Battery status, LEDs, and settings\n  status-bar      Tray and sleep-helper controls\n  settings        Open settings\n  virtual-display Open the virtual LED display\n  write, push     LED programs and phone notifications\n  link, phone-link Configure relay and phone links\n  reply           Local reply classifier\n  setup           Assemble a native preview bundle\n  service         Install, start, stop, inspect, or remove a preview service\n  sdejectguard    macOS SD eject protection\n  doctor, version Inspect installation or version\n\nStartup commands use --stage-dir DIR; add --dry-run to inspect a plan."
+            );
+            ExitCode::SUCCESS
+        }
+        Some("version" | "--version") if args.next().is_none() => {
             println!("sidepulse-next {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
@@ -23,13 +40,19 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("agent-monitor") => match args.next().as_deref() {
+            Some("--help" | "-h") => {
+                println!(
+                    "Usage: agent-monitor doctor|status|watch|live|leds|hook-log|install|uninstall|status-bar|version\n\nStatus and LED monitoring accept --codex-log, --claude-log, --grok-log, --cursor-log, --junie-log, --max-lines, --stale-after, and --tool-running-timeout."
+                );
+                ExitCode::SUCCESS
+            }
             Some("hook-log") => {
                 let _ = sidepulse_cli::run_hook(args);
                 ExitCode::SUCCESS
             }
             Some("leds") => sidepulse_cli::run_leds("agent", args),
             Some("status-bar") => sidepulse_cli::run_status_bar(args),
-            Some("version") if args.next().is_none() => {
+            Some("version" | "--version") if args.next().is_none() => {
                 println!("sidepulse-next {}", env!("CARGO_PKG_VERSION"));
                 ExitCode::SUCCESS
             }
@@ -62,7 +85,7 @@ fn main() -> ExitCode {
         Some(command @ ("settings" | "virtual-display")) => {
             let endpoint = match (args.next(), args.next(), args.next()) {
                 (Some(flag), Some(endpoint), None) if flag == "--endpoint" => Some(endpoint),
-                (None, None, None) => env::var("SIDEPULSE_NEXT_ENDPOINT").ok(),
+                (None, None, None) => sidepulse_cli::preview_endpoint(),
                 _ => None,
             };
             let Some(endpoint) = endpoint else {

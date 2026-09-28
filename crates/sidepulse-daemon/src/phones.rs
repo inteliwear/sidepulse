@@ -471,54 +471,23 @@ impl Service {
             .map_err(poisoned)?
             .as_ref()
             .map_or_else(Vec::new, PhoneStore::links);
-        let destinations = if let Some(path) = &request.device {
-            let path = Path::new(path);
-            let target = if path.file_name().is_some_and(|name| {
-                name.to_string_lossy()
-                    .eq_ignore_ascii_case(sidepulse_device::DEFAULT_FILE_NAME)
-            }) {
-                path.to_owned()
-            } else {
-                path.join(
-                    request
-                        .file_name
-                        .as_deref()
-                        .unwrap_or(sidepulse_device::DEFAULT_FILE_NAME),
-                )
-            };
-            vec![DeliveryDestination {
-                id: target.to_string_lossy().into(),
-                name: path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into(),
-                kind: DestinationKind::Local,
-                address: target.to_string_lossy().into(),
-                aliases: vec![],
-            }]
+        let devices = if request.device.is_some() {
+            Vec::new()
         } else {
-            let (devices, _) = self.available_devices()?;
-            let mut destinations: Vec<_> = devices
-                .into_iter()
-                .map(|device| DeliveryDestination {
-                    id: device.root.clone(),
-                    name: device.label.unwrap_or_else(|| {
-                        Path::new(&device.root)
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into()
-                    }),
-                    kind: DestinationKind::Local,
-                    address: if let Some(file) = &request.file_name {
-                        Path::new(&device.root).join(file).to_string_lossy().into()
-                    } else {
-                        device.target.clone()
-                    },
-                    aliases: vec![device.root, device.target],
-                })
-                .collect();
+            self.available_devices()?.0
+        };
+        let candidates = devices
+            .into_iter()
+            .map(|device| sidepulse_device::DeviceCandidate {
+                root: device.root.into(),
+                target: device.target.into(),
+                reason: device.reason,
+                label: device.label,
+            })
+            .collect();
+        let mut destinations =
+            sidepulse_device::delivery::destinations_from_devices(&request, candidates)?;
+        if request.device.is_none() {
             destinations.extend(links.iter().map(|link| {
                 let summary = link.summary();
                 DeliveryDestination {
@@ -529,8 +498,7 @@ impl Service {
                     aliases: vec![],
                 }
             }));
-            destinations
-        };
+        }
         let selected = sidepulse_core::select_delivery_targets(&request, &destinations)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         Ok((request, selected, links))

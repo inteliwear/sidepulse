@@ -60,6 +60,17 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
 }
 
 fn collect_snapshot(options: &Options) -> io::Result<(MonitorSnapshot, Vec<SourceSpec>)> {
+    let sources = sources_for_options(options);
+    let events = load_recent_events(&sources, options.max_lines)?;
+    let mut monitor = Monitor::new(options.policy);
+    for event in &events {
+        monitor.ingest(event);
+    }
+    let snapshot = monitor.snapshot(Utc::now());
+    Ok((snapshot, sources))
+}
+
+fn sources_for_options(options: &Options) -> Vec<SourceSpec> {
     let mut overrides = options
         .logs
         .iter()
@@ -71,14 +82,29 @@ fn collect_snapshot(options: &Options) -> io::Result<(MonitorSnapshot, Vec<Sourc
             .iter()
             .map(|(provider, path)| (format!("{provider}-transcripts"), path.clone())),
     );
-    let sources = sources_from_environment(&overrides);
-    let events = load_recent_events(&sources, options.max_lines)?;
-    let mut monitor = Monitor::new(options.policy);
-    for event in &events {
-        monitor.ingest(event);
+    sources_from_environment(&overrides)
+}
+pub(crate) struct DetachedMonitor {
+    monitor: Monitor,
+    tailer: sidepulse_sources::SourceTailer,
+}
+impl DetachedMonitor {
+    pub(crate) fn new(args: Vec<String>) -> io::Result<Self> {
+        let options = parse_args(args.into_iter()).map_err(io::Error::other)?;
+        let sources = sources_for_options(&options);
+        let tailer = sidepulse_sources::SourceTailer::new(&sources)?;
+        let mut monitor = Monitor::new(options.policy);
+        for event in load_recent_events(&sources, options.max_lines)? {
+            monitor.ingest(&event);
+        }
+        Ok(Self { monitor, tailer })
     }
-    let snapshot = monitor.snapshot(Utc::now());
-    Ok((snapshot, sources))
+    pub(crate) fn snapshot(&mut self) -> io::Result<MonitorSnapshot> {
+        for event in self.tailer.poll()? {
+            self.monitor.ingest(&event);
+        }
+        Ok(self.monitor.snapshot(Utc::now()))
+    }
 }
 
 pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {

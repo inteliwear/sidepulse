@@ -2,7 +2,6 @@ use sidepulse_core::{
     ClientRequest, DeliveryRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
 };
 use std::{
-    env,
     io::{self, IsTerminal, Read},
     process::ExitCode,
     time::Duration,
@@ -37,7 +36,7 @@ fn finish(result: Result<(), String>, command: &str) -> ExitCode {
 }
 fn endpoint(value: Option<String>) -> Result<String, String> {
     value
-        .or_else(|| env::var("SIDEPULSE_NEXT_ENDPOINT").ok())
+        .or_else(crate::preview_endpoint)
         .ok_or("provide --endpoint ENDPOINT, or set SIDEPULSE_NEXT_ENDPOINT".into())
 }
 pub fn run_delivery(command: &str, args: impl Iterator<Item = String>) -> ExitCode {

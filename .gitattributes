@@ -1,0 +1,2 @@
+# Qwen's captured chat-template fixture must retain canonical tokenization bytes.
+crates/sidepulse-reply/resources/prompt-qwen-fixture.txt text eol=lf
