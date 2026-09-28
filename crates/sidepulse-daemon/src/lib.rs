@@ -68,6 +68,8 @@ pub struct Service {
     phone_links: Arc<Mutex<Option<sidepulse_links::PhoneStore>>>,
     phone_pairing: Arc<Mutex<Option<phones::PairingRuntime>>>,
     delivery_jobs: Arc<Mutex<BTreeMap<String, sidepulse_core::DeliveryJobView>>>,
+    phone_output: Arc<Mutex<phones::PhoneOutputState>>,
+    phone_send_gate: Arc<Mutex<()>>,
 }
 
 struct OutputClock(Instant);
@@ -982,6 +984,7 @@ impl Service {
                 },
             ),
             RequestKind::PhoneLinks
+            | RequestKind::SetPhoneDisplay { .. }
             | RequestKind::RegisterPhone { .. }
             | RequestKind::RemovePhone { .. }
             | RequestKind::BeginPhonePairing { .. }
@@ -989,6 +992,9 @@ impl Service {
             | RequestKind::ReloadPhoneLinks => {
                 let result = match request.kind {
                     RequestKind::PhoneLinks => Ok(()),
+                    RequestKind::SetPhoneDisplay { id, display } => {
+                        self.set_phone_display(&id, &display)
+                    }
                     RequestKind::RegisterPhone {
                         token,
                         name,
@@ -1567,6 +1573,7 @@ pub fn run_with_logs_and_device(
             auto_device: false,
             relay_config_path: None,
             phone_links_path: None,
+            phone_output: false,
             power_control: false,
             power_observation_path: None,
             history_path: None,
@@ -1595,6 +1602,7 @@ pub struct RunOptions<'a> {
     pub auto_device: bool,
     pub relay_config_path: Option<&'a Path>,
     pub phone_links_path: Option<&'a Path>,
+    pub phone_output: bool,
     pub power_control: bool,
     pub power_observation_path: Option<&'a Path>,
     pub history_path: Option<&'a Path>,
@@ -1628,10 +1636,17 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         auto_device,
         relay_config_path,
         phone_links_path,
+        phone_output,
         power_control,
         power_observation_path,
         history_path,
     } = options;
+    if phone_output && (phone_links_path.is_none() || settings_path.is_none()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--phone-output requires --phone-links and --settings",
+        ));
+    }
     if power_control && power_observation_path.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -1741,6 +1756,18 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
     }
     if let Some(path) = phone_links_path {
         service.configure_phone_links(path)?;
+        if phone_output {
+            service.enable_phone_output()?;
+            let phone_service = service.clone();
+            std::thread::spawn(move || {
+                loop {
+                    if let Err(error) = phone_service.sync_phone_outputs() {
+                        eprintln!("sidepulse-next-service: phone output: {error}");
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            });
+        }
     }
     if let Some(path) = relay_config_path {
         use std::sync::atomic::Ordering;

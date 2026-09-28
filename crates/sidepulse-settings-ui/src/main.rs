@@ -26,6 +26,7 @@ struct ServiceState {
     lid_durations: [f64; 2],
     relay: sidepulse_core::RelaySettings,
     phones_configured: bool,
+    phone_output_enabled: bool,
     phones: Vec<sidepulse_core::PhoneLinkSummary>,
     phone_pairing: Option<sidepulse_core::PhonePairingView>,
 }
@@ -119,6 +120,7 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     };
     let ServerPayload::PhoneLinks {
         configured: phones_configured,
+        output_enabled: phone_output_enabled,
         links: phones,
         pairing: phone_pairing,
     } = request(endpoint, RequestKind::PhoneLinks)?
@@ -127,6 +129,7 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     };
     Ok(ServiceState {
         phones_configured,
+        phone_output_enabled,
         phones,
         phone_pairing,
         settings,
@@ -214,7 +217,8 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         continue;
                     }
                     let draft = match kind {
-                        RequestKind::RegisterPhone { .. }
+                        RequestKind::SetPhoneDisplay { .. }
+                        | RequestKind::RegisterPhone { .. }
                         | RequestKind::RemovePhone { .. }
                         | RequestKind::BeginPhonePairing { .. }
                         | RequestKind::CancelPhonePairing
@@ -1282,6 +1286,9 @@ impl SettingsApp {
             ui.weak("Phone linking is unavailable in this session.");
             return;
         }
+        if !state.phone_output_enabled {
+            ui.weak("Automatic phone updates are paused in this session.");
+        }
         let phones = state.phones.clone();
         let pairing = state.phone_pairing.clone();
         ui.add_space(16.0);
@@ -1348,11 +1355,44 @@ impl SettingsApp {
                 ui.horizontal(|ui| {
                     ui.label(&phone.name);
                     ui.weak(&phone.id);
+                    let mut display = phone.display.clone();
+                    egui::ComboBox::from_id_salt(("phone-display", &phone.id))
+                        .selected_text(match display.as_str() {
+                            "battery" => "Battery",
+                            "custom" => "Manual",
+                            _ => "Agent activity",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut display, "agent".into(), "Agent activity");
+                            ui.selectable_value(&mut display, "battery".into(), "Battery");
+                            ui.selectable_value(&mut display, "custom".into(), "Manual");
+                        });
+                    if display != phone.display {
+                        self.send(RequestKind::SetPhoneDisplay {
+                            id: phone.id.clone(),
+                            display,
+                        });
+                        self.phone_saving = true;
+                    }
                     if ui.button("Remove").clicked() {
-                        self.send(RequestKind::RemovePhone { id: phone.id });
+                        self.send(RequestKind::RemovePhone {
+                            id: phone.id.clone(),
+                        });
                         self.phone_saving = true;
                     }
                 });
+                if let Some(at) = phone.last_sent_at {
+                    ui.weak(format!(
+                        "Last update sent: {} UTC",
+                        at.format("%Y-%m-%d %H:%M:%S")
+                    ));
+                }
+                if let Some(error) = phone.delivery_error {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(210, 80, 65),
+                        format!("Could not send an update: {error}"),
+                    );
+                }
             }
             ui.collapsing("Link with a push token", |ui| {
                 ui.label("Phone name");

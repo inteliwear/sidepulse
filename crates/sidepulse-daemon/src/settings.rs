@@ -212,6 +212,65 @@ impl SettingsStore {
         Ok(())
     }
 
+    pub fn display_for_phone(&self, id: &str) -> &str {
+        let id = format!("ios/{id}");
+        self.document
+            .get("devices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|device| device.get("id").and_then(Value::as_str) == Some(&id))
+            .and_then(|device| device.get("led_display"))
+            .and_then(Value::as_str)
+            .or_else(|| self.document.get("led_display").and_then(Value::as_str))
+            .unwrap_or("agent")
+    }
+    pub fn set_phone_display(&mut self, id: &str, name: &str, display: &str) -> io::Result<()> {
+        if !matches!(display, "agent" | "battery" | "custom") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported phone display",
+            ));
+        }
+        let mut updated = self.document.clone();
+        let id = format!("ios/{id}");
+        let list = updated
+            .entry("devices")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "settings.devices must be an array",
+                )
+            })?;
+        if let Some(device) = list
+            .iter_mut()
+            .find(|device| device.get("id").and_then(Value::as_str) == Some(&id))
+        {
+            device
+                .as_object_mut()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "phone setting must be an object",
+                    )
+                })?
+                .insert("led_display".into(), json!(display));
+        } else {
+            list.push(
+                json!({"id":id,"name":name,"path":id,"led_display":display,"brightness":255}),
+            );
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn brightness_for_device(&self, path: &Path) -> u8 {
         self.find_device(path)
             .and_then(|device| device.get("brightness"))

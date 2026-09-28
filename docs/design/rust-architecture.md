@@ -493,3 +493,24 @@ CLI/IPC registration/removal, dry runs, manual output, and custom filenames.
 Automatic linked-phone agent output and saved phone display controls are the
 next implementation step. Real-device pairing and native visual QA remain
 pending while the Mac is locked.
+
+### Automatic linked-phone output
+
+The service now has explicit `--phone-output` activation, requiring both a
+settings path and a phone links path. Preview staging leaves it disabled.
+An independent worker renders eight-LED agent animations or battery programs
+and sends only when the generated program changes. Battery power-change preview
+uses the shared service policy. Phone output uses full brightness, matching the
+legacy phone path. Failures retain the last successful program, expose a
+redacted error and retry after thirty seconds.
+
+The legacy `ios/ID` device settings are preserved and edited atomically by the
+service. The native Phone page and `phone-link display ID agent|battery|custom`
+control each phone's display. A manual LED delivery serializes against automatic
+sends and saves custom mode before transport, so the next automatic cycle
+cannot overwrite it. Notification-only delivery leaves the display preference
+intact. Network operations do not hold the settings or UI snapshot locks.
+
+Local HTTP tests verify agent-to-manual-to-agent transitions, duplicate
+suppression, battery output, saved unknown fields, link removal, error redaction
+and retry backoff. Real phone receipt remains a separate device validation gate.

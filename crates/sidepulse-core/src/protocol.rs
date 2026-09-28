@@ -43,6 +43,10 @@ pub enum RequestKind {
     History,
     RelaySettings,
     PhoneLinks,
+    SetPhoneDisplay {
+        id: String,
+        display: String,
+    },
     RegisterPhone {
         token: String,
         name: String,
@@ -142,6 +146,7 @@ pub enum ServerPayload {
     },
     PhoneLinks {
         configured: bool,
+        output_enabled: bool,
         links: Vec<crate::PhoneLinkSummary>,
         pairing: Option<crate::PhonePairingView>,
     },
@@ -390,6 +395,13 @@ impl ClientRequest {
             && (id.is_empty() || id.len() > 128)
         {
             return Err("invalid delivery identifier");
+        }
+        if let RequestKind::SetPhoneDisplay { id, display } = &self.kind
+            && (id.is_empty()
+                || id.len() > 128
+                || !matches!(display.as_str(), "agent" | "battery" | "custom"))
+        {
+            return Err("invalid phone display");
         }
         if let RequestKind::RemovePhone { id } = &self.kind
             && (id.is_empty() || id.len() > 128)

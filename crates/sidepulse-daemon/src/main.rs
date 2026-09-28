@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--power-control | --mock-power JSON_PATH]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--phone-output] [--power-control | --mock-power JSON_PATH]"
         );
         return ExitCode::from(2);
     };
@@ -17,6 +17,7 @@ fn main() -> ExitCode {
     let mut settings = None;
     let mut relay_config = None;
     let mut phone_links = None;
+    let mut phone_output = false;
     let mut power_control = false;
     let mut power_observation = None;
     let mut brightness = None;
@@ -25,7 +26,7 @@ fn main() -> ExitCode {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--power-control | --mock-power JSON_PATH]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--phone-output] [--power-control | --mock-power JSON_PATH]"
                     );
                     return ExitCode::from(2);
                 };
@@ -75,6 +76,7 @@ fn main() -> ExitCode {
                 };
                 settings = Some(PathBuf::from(path));
             }
+            "--phone-output" => phone_output = true,
             "--phone-links" => {
                 let Some(path) = args.next() else {
                     return ExitCode::from(2);
@@ -105,7 +107,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--power-control | --mock-power JSON_PATH]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--phone-links PATH] [--phone-output] [--power-control | --mock-power JSON_PATH]"
                 );
                 return ExitCode::from(2);
             }
@@ -127,6 +129,7 @@ fn main() -> ExitCode {
             auto_device,
             relay_config_path: relay_config.as_deref(),
             phone_links_path: phone_links.as_deref(),
+            phone_output,
             power_control,
             power_observation_path: power_observation.as_deref(),
             history_path: history.as_deref(),

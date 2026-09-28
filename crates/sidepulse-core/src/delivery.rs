@@ -177,6 +177,9 @@ pub struct PhoneLinkSummary {
     pub name: String,
     pub server: String,
     pub linked_at: String,
+    pub display: String,
+    pub last_sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub delivery_error: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhonePairingView {

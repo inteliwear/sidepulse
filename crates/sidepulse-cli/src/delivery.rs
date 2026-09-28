@@ -128,14 +128,16 @@ pub fn run_phone_link(args: impl Iterator<Item = String>) -> ExitCode {
     let mut token = None;
     let mut name = "iPhone".to_owned();
     let mut id = None;
+    let mut display = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--endpoint" | "--server" | "--token" | "--name" => {
                 let Some(value) = args.next() else { return finish(Err(format!("{arg} requires a value")), "phone-link"); };
                 match arg.as_str() { "--endpoint" => service=Some(value), "--server" => server=Some(value), "--token" => token=Some(value), "--name" => name=value, _=>unreachable!() }
             }
-            _ if operation == "remove" && id.is_none() => id=Some(arg),
-            _ => return finish(Err("usage: phone-link pair|list|cancel|reload|register --token TOKEN|remove ID [--endpoint ENDPOINT] [--server ORIGIN] [--name NAME]".into()), "phone-link"),
+            _ if matches!(operation.as_str(), "remove"|"display") && id.is_none() => id=Some(arg),
+            _ if operation == "display" && display.is_none() => display=Some(arg),
+            _ => return finish(Err("usage: phone-link pair|list|cancel|reload|register --token TOKEN|remove ID|display ID agent|battery|custom [--endpoint ENDPOINT] [--server ORIGIN] [--name NAME]".into()), "phone-link"),
         }
     }
     finish(
@@ -148,6 +150,10 @@ pub fn run_phone_link(args: impl Iterator<Item = String>) -> ExitCode {
                 "reload" => RequestKind::ReloadPhoneLinks,
                 "remove" => RequestKind::RemovePhone {
                     id: id.ok_or("provide a phone ID")?,
+                },
+                "display" => RequestKind::SetPhoneDisplay {
+                    id: id.ok_or("provide a phone ID")?,
+                    display: display.ok_or("provide agent, battery, or custom")?,
                 },
                 "register" => RequestKind::RegisterPhone {
                     token: token.ok_or("provide --token TOKEN")?,

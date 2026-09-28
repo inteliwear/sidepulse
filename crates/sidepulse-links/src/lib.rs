@@ -56,6 +56,9 @@ impl PhoneLink {
             name: self.name.clone(),
             server: self.server.clone(),
             linked_at: self.linked_at.clone(),
+            display: "agent".into(),
+            last_sent_at: None,
+            delivery_error: None,
         }
     }
     fn document(&self) -> Value {
