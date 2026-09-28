@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
+pub mod management;
 
 const BINARIES: [&str; 9] = [
     "sidepulse-next",

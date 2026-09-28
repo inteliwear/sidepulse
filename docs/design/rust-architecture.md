@@ -78,7 +78,7 @@ service remains the owner of settings validation, persistence, monitoring,
 power policy, and device output. Native tray clients and the CLI open the
 sibling settings executable with their existing endpoint. The window is
 included in preview bundles but does not register itself for startup.
-The first window covers live activity, device selection, brightness, agent /
+The window covers live activity, device selection, brightness, agent /
 battery / manual display, charger baseline and power-change previews,
 transcript monitoring, and macOS awake preferences. macOS staging now includes
 native `.app` bundles for tray and settings, with the isolated endpoint in
@@ -88,7 +88,7 @@ after a service restart. The animation page saves built-in presets and per-statu
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
 named custom assets remain selectable and are preserved. Named assets, profiles, and session-opening preferences now have service-owned
-operations and native controls. Relay controls now use the service as well; native helper recovery and release controls remain open.
+operations and native controls. Relay, hook setup, startup management, administrator helper setup, and diagnostic exports have native controls. Installation and release tools live in the installer crate.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -108,10 +108,7 @@ history stays inside its isolated directory. Recording runs independently of
 any window and restores existing rows on startup. The service keeps a bounded
 in-memory timeline, replays at most 128 MiB at startup, and limits chart replies
 to 2,000 observations, including the first and latest. Long timelines are
-sampled and the window labels that summary. The settings window charts agent
-state, battery percentage, and charger power, with lid and awake details on
-hover. The five legacy timeframes are saved through the service. Native chart
-layout checks await an unlocked desktop.
+sampled and the window labels that summary. The settings window charts battery percentage, charger power, agent status, SidePulse awake, macOS sleep, and lid state. The five legacy timeframes are saved through the service. The earlier three-row chart passed native checks; the expanded six-row layout still needs a visual check.
 
 ## Current migration state
 
@@ -208,9 +205,7 @@ process changed the document after startup. A device started with `--device`
 uses its saved brightness unless `--brightness` overrides it. The Rust CLI
 can inspect settings and change brightness through service requests; the
 native tray offers brightness presets through the same requests. The service
-alone saves the setting and writes the LED program. This is the first settings
-control, not complete settings parity. Settings paths remain opt-in during
-migration, and native tray interaction still needs visual runtime validation.
+alone saves the setting and writes the LED program. Settings paths remain opt-in during migration, and native tray interaction still needs visual runtime validation.
 An opt-in `--auto-device` mode now scans platform mount roots, keeps the
 selected device while mounted, and reconnects after removal and return.
 It uses each device's saved brightness. Windows discovery now enumerates
@@ -288,9 +283,7 @@ bounded SSE streaming. `sidepulse-next link` can create a receiving code or
 save an outbound code. A development service started with explicit
 `--relay-config PATH` sends local hook events and receives remote events;
 loopback HTTP tests cover both paths. Relay remains opt-in so the development
-service cannot connect through the installed Python setup unexpectedly. A
-production service launch and UI control for relay configuration still need
-implementation.
+service cannot connect through the installed Python setup unexpectedly. The native Link computers page controls relay configuration; production activation remains part of cutover.
 The core also owns portable awake-policy decisions, battery safeguard rules,
 closed-lid LED and animation decisions, and pure macOS sleep-diagnostic
 parsers. A read-only macOS service adapter reports the actual lid state,
@@ -323,7 +316,7 @@ and missing argument values. No production hook config has been changed.
 An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route
 now plans all five providers first and restores earlier config files if a
 later apply fails. The test uses a temporary home; live installation still
-awaits Codex trust review, full Grok backup-file cleanup, and upgrade verification.
+awaits Codex trust review and live upgrade verification.
 The batch route removes old SidePulse commands from the two legacy Grok hook
 JSON files while preserving unrelated commands in those files. It now also
 relocates SidePulse backup JSON files out of Grok's live hooks directory into
@@ -393,11 +386,7 @@ see the [Ghostty documentation](https://ghostty.org/docs/features/applescript) a
 Portable integration tests exercise the actual CLI and local IPC, preference
 persistence, unknown-field retention, missing sessions, explicit-action failures,
 and hostile characters in session arguments. Native activation and existing
-terminal focus/reuse still require validation. The current activation adapter
-opens a new terminal session. Native window checks for the latest history and
-virtual clients are pending because the Mac was locked. Automated Rust checks,
-tests, release builds, staging, and service smoke checks passed on all three
-platforms at `4052e40`.
+terminal focus/reuse still require validation. Terminal reuse is implemented as described below. Native history and virtual-display checks passed in the isolated preview. The final Setup and Diagnostics screens still need visual checks; the desktop became locked during their verification. Automated checks, release builds, packaging, staging, and service smoke checks passed on all three platforms at `dd4a757`.
 
 
 ## Profiles and named animation assets
@@ -503,9 +492,7 @@ Portable tests cover legacy documents, unknown fields, stale saves, Unix file
 permissions, actual local HTTP pairing and notification delivery, invalid
 registrations, cancellation before connecting, destination routing, actual
 CLI/IPC registration/removal, dry runs, manual output, and custom filenames.
-Automatic linked-phone agent output and saved phone display controls are the
-next implementation step. Real-device pairing and native visual QA remain
-pending while the Mac is locked.
+Automatic linked-phone output and saved display controls are implemented below. Native QR rendering, cancellation, local fixture registration, and saved display changes passed. Real phone receipt remains unverified.
 
 ### Automatic linked-phone output
 
@@ -773,8 +760,39 @@ as UTC with the same missing/invalid timestamp fallback.
 
 `setup --import-config DIR --import-logs DIR` first produces a reviewable list
 with `--dry-run`, then copies raw settings, phone links, custom LED assets, and
-provider logs into a new isolated preview. A contract test loads the imported
+provider logs, debug audit logs, status history, and saved latest agent state into a new isolated preview. A contract test loads the imported
 custom animation and saved profile through the headless service. Unknown fields
 are retained and sources are checked before publication. Legacy relay activation
 is excluded from this initial import. Updates and rollback now retain named
 animation files alongside the latest runtime documents.
+
+
+## Setup, diagnostics, and native recovery
+
+Provider configuration mutations are service-owned and use the same atomic,
+backed-up plans as the CLI. The Setup page reports current versus legacy hooks
+for all five providers, preserves unrelated settings and handlers, removes Grok
+legacy duplicates, and keeps backups outside Grok's active hook directory. Codex
+installation returns the required trust-review instruction. Cursor becomes a
+source when its hooks are installed without restarting the monitor.
+
+The installer crate owns startup and administrator setup operations. Settings
+uses a verified staged manifest and caches service context so startup controls
+remain available after the monitor stops. A newly opened staged Settings app can
+recover that context without a running service. Enable at login and Start now
+are separate actions. UI drawing never invokes startup manager processes.
+
+Debug CSV and HTML exports are bounded, streamed, and atomically published by the
+service. CSV preserves the 14 legacy columns; HTML escapes event data and uses
+no external resources. Hooks keep audit and inferred-provider output beside the
+selected log by default, with an explicit audit-path override. Legacy import
+retains audit/history/latest files as well as provider logs.
+
+The macOS virtual display consumes service frames and changes visibility in the
+window's logic callback, which continues while hidden. Native checks verified
+battery cyan, a saved custom working program, manual-mode hiding, and reappearance
+when agent display resumes. Accepted macOS IPC streams are explicitly blocking,
+so large history responses survive partial reads and writes.
+
+Detailed validation and outstanding delivery gates are tracked in
+[rust-native-validation.md](rust-native-validation.md).

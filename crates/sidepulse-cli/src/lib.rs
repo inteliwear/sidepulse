@@ -7,7 +7,9 @@ mod hook_impl;
 mod leds;
 mod lifecycle;
 mod relay_link;
+mod setup_control;
 mod status;
+pub use setup_control::run as run_setup_control;
 
 pub use battery::run_battery;
 pub use doctor::run_doctor;

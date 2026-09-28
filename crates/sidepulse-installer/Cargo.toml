@@ -18,6 +18,7 @@ serde_json.workspace = true
 tempfile = "3"
 sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
+sidepulse-helpers = { path = "../sidepulse-helpers" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

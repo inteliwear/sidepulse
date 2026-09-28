@@ -1,6 +1,8 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
+mod diagnostics;
 mod history;
+mod hook_setup;
 mod phones;
 mod power;
 mod relay_service;
@@ -47,6 +49,8 @@ type RelayPublisher = mpsc::SyncSender<RelayPublication>;
 
 #[derive(Clone, Default)]
 pub struct Service {
+    diagnostics: Arc<Mutex<Option<diagnostics::Diagnostics>>>,
+    hook_setup: Arc<Mutex<Option<hook_setup::HookSetup>>>,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
     monitor: Arc<Mutex<Monitor>>,
     subscribers: Arc<Mutex<Vec<mpsc::SyncSender<()>>>>,
@@ -924,6 +928,50 @@ impl Service {
             );
         }
         match request.kind {
+            RequestKind::Diagnostics | RequestKind::ExportDiagnostics { .. } => {
+                let result = match request.kind {
+                    RequestKind::ExportDiagnostics { format } => self.export_diagnostics(format),
+                    _ => self
+                        .diagnostics_status()
+                        .map(|status| ServerPayload::Diagnostics { status }),
+                };
+                let payload = result.unwrap_or_else(|error| ServerPayload::Error {
+                    code: "diagnostics_failed".into(),
+                    message: error.to_string(),
+                });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::HookSetup | RequestKind::ConfigureHooks { .. } => {
+                let result = match request.kind {
+                    RequestKind::ConfigureHooks {
+                        provider,
+                        install,
+                        dry_run,
+                    } => self.configure_provider_hooks(&provider, install, dry_run),
+                    _ => self
+                        .hook_setup_status()
+                        .map(|status| ServerPayload::HookSetup { status }),
+                };
+                let payload = result.unwrap_or_else(|error| ServerPayload::Error {
+                    code: "hook_setup_failed".into(),
+                    message: error.to_string(),
+                });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::Shutdown => {
                 write_message(
                     &mut stream,
@@ -1728,6 +1776,16 @@ fn source_overrides_with_settings(
     home: &Path,
 ) -> io::Result<Vec<(String, PathBuf)>> {
     let mut overrides = explicit.to_vec();
+    if !overrides.iter().any(|(provider, _)| provider == "cursor")
+        && let Some(source) = service
+            .hook_setup
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .and_then(hook_setup::HookSetup::cursor_source)
+    {
+        overrides.push(source);
+    }
     if let Some(store) = service.settings.lock().map_err(poisoned)?.as_ref() {
         for (provider, relative) in [("codex", ".codex/sessions"), ("claude", ".claude/projects")] {
             let source_name = format!("{provider}-transcripts");
@@ -2020,6 +2078,45 @@ pub fn run_with_shutdown(
         .unwrap_or_else(|| PathBuf::from("."));
     let source_overrides = source_overrides_with_settings(&service, logs, &home)?;
     let sources = sources_from_environment(&source_overrides);
+    let executable = std::env::current_exe()?;
+    let hook = executable.with_file_name(format!(
+        "sidepulse-next-hook{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let resolved_logs = sources
+        .iter()
+        .map(|source| (source.provider.clone(), source.path.clone()))
+        .collect::<Vec<_>>();
+    let stage = executable
+        .ancestors()
+        .find(|path| path.join("manifest.json").is_file());
+    service.configure_hook_setup(&home, &resolved_logs, &hook, stage)?;
+    let state_root = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/state"));
+    let audit = state_root.join("sidepulse/agent-monitor/event-status.jsonl");
+    let exports = settings_path
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| state_root.join("sidepulse"))
+        .join("exports");
+    let mut audits = resolved_logs
+        .iter()
+        .filter(|(provider, _)| sidepulse_sources::PROVIDERS.contains(&provider.as_str()))
+        .map(|(_, path)| path.with_file_name("event-status.jsonl"))
+        .collect::<Vec<_>>();
+    audits.push(audit);
+    if let Some(path) = latest_state_path {
+        audits.push(path.with_file_name("event-status.jsonl"));
+    }
+    audits.sort();
+    audits.dedup();
+    service.configure_diagnostic_sources(
+        &audits,
+        settings_path,
+        history_path.as_deref(),
+        &exports,
+    )?;
     let mut tailer = SourceTailer::new(&sources)?;
     service.replay_sources(&sources, 5000)?;
     let recovery_service = service.clone();

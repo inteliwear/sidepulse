@@ -25,9 +25,12 @@ fn main() -> ExitCode {
     }
     let mut args = arguments.into_iter();
     match args.next().as_deref() {
+        Some(
+            command @ ("setup-status" | "configure-hooks" | "diagnostics" | "diagnostics-export"),
+        ) => sidepulse_cli::run_setup_control(command, args),
         None | Some("--help" | "-h") => {
             println!(
-                "SidePulse native preview\n\nUsage: sidepulse-next COMMAND\n\nCommands:\n  agent-monitor   Status, live monitoring, LEDs, and provider hooks\n  battery         Battery status, LEDs, and settings\n  status-bar      Tray and sleep-helper controls\n  settings        Open settings\n  virtual-display Open the virtual LED display\n  write, push     LED programs and phone notifications\n  link, phone-link Configure relay and phone links\n  reply           Local reply classifier\n  setup           Assemble a native preview bundle\n  update, rollback, recover Replace or restore an offline preview\n  service         Install, start, stop, inspect, or remove a preview service\n  sdejectguard    macOS SD eject protection\n  doctor, version Inspect installation or version\n\nStartup commands use --stage-dir DIR; add --dry-run to inspect a plan."
+                "SidePulse native preview\n\nUsage: sidepulse-next COMMAND\n\nCommands:\n  agent-monitor   Status, live monitoring, LEDs, and provider hooks\n  battery         Battery status, LEDs, and settings\n  status-bar      Tray and sleep-helper controls\n  settings        Open settings\n  virtual-display Open the virtual LED display\n  write, push     LED programs and phone notifications\n  link, phone-link Configure relay and phone links\n  reply           Local reply classifier\n  setup-status, configure-hooks Inspect or change provider hooks through the service\n  diagnostics, diagnostics-export Inspect or export debug events\n  setup           Assemble a native preview bundle\n  update, rollback, recover Replace or restore an offline preview\n  service         Install, start, stop, inspect, or remove a preview service\n  sdejectguard    macOS SD eject protection\n  doctor, version Inspect installation or version\n\nStartup commands use --stage-dir DIR; add --dry-run to inspect a plan."
             );
             ExitCode::SUCCESS
         }

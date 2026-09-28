@@ -14,6 +14,17 @@ pub enum Action {
     Uninstall,
 }
 
+pub fn provider_config_path(provider: &str) -> Option<&'static Path> {
+    Some(Path::new(match provider {
+        "codex" => ".codex/config.toml",
+        "claude" => ".claude/settings.json",
+        "grok" => ".grok/hooks/sidepulse.json",
+        "cursor" => ".cursor/hooks.json",
+        "junie" => ".junie/config.json",
+        _ => return None,
+    }))
+}
+
 #[derive(Debug, Clone)]
 pub struct HookPlan {
     pub provider: String,
@@ -232,6 +243,28 @@ fn ensure_codex_hooks_feature(text: &str) -> String {
         lines.push("hooks = true".into());
     }
     lines.join("\n")
+}
+
+/// Remove duplicated legacy handlers before registering the current Grok hooks.
+pub fn plan_grok_legacy_removal(home: &Path, log: &Path, hook: &Path) -> io::Result<Vec<HookPlan>> {
+    let mut plans = Vec::new();
+    for name in ["sidepulse-agent-monitor.json", "sidepulse-cli.json"] {
+        let config = home.join(".grok/hooks").join(name);
+        match fs::metadata(&config) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+            Ok(metadata) if !metadata.is_file() || metadata.len() > 1024 * 1024 => {
+                return Err(io::Error::other(
+                    "legacy Grok configuration must be a file smaller than 1 MiB",
+                ));
+            }
+            Ok(_) => {}
+        }
+        let mut plan = plan_json_hooks("grok", &config, log, hook, Action::Uninstall)?;
+        plan.provider = format!("grok legacy {name}");
+        plans.push(plan);
+    }
+    Ok(plans)
 }
 
 pub fn plan_json_hooks(

@@ -2,6 +2,20 @@
 
 pub mod focus;
 
+/// Open an existing local report or folder through the desktop's normal handler.
+pub fn open_file(path: &std::path::Path) -> std::io::Result<()> {
+    let path = path.canonicalize()?;
+    let program = if cfg!(target_os = "macos") {
+        "/usr/bin/open"
+    } else if cfg!(windows) {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program).arg(path).spawn()?;
+    Ok(())
+}
+
 use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

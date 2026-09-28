@@ -9,9 +9,30 @@ use sidepulse_core::{
     ChargerBaseline, ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
     ServerMessage, ServerPayload,
 };
+use sidepulse_installer::startup::{Job, Operation};
 use sidepulse_ui_model::{DISPLAY_CHOICES, SettingsView, TrayState, device_display_name};
 
+enum WorkerCommand {
+    Request(RequestKind),
+    Startup {
+        job: Job,
+        operation: Operation,
+        dry_run: bool,
+    },
+    #[cfg(target_os = "macos")]
+    SleepHelper {
+        install: bool,
+    },
+    #[cfg(target_os = "macos")]
+    SleepHelperStatus,
+    OpenFile {
+        path: String,
+    },
+}
+
 struct ServiceState {
+    setup: sidepulse_core::HookSetupStatus,
+    diagnostics: sidepulse_core::DiagnosticsStatus,
     settings: SettingsView,
     activity: TrayState,
     agents: Vec<sidepulse_core::AgentStatus>,
@@ -33,6 +54,9 @@ struct ServiceState {
 }
 
 enum Update {
+    Setup(sidepulse_core::HookSetupStatus),
+    Managed(Result<String, String>),
+    Exported(Result<(String, usize), String>),
     State(Result<Box<ServiceState>, String>),
     Opened(Result<(), String>),
     ProfileExport(Result<String, String>),
@@ -63,9 +87,16 @@ fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
         request_id: 1,
         kind,
     };
-    let response: ServerMessage =
-        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))
-            .map_err(|error| error.to_string())?;
+    let response: ServerMessage = sidepulse_ipc::request(
+        endpoint,
+        &request,
+        if matches!(request.kind, RequestKind::ExportDiagnostics { .. }) {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(2)
+        },
+    )
+    .map_err(|error| error.to_string())?;
     if response.version != PROTOCOL_VERSION || response.request_id != Some(1) {
         return Err("The service returned an invalid response.".into());
     }
@@ -134,7 +165,19 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return power control status.".into());
     };
+    let ServerPayload::HookSetup { status: setup } = request(endpoint, RequestKind::HookSetup)?
+    else {
+        return Err("The service did not return setup status.".into());
+    };
+    let ServerPayload::Diagnostics {
+        status: diagnostics,
+    } = request(endpoint, RequestKind::Diagnostics)?
+    else {
+        return Err("The service did not return diagnostics.".into());
+    };
     Ok(ServiceState {
+        setup,
+        diagnostics,
         power_control,
         phones_configured,
         phone_output_enabled,
@@ -170,19 +213,137 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     })
 }
 
-fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
+fn start_worker(endpoint: String) -> (Sender<WorkerCommand>, Receiver<Update>) {
     let (commands, pending) = mpsc::channel();
     let (updates, received) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut setup = std::env::current_exe().ok().and_then(|executable| {
+            sidepulse_installer::management::context_from_executable(&executable, &endpoint)
+                .ok()
+                .flatten()
+        });
+        if let Some(status) = &setup {
+            let _ = updates.send(Update::Setup(status.clone()));
+        }
         loop {
-            if updates
-                .send(Update::State(fetch_state(&endpoint).map(Box::new)))
-                .is_err()
-            {
+            let state = fetch_state(&endpoint);
+            if let Ok(state) = &state {
+                setup = Some(state.setup.clone());
+            }
+            if updates.send(Update::State(state.map(Box::new))).is_err() {
                 break;
             }
             match pending.recv_timeout(Duration::from_secs(1)) {
-                Ok(kind) => {
+                Ok(command) => {
+                    let kind = match command {
+                        WorkerCommand::Request(kind) => kind,
+                        command => {
+                            let result = (|| -> Result<String, String> {
+                                if let WorkerCommand::OpenFile { path } = command {
+                                    sidepulse_platform::open_file(std::path::Path::new(&path))
+                                        .map_err(|error| error.to_string())?;
+                                    return Ok("Opened report".into());
+                                }
+                                let status = setup.as_ref().ok_or("Setup status is unavailable. Open the staged settings application.")?;
+                                match command {
+                                    WorkerCommand::Startup {
+                                        job,
+                                        operation,
+                                        dry_run,
+                                    } => sidepulse_installer::management::manage_startup(
+                                        status, &endpoint, job, operation, dry_run,
+                                    )
+                                    .map_err(|error| error.to_string()),
+                                    #[cfg(target_os = "macos")]
+                                    WorkerCommand::SleepHelper { install } => {
+                                        let user = std::env::var("USER")
+                                            .or_else(|_| std::env::var("USERNAME"))
+                                            .map_err(|_| "Setup user is unavailable.")?;
+                                        let target =
+                                            sidepulse_installer::management::sleep_helper_target(
+                                                status, &endpoint, install, &user,
+                                            )
+                                            .map_err(|error| error.to_string())?;
+                                        sidepulse_platform::open_session(&target, "terminal", "")
+                                            .map_err(|error| error.to_string())?;
+                                        Ok("Administrator setup opened in Terminal".into())
+                                    }
+                                    #[cfg(target_os = "macos")]
+                                    WorkerCommand::SleepHelperStatus => {
+                                        let user = std::env::var("USER")
+                                            .or_else(|_| std::env::var("USERNAME"))
+                                            .map_err(|_| "Setup user is unavailable.")?;
+                                        sidepulse_installer::management::sleep_helper_status(&user)
+                                            .map(|installed| {
+                                                if installed {
+                                                    "Closed-lid setup is installed"
+                                                } else {
+                                                    "Closed-lid setup is not installed"
+                                                }
+                                                .into()
+                                            })
+                                            .map_err(|error| error.to_string())
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            })();
+                            if updates.send(Update::Managed(result)).is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    if matches!(kind, RequestKind::ConfigureHooks { .. }) {
+                        let result = request(&endpoint, kind).and_then(|payload| {
+                            let ServerPayload::HooksConfigured {
+                                provider,
+                                install,
+                                changed,
+                                trust_review_required,
+                                dry_run,
+                                ..
+                            } = payload
+                            else {
+                                return Err("The service did not confirm the hook change.".into());
+                            };
+                            Ok(format!(
+                                "{provider}: {}{}",
+                                if dry_run {
+                                    if changed {
+                                        "Change available"
+                                    } else {
+                                        "Already configured"
+                                    }
+                                } else if install {
+                                    "Hooks installed"
+                                } else {
+                                    "Hooks removed"
+                                },
+                                if trust_review_required && !dry_run {
+                                    ". Review and trust these hooks in Codex using /hooks."
+                                } else {
+                                    ""
+                                }
+                            ))
+                        });
+                        if updates.send(Update::Managed(result)).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    if matches!(kind, RequestKind::ExportDiagnostics { .. }) {
+                        let result = request(&endpoint, kind).and_then(|payload| {
+                            let ServerPayload::DiagnosticsExported { path, events } = payload
+                            else {
+                                return Err("The service did not return an export.".into());
+                            };
+                            Ok((path, events))
+                        });
+                        if updates.send(Update::Exported(result)).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     if matches!(kind, RequestKind::SessionTargets { .. }) {
                         let result = request(&endpoint, kind).and_then(|payload| {
                             let ServerPayload::SessionTargets {
@@ -290,12 +451,15 @@ enum Page {
     Sessions,
     Relay,
     Phones,
+    Setup,
+    Diagnostics,
 }
 
 struct SettingsApp {
-    commands: Sender<RequestKind>,
+    commands: Sender<WorkerCommand>,
     updates: Receiver<Update>,
     state: Option<ServiceState>,
+    setup_context: Option<sidepulse_core::HookSetupStatus>,
     connected: bool,
     message: Option<(String, bool)>,
     page: Page,
@@ -344,6 +508,8 @@ struct SettingsApp {
     phone_saving: bool,
     phone_token: String,
     phone_name: String,
+    setup_busy: bool,
+    last_export: Option<String>,
 }
 
 impl SettingsApp {
@@ -353,6 +519,7 @@ impl SettingsApp {
             commands,
             updates,
             state: None,
+            setup_context: None,
             connected: false,
             message: None,
             page: Page::Activity,
@@ -401,6 +568,8 @@ impl SettingsApp {
             phone_saving: false,
             phone_token: String::new(),
             phone_name: "iPhone".into(),
+            setup_busy: false,
+            last_export: None,
         }
     }
 
@@ -443,9 +612,18 @@ impl SettingsApp {
     }
 
     fn send(&mut self, kind: RequestKind) {
-        if self.commands.send(kind).is_ok() {
+        if self.commands.send(WorkerCommand::Request(kind)).is_ok() {
             self.message = Some(("Saving…".into(), false));
         } else {
+            self.message = Some(("Could not contact the service.".into(), true));
+        }
+    }
+
+    fn manage(&mut self, command: WorkerCommand) {
+        self.setup_busy = true;
+        self.message = Some(("Working…".into(), false));
+        if self.commands.send(command).is_err() {
+            self.setup_busy = false;
             self.message = Some(("Could not contact the service.".into(), true));
         }
     }
@@ -453,7 +631,26 @@ impl SettingsApp {
     fn poll(&mut self) {
         while let Ok(update) = self.updates.try_recv() {
             match update {
+                Update::Managed(result) => {
+                    self.setup_busy = false;
+                    self.message = Some(match result {
+                        Ok(message) => (message, false),
+                        Err(error) => (error, true),
+                    });
+                }
+                Update::Exported(result) => {
+                    self.setup_busy = false;
+                    self.message = Some(match result {
+                        Ok((path, events)) => {
+                            self.last_export = Some(path.clone());
+                            (format!("Exported {events} debug events to {path}"), false)
+                        }
+                        Err(error) => (format!("Debug export failed: {error}"), true),
+                    });
+                }
+                Update::Setup(status) => self.setup_context = Some(status),
                 Update::State(Ok(state)) => {
+                    self.setup_context = Some(state.setup.clone());
                     self.connected = true;
                     if !self.terminal_dirty {
                         self.session_terminal = state.settings.session_terminal.clone();
@@ -769,6 +966,178 @@ impl SettingsApp {
         });
         ui.add_space(12.0);
         ui.weak("Choose an installed terminal. Session opening is available from Activity and the tray.");
+    }
+
+    fn setup(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Setup");
+        ui.label("Connect your agents and choose what starts at login.");
+        let Some(setup) = self.setup_context.clone() else {
+            ui.label("Open the staged settings application to configure startup.");
+            return;
+        };
+        ui.add_space(12.0);
+        ui.strong("Agent hooks");
+        ui.weak("Existing settings and unrelated hooks are kept. Changed files receive a backup.");
+        if !setup.configured {
+            ui.label("The native hook executable is unavailable.");
+        }
+        ui.add_enabled_ui(
+            self.connected && !self.setup_busy && setup.configured,
+            |ui| {
+                for provider in &setup.providers {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(match provider.provider.as_str() {
+                            "codex" => "Codex",
+                            "claude" => "Claude",
+                            "grok" => "Grok",
+                            "cursor" => "Cursor",
+                            _ => "Junie",
+                        });
+                        ui.weak(if provider.native {
+                            "Installed"
+                        } else if provider.installed {
+                            "Older hooks installed"
+                        } else {
+                            "Not installed"
+                        });
+                        if ui.button("Install").clicked() {
+                            self.manage(WorkerCommand::Request(RequestKind::ConfigureHooks {
+                                provider: provider.provider.clone(),
+                                install: true,
+                                dry_run: false,
+                            }));
+                        }
+                        if ui
+                            .add_enabled(provider.installed, egui::Button::new("Remove"))
+                            .clicked()
+                        {
+                            self.manage(WorkerCommand::Request(RequestKind::ConfigureHooks {
+                                provider: provider.provider.clone(),
+                                install: false,
+                                dry_run: false,
+                            }));
+                        }
+                    });
+                    if let Some(error) = &provider.error {
+                        ui.colored_label(egui::Color32::from_rgb(210, 80, 65), error);
+                    }
+                }
+            },
+        );
+        ui.add_space(16.0);
+        ui.separator();
+        ui.strong("Run at login");
+        ui.weak("Enable the monitor and status bar to keep SidePulse available after signing in.");
+        if setup.stage_dir.is_none() {
+            ui.label("Stage the native package to enable login setup.");
+        }
+        ui.add_enabled_ui(!self.setup_busy && setup.stage_dir.is_some(), |ui| {
+            for (label, job) in [("Monitor", Job::Service), ("Status bar", Job::Tray)] {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(label);
+                    for (label, operation) in [
+                        ("Enable at login", Operation::Install),
+                        ("Start now", Operation::Start),
+                        ("Disable", Operation::Uninstall),
+                        ("Check status", Operation::Status),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.manage(WorkerCommand::Startup {
+                                job,
+                                operation,
+                                dry_run: false,
+                            });
+                        }
+                    }
+                });
+            }
+            #[cfg(target_os = "macos")]
+            {
+                ui.add_space(16.0);
+                ui.strong("SD eject protection");
+                ui.weak("Keep SidePulse Pro and SidePulse Dot available after sleep.");
+                ui.horizontal_wrapped(|ui| {
+                    for (label, operation) in [
+                        ("Enable at login", Operation::Install),
+                        ("Remove", Operation::Uninstall),
+                        ("Check status", Operation::Status),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.manage(WorkerCommand::Startup {
+                                job: Job::SdGuard,
+                                operation,
+                                dry_run: false,
+                            });
+                        }
+                    }
+                });
+                ui.add_space(16.0);
+                ui.strong("Closed-lid sleep prevention");
+                ui.weak("Open a one-time administrator setup in Terminal.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Open administrator setup").clicked() {
+                        self.manage(WorkerCommand::SleepHelper { install: true });
+                    }
+                    if ui.button("Remove setup").clicked() {
+                        self.manage(WorkerCommand::SleepHelper { install: false });
+                    }
+                    if ui.button("Check status").clicked() {
+                        self.manage(WorkerCommand::SleepHelperStatus);
+                    }
+                });
+            }
+        });
+    }
+
+    fn diagnostics(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Diagnostics");
+        ui.label("Export agent events for troubleshooting.");
+        let Some(state) = &self.state else {
+            return;
+        };
+        let diagnostics = state.diagnostics.clone();
+        ui.add_space(12.0);
+        ui.strong("Debug log");
+        ui.label(format!("{} bytes recorded", diagnostics.audit_bytes));
+        for path in &diagnostics.audit_paths {
+            ui.weak(path);
+        }
+        ui.add_enabled_ui(
+            !self.setup_busy && diagnostics.export_directory.is_some(),
+            |ui| {
+                ui.horizontal(|ui| {
+                    for (label, format) in [
+                        ("Export CSV", sidepulse_core::DiagnosticFormat::Csv),
+                        ("Export HTML", sidepulse_core::DiagnosticFormat::Html),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.manage(WorkerCommand::Request(RequestKind::ExportDiagnostics {
+                                format,
+                            }));
+                        }
+                    }
+                    if let Some(path) = self.last_export.clone()
+                        && ui.button("Open export").clicked()
+                    {
+                        self.manage(WorkerCommand::OpenFile { path });
+                    }
+                });
+            },
+        );
+        if let Some(path) = &diagnostics.export_directory {
+            ui.weak(format!("Exports are saved in {path}"));
+        }
+        ui.add_space(16.0);
+        ui.separator();
+        ui.strong("Settings file");
+        if let Some(path) = &diagnostics.settings_path {
+            ui.label(path);
+        }
+        if let Some(path) = &diagnostics.history_path {
+            ui.add_space(12.0);
+            ui.strong("Status history");
+            ui.weak(path);
+        }
     }
 
     fn devices(&mut self, ui: &mut egui::Ui) {
@@ -1121,14 +1490,22 @@ impl SettingsApp {
         let sampled = state.history_sampled;
         ui.add_space(12.0);
         egui::ComboBox::from_id_salt("history-timeframe")
-            .selected_text(format!("Last {} hours", timeframe / 3600))
+            .selected_text(format!(
+                "Last {} {}",
+                timeframe / 3600,
+                if timeframe == 3600 { "hour" } else { "hours" }
+            ))
             .show_ui(ui, |ui| {
                 for choice in sidepulse_core::HISTORY_TIMEFRAMES {
                     if ui
                         .selectable_value(
                             &mut timeframe,
                             choice,
-                            format!("{} hours", choice / 3600),
+                            format!(
+                                "{} {}",
+                                choice / 3600,
+                                if choice == 3600 { "hour" } else { "hours" }
+                            ),
                         )
                         .changed()
                     {
@@ -1146,11 +1523,14 @@ impl SettingsApp {
         }
         ui.add_space(16.0);
         let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 260.0),
+            egui::vec2(ui.available_width(), 370.0),
             egui::Sense::hover(),
         );
         let painter = ui.painter_at(rect);
-        let chart = rect.shrink2(egui::vec2(12.0, 20.0));
+        let chart = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 120.0, rect.top() + 20.0),
+            egui::pos2(rect.right() - 12.0, rect.bottom() - 20.0),
+        );
         painter.rect_filled(rect, 6, ui.visuals().faint_bg_color);
         let first = points.first().unwrap().recorded_at.timestamp_millis();
         let last = points.last().unwrap().recorded_at.timestamp_millis();
@@ -1226,24 +1606,75 @@ impl SettingsApp {
             };
             painter.rect_filled(
                 egui::Rect::from_min_max(
-                    egui::pos2(x(a), chart.bottom() - 14.0),
-                    egui::pos2(x(b).max(x(a) + 1.0), chart.bottom() - 6.0),
+                    egui::pos2(x(a), chart.top() + 198.0),
+                    egui::pos2(x(b).max(x(a) + 1.0), chart.top() + 210.0),
                 ),
                 0,
                 color,
             );
+            for (offset, value, on, off) in [
+                (
+                    232.0,
+                    a.keep_awake_active,
+                    egui::Color32::from_rgb(50, 190, 210),
+                    if a.keep_awake_requested == Some(true) {
+                        egui::Color32::from_rgb(225, 155, 55)
+                    } else {
+                        egui::Color32::from_gray(85)
+                    },
+                ),
+                (
+                    266.0,
+                    a.mac_sleep_prevented,
+                    egui::Color32::from_rgb(225, 155, 55),
+                    egui::Color32::from_rgb(95, 165, 230),
+                ),
+                (
+                    300.0,
+                    a.lid_closed,
+                    egui::Color32::from_rgb(225, 155, 55),
+                    egui::Color32::from_rgb(80, 190, 130),
+                ),
+            ] {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x(a), chart.top() + offset),
+                        egui::pos2(x(b).max(x(a) + 1.0), chart.top() + offset + 12.0),
+                    ),
+                    0,
+                    match value {
+                        Some(true) => on,
+                        Some(false) => off,
+                        None => egui::Color32::from_gray(50),
+                    },
+                );
+            }
+        }
+        for (label, offset) in [
+            ("Agent status", 204.0),
+            ("SidePulse awake", 238.0),
+            ("Mac sleep", 272.0),
+            ("Lid", 306.0),
+        ] {
+            painter.text(
+                egui::pos2(rect.left() + 12.0, chart.top() + offset),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            );
         }
         painter.text(
-            battery_rect.left_top(),
+            egui::pos2(rect.left() + 12.0, battery_rect.top()),
             egui::Align2::LEFT_TOP,
-            "Battery · 0–100%",
+            "Battery\n0–100%",
             egui::FontId::proportional(12.0),
             ui.visuals().text_color(),
         );
         painter.text(
-            charger_rect.left_top(),
+            egui::pos2(rect.left() + 12.0, charger_rect.top()),
             egui::Align2::LEFT_TOP,
-            format!("Charger · 0–{charger_max:.0} W"),
+            format!("Charger\n0–{charger_max:.0} W"),
             egui::FontId::proportional(12.0),
             ui.visuals().text_color(),
         );
@@ -1257,7 +1688,7 @@ impl SettingsApp {
                 })
                 .unwrap();
             response.on_hover_text(format!(
-                "{}\n{}\nBattery: {}\nCharger: {}\nLid: {}\nKeeping awake: {}",
+                "{}\n{}\nBattery: {}\nCharger: {}\nLid: {}\nKeeping awake: {}\nMac sleep prevented: {}",
                 nearest.recorded_at.format("%b %d %H:%M:%S UTC"),
                 nearest.agent_status.label(),
                 nearest
@@ -1273,7 +1704,8 @@ impl SettingsApp {
                 }),
                 nearest
                     .keep_awake_active
-                    .map_or("Unknown", |active| if active { "Yes" } else { "No" })
+                    .map_or("Unknown", |active| if active { "Yes" } else { "No" }),
+                nearest.mac_sleep_prevented.map_or("Unknown", |prevented| if prevented { "Yes" } else { "No" })
             ));
         }
         ui.horizontal(|ui| {
@@ -1298,6 +1730,7 @@ impl SettingsApp {
         });
         ui.add_space(8.0);
         ui.label("Status: cyan = working · amber = needs attention · green = completed");
+        ui.weak("Awake: cyan = active · amber = requested. Sleep: amber = prevented · blue = allowed. Lid: amber = closed · green = open. Dim bands indicate unknown observations.");
         if let Some(latest) = points.last() {
             ui.label(format!(
                 "Latest: {} · Battery {} · Charger {}",
@@ -1913,6 +2346,8 @@ impl eframe::App for SettingsApp {
                     (Page::Sessions, "Sessions"),
                     (Page::Relay, "Link computers"),
                     (Page::Phones, "Link phones"),
+                    (Page::Setup, "Setup"),
+                    (Page::Diagnostics, "Diagnostics"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -1927,20 +2362,25 @@ impl eframe::App for SettingsApp {
                 ui.add_space(8.0);
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.add_enabled_ui(self.connected, |ui| match self.page {
-                    Page::Activity => self.activity(ui),
-                    Page::Devices => self.devices(ui),
-                    Page::Battery => {
-                        ui.add_enabled_ui(!self.battery_saving, |ui| self.battery(ui));
-                    }
-                    Page::Monitoring => self.monitoring(ui),
-                    Page::Sleep => self.sleep(ui),
-                    Page::Animations => self.animations(ui),
-                    Page::History => self.history(ui),
-                    Page::Sessions => self.sessions(ui),
-                    Page::Relay => self.relay(ui),
-                    Page::Phones => self.phones(ui),
-                });
+                ui.add_enabled_ui(
+                    self.connected || self.page == Page::Setup,
+                    |ui| match self.page {
+                        Page::Activity => self.activity(ui),
+                        Page::Devices => self.devices(ui),
+                        Page::Battery => {
+                            ui.add_enabled_ui(!self.battery_saving, |ui| self.battery(ui));
+                        }
+                        Page::Monitoring => self.monitoring(ui),
+                        Page::Sleep => self.sleep(ui),
+                        Page::Animations => self.animations(ui),
+                        Page::History => self.history(ui),
+                        Page::Sessions => self.sessions(ui),
+                        Page::Relay => self.relay(ui),
+                        Page::Phones => self.phones(ui),
+                        Page::Setup => self.setup(ui),
+                        Page::Diagnostics => self.diagnostics(ui),
+                    },
+                );
             });
         });
     }

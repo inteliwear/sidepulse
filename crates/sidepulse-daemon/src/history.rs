@@ -102,6 +102,17 @@ impl HistoryStore {
     }
 }
 
+fn combined_bool(value: &Value, first: &str, second: &str) -> Option<bool> {
+    match (
+        value.get(first).and_then(Value::as_bool),
+        value.get(second).and_then(Value::as_bool),
+    ) {
+        (Some(a), Some(b)) => Some(a || b),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        _ => None,
+    }
+}
+
 fn history_point(value: &Value) -> Option<HistoryPoint> {
     let recorded_at = DateTime::parse_from_rfc3339(value.get("recorded_at")?.as_str()?)
         .ok()?
@@ -119,9 +130,17 @@ fn history_point(value: &Value) -> Option<HistoryPoint> {
         battery_level: value.get("battery_level").and_then(Value::as_f64),
         charger_power_watts: value.get("charger_power_watts").and_then(Value::as_f64),
         lid_closed: value.get("lid_closed").and_then(Value::as_bool),
-        keep_awake_active: value
-            .get("sidepulse_keep_awake_active")
-            .and_then(Value::as_bool),
+        keep_awake_active: combined_bool(
+            value,
+            "sidepulse_keep_awake_active",
+            "sidepulse_closed_lid_awake_active",
+        ),
+        keep_awake_requested: combined_bool(
+            value,
+            "sidepulse_keep_awake_requested",
+            "sidepulse_closed_lid_awake_requested",
+        ),
+        mac_sleep_prevented: value.get("mac_sleep_prevented").and_then(Value::as_bool),
     })
 }
 
@@ -161,6 +180,8 @@ mod tests {
                 charger_power_watts: None,
                 lid_closed: None,
                 keep_awake_active: None,
+                keep_awake_requested: None,
+                mac_sleep_prevented: None,
             });
         }
         let (points, sampled) = store.snapshot(21600);

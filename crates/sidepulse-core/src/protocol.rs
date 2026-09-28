@@ -18,6 +18,17 @@ pub struct ClientRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum RequestKind {
+    HookSetup,
+    ConfigureHooks {
+        provider: String,
+        install: bool,
+        #[serde(default)]
+        dry_run: bool,
+    },
+    Diagnostics,
+    ExportDiagnostics {
+        format: crate::DiagnosticFormat,
+    },
     Shutdown,
     Snapshot,
     Settings,
@@ -149,6 +160,24 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    HookSetup {
+        status: crate::HookSetupStatus,
+    },
+    HooksConfigured {
+        provider: String,
+        install: bool,
+        changed: bool,
+        backup_path: Option<String>,
+        trust_review_required: bool,
+        dry_run: bool,
+    },
+    Diagnostics {
+        status: crate::DiagnosticsStatus,
+    },
+    DiagnosticsExported {
+        path: String,
+        events: usize,
+    },
     LedProgram {
         program: String,
     },
@@ -279,6 +308,10 @@ pub struct HistoryPoint {
     pub charger_power_watts: Option<f64>,
     pub lid_closed: Option<bool>,
     pub keep_awake_active: Option<bool>,
+    #[serde(default)]
+    pub keep_awake_requested: Option<bool>,
+    #[serde(default)]
+    pub mac_sleep_prevented: Option<bool>,
 }
 
 pub const HISTORY_TIMEFRAMES: [u32; 5] = [3600, 21600, 43200, 86400, 172800];

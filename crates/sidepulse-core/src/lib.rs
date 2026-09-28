@@ -12,9 +12,12 @@ mod protocol;
 mod provider;
 mod relay;
 mod session;
+mod setup;
 mod sleep;
 
-pub use audit::status_audit_record;
+pub use setup::{DiagnosticFormat, DiagnosticsStatus, HookSetupStatus, ProviderHookStatus};
+
+pub use audit::{AUDIT_COLUMNS, export_status_audit, status_audit_record};
 pub use model::{AgentMode, AgentStatus, AggregateStatus, HookEvent, MonitorSnapshot};
 pub use monitor::{Monitor, MonitoringPolicy, mode_for_event};
 pub use origin::{

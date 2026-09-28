@@ -134,17 +134,34 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
             return ExitCode::FAILURE;
         }
     };
+    let mut plans = vec![plan];
+    if provider == "grok" {
+        match sidepulse_hook_config::plan_grok_legacy_removal(&home, &log, &hook) {
+            Ok(legacy) => plans.extend(legacy),
+            Err(error) => {
+                eprintln!("sidepulse-next: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let changed = plans.iter().any(|plan| plan.changed);
     let backup = if dry_run {
         None
     } else {
-        match plan.apply() {
-            Ok(result) => result.backup_path,
+        let result = if provider == "grok" {
+            apply_plans_with_grok_backup_relocation(&plans, &home.join(".grok/hooks"))
+        } else {
+            sidepulse_hook_config::apply_plans_atomically(&plans)
+        };
+        match result {
+            Ok(results) => results.into_iter().find_map(|result| result.backup_path),
             Err(error) => {
                 eprintln!("sidepulse-next: {error}");
                 return ExitCode::FAILURE;
             }
         }
     };
+    let plan = &plans[0];
     if json_output {
         println!(
             "{}",
@@ -152,10 +169,10 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
                 "provider": plan.provider,
                 "config_path": plan.config_path,
                 "log_path": plan.log_path,
-                "changed": plan.changed,
+                "changed": changed,
                 "backup_path": backup,
                 "dry_run": dry_run,
-                "updated": if dry_run { Some(plan.updated) } else { None },
+                "updated": if dry_run { Some(&plan.updated) } else { None },
                 "trust_review_required": provider == "codex" && action == Action::Install,
             }))
             .expect("hook config result serializes")
@@ -171,7 +188,7 @@ pub fn run_hook_config(action: &str, args: impl Iterator<Item = String>) -> Exit
             },
             if dry_run {
                 "planned"
-            } else if plan.changed {
+            } else if changed {
                 "changed"
             } else {
                 "unchanged"
@@ -216,15 +233,8 @@ fn expand_user_path(path: &Path, home: &Path) -> PathBuf {
     }
 }
 
-fn provider_config_path(provider: &str) -> &'static str {
-    match provider {
-        "codex" => ".codex/config.toml",
-        "claude" => ".claude/settings.json",
-        "grok" => ".grok/hooks/sidepulse.json",
-        "cursor" => ".cursor/hooks.json",
-        "junie" => ".junie/config.json",
-        _ => unreachable!("provider validated before use"),
-    }
+fn provider_config_path(provider: &str) -> &'static Path {
+    sidepulse_hook_config::provider_config_path(provider).expect("provider validated before use")
 }
 
 fn run_all_providers(
@@ -259,24 +269,15 @@ fn run_all_providers(
             return ExitCode::FAILURE;
         }
     };
-    for legacy_name in ["sidepulse-agent-monitor.json", "sidepulse-cli.json"] {
-        let legacy = home.join(".grok/hooks").join(legacy_name);
-        if legacy.exists() {
-            let log = provider_logs
-                .get("grok")
-                .cloned()
-                .unwrap_or_else(|| log_dir.join("grok.jsonl"));
-            let plan = match plan_json_hooks("grok", &legacy, &log, hook, Action::Uninstall) {
-                Ok(mut plan) => {
-                    plan.provider = format!("grok legacy {legacy_name}");
-                    plan
-                }
-                Err(error) => {
-                    eprintln!("sidepulse-next: {}: {error}", legacy.display());
-                    return ExitCode::FAILURE;
-                }
-            };
-            plans.push(plan);
+    let grok_log = provider_logs
+        .get("grok")
+        .cloned()
+        .unwrap_or_else(|| log_dir.join("grok.jsonl"));
+    match sidepulse_hook_config::plan_grok_legacy_removal(home, &grok_log, hook) {
+        Ok(legacy) => plans.extend(legacy),
+        Err(error) => {
+            eprintln!("sidepulse-next: {error}");
+            return ExitCode::FAILURE;
         }
     }
     let backups = if dry_run {

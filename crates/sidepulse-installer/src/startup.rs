@@ -92,6 +92,37 @@ pub struct CommandResult {
     pub stdout: String,
     pub stderr: String,
 }
+pub fn current_user(platform: Platform) -> io::Result<String> {
+    if platform == Platform::Linux {
+        return Ok("current-user".into());
+    }
+    let output = if platform == Platform::Macos {
+        Command::new("/usr/bin/id").arg("-u").output()?
+    } else {
+        Command::new("whoami.exe")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()?
+    };
+    if !output.status.success() {
+        return Err(io::Error::other("cannot determine startup user"));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    if platform == Platform::Macos {
+        Ok(text.trim().to_owned())
+    } else {
+        let user = text
+            .trim()
+            .rsplit(',')
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        if !user.starts_with("S-1-") {
+            return Err(io::Error::other("cannot determine Windows user SID"));
+        }
+        Ok(user.to_owned())
+    }
+}
+
 fn spec(program: &str, args: impl IntoIterator<Item = String>) -> CommandSpec {
     CommandSpec {
         program: program.into(),

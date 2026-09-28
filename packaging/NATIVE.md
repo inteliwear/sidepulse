@@ -28,7 +28,10 @@ Extract the full ZIP, then stage it at a chosen permanent path:
 
 On Windows use `.\bin\sidepulse.exe` and absolute Windows paths. Registration is
 an explicit operation. Review the emitted plan, then run the same command without
-`--dry-run`. Status bar startup uses `status-bar install`. Updates require the
+`--dry-run`. Status bar startup uses `status-bar install`. The native Settings Setup page also
+provides provider hook installation/removal, startup registration, status checks,
+and an explicit Start now action. It remains usable while the monitor is offline.
+Diagnostics exports CSV/HTML through the service. Updates require the
 selected service to be stopped; run replacement from outside that preview.
 
 ## Import an existing Python setup
@@ -42,8 +45,8 @@ Import is explicit and targets a new preview. Review the list before creating it
 
 Remove `--dry-run` to create the preview. The config directory supplies raw
 `settings.json`, `links.json`, and `animations/*.LED`; the logs directory supplies
-`codex.jsonl`, `claude.jsonl`, `grok.jsonl`, `cursor.jsonl`, and `junie.jsonl` when
-present. Unknown JSON fields and saved profiles are retained. Source files are
+`codex.jsonl`, `claude.jsonl`, `grok.jsonl`, `cursor.jsonl`, `junie.jsonl`,
+`event-status.jsonl`, `status-history.jsonl`, and `latest.json` when present. Unknown JSON fields and saved profiles are retained. Source files are
 checked again before publication and remain unchanged. Invalid JSON, symlinks,
 unexpected animation entries, and oversized files are rejected.
 

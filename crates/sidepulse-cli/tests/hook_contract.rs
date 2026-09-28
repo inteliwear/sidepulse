@@ -122,7 +122,7 @@ fn hook_stays_silent_and_appends_jsonl_for_hostile_input() {
     for line in lines.lines() {
         serde_json::from_str::<serde_json::Value>(line).unwrap();
     }
-    let audit = dir.join("sidepulse/agent-monitor/event-status.jsonl");
+    let audit = dir.join("event-status.jsonl");
     let audit_lines = fs::read_to_string(audit).unwrap();
     assert_eq!(audit_lines.lines().count(), 2);
     for line in audit_lines.lines() {
@@ -278,5 +278,38 @@ fn hook_delivers_logged_event_to_service_endpoint() {
     assert_eq!(provider, "claude");
     assert_eq!(line["hook_event_name"], "PreToolUse");
     assert!(log.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn explicit_log_and_audit_paths_keep_inferred_provider_output_in_the_preview() {
+    let dir = scratch_dir();
+    let log = dir.join("preview/claude.jsonl");
+    let global_state = dir.join("unrelated-state");
+    let output = invoke(
+        &["--provider", "claude", "--log", log.to_str().unwrap()],
+        r#"{"hookEventName":"Stop","session_id":"fixture"}"#,
+        &global_state,
+    );
+    assert!(output.status.success());
+    assert!(log.with_file_name("grok.jsonl").is_file());
+    assert!(log.with_file_name("event-status.jsonl").is_file());
+    assert!(!global_state.exists());
+    let audit = dir.join("selected/debug.jsonl");
+    let output = invoke(
+        &[
+            "--provider",
+            "claude",
+            "--log",
+            log.to_str().unwrap(),
+            "--audit",
+            audit.to_str().unwrap(),
+        ],
+        r#"{"hook_event_name":"Stop","session_id":"fixture"}"#,
+        &global_state,
+    );
+    assert!(output.status.success());
+    assert!(audit.is_file());
+    assert!(!global_state.exists());
     fs::remove_dir_all(dir).unwrap();
 }

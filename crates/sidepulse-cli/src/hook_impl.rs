@@ -22,6 +22,7 @@ const MAX_STDIN_BYTES: u64 = 8 * 1024 * 1024;
 struct Options {
     provider: String,
     log: PathBuf,
+    audit: PathBuf,
     event: Option<String>,
     endpoint: Option<String>,
 }
@@ -53,18 +54,18 @@ pub fn run_hook(args: impl Iterator<Item = String>) -> io::Result<()> {
     let actual_provider = infer_hook_provider(provider, &line);
     annotate_origin(&actual_provider, &mut line);
     let log = if actual_provider != provider {
-        default_log_path(&actual_provider).unwrap_or(options.log)
+        options
+            .log
+            .with_file_name(format!("{actual_provider}.jsonl"))
     } else {
         options.log
     };
     let _ = append_line(&log, &line);
-    if let Some(audit_path) = default_audit_path()
-        && let Some(event) = parse_log_line(&actual_provider, &line.to_string())
-    {
+    if let Some(event) = parse_log_line(&actual_provider, &line.to_string()) {
         let mut monitor = Monitor::default();
         let status = monitor.ingest(&event);
         let audit = status_audit_record(&event, status, Utc::now());
-        let _ = append_line(&audit_path, &audit);
+        let _ = append_line(&options.audit, &audit);
     }
     if !socket_disabled()
         && let Some(endpoint) = options
@@ -86,20 +87,27 @@ pub fn run_hook(args: impl Iterator<Item = String>) -> io::Result<()> {
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Option<Options> {
-    let (mut provider, mut log, mut event, mut endpoint) = (None, None, None, None);
+    let (mut provider, mut log, mut event, mut endpoint, mut audit) =
+        (None, None, None, None, None);
     while let Some(arg) = args.next() {
         let value = args.next()?;
         match arg.as_str() {
             "--provider" => provider = Some(value),
             "--log" => log = Some(PathBuf::from(value)),
+            "--audit" => audit = Some(PathBuf::from(value)),
             "--event" => event = Some(value),
             "--endpoint" => endpoint = Some(value),
             _ => return None,
         }
     }
+    let log = expand_home(&log?);
+    let audit = audit
+        .map(|path| expand_home(&path))
+        .unwrap_or_else(|| log.with_file_name("event-status.jsonl"));
     Some(Options {
         provider: provider?,
-        log: expand_home(&log?),
+        log,
+        audit,
         event,
         endpoint,
     })
@@ -112,21 +120,6 @@ fn expand_home(path: &Path) -> PathBuf {
         return PathBuf::from(home).join(rest);
     }
     path.to_path_buf()
-}
-
-fn default_log_path(provider: &str) -> Option<PathBuf> {
-    Some(default_state_dir()?.join(format!("{provider}.jsonl")))
-}
-
-fn default_audit_path() -> Option<PathBuf> {
-    Some(default_state_dir()?.join("event-status.jsonl"))
-}
-
-fn default_state_dir() -> Option<PathBuf> {
-    let root = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
-    Some(root.join("sidepulse/agent-monitor"))
 }
 
 fn append_line(path: &Path, line: &Value) -> io::Result<()> {

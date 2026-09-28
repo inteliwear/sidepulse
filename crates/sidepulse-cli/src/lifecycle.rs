@@ -1,6 +1,6 @@
 use sidepulse_installer::{
     Platform, StagePlan, read_stage,
-    startup::{Job, Operation, StartupPlan},
+    startup::{Job, Operation, StartupPlan, current_user},
 };
 use std::{
     env, io,
@@ -275,31 +275,4 @@ fn default_directory(platform: Platform) -> io::Result<PathBuf> {
             .ok_or_else(|| io::Error::other("LOCALAPPDATA is unavailable"))?
             .join("SidePulse/Startup"),
     })
-}
-fn current_user(platform: Platform) -> io::Result<String> {
-    let output = if platform == Platform::Macos {
-        Command::new("/usr/bin/id").arg("-u").output()?
-    } else {
-        Command::new("whoami.exe")
-            .args(["/user", "/fo", "csv", "/nh"])
-            .output()?
-    };
-    if !output.status.success() {
-        return Err(io::Error::other("cannot determine startup user"));
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    if platform == Platform::Macos {
-        Ok(text.trim().to_owned())
-    } else {
-        let user = text
-            .trim()
-            .rsplit(',')
-            .next()
-            .unwrap_or("")
-            .trim_matches('"');
-        if !user.starts_with("S-1-") {
-            return Err(io::Error::other("cannot determine Windows user SID"));
-        }
-        Ok(user.to_owned())
-    }
 }

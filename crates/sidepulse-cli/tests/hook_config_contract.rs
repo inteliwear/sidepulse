@@ -298,3 +298,44 @@ fn positional_provider_uses_default_paths_and_missing_values_fail() {
             .as_ref()
     );
 }
+
+#[test]
+fn single_grok_install_cleans_legacy_handlers_and_keeps_backups_outside_live_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let legacy = home.join(".grok/hooks/sidepulse-cli.json");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let original = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sidepulse hook-log"},{"type":"command","command":"keep-me"}]}]}}"#;
+    fs::write(&legacy, original).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"))
+        .args(["agent-monitor", "install", "grok", "--home"])
+        .arg(&home)
+        .arg("--log-dir")
+        .arg(temp.path().join("logs"))
+        .arg("--hook")
+        .arg(temp.path().join("sidepulse-next-hook"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&fs::read(&legacy).unwrap()).unwrap();
+    assert_eq!(
+        document["hooks"]["Stop"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        document["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "keep-me"
+    );
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let backup = std::path::Path::new(receipt["backup_path"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(backup).unwrap(), original);
+    assert!(!backup.starts_with(home.join(".grok/hooks")));
+}

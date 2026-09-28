@@ -64,8 +64,17 @@ impl LegacyImport {
         }
         if let Some(logs) = logs {
             let logs = fs::canonicalize(logs)?;
-            for provider in ["codex", "claude", "grok", "cursor", "junie"] {
-                let source = logs.join(format!("{provider}.jsonl"));
+            for name in [
+                "codex.jsonl",
+                "claude.jsonl",
+                "grok.jsonl",
+                "cursor.jsonl",
+                "junie.jsonl",
+                "event-status.jsonl",
+                "status-history.jsonl",
+                "latest.json",
+            ] {
+                let source = logs.join(name);
                 match fs::symlink_metadata(&source) {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                     Err(error) => return Err(error),
@@ -74,7 +83,7 @@ impl LegacyImport {
                 let bytes = bounded_read(&source, 16 * 1024 * 1024)?;
                 data.push(ImportedFile {
                     source,
-                    target: PathBuf::from(format!("state/{provider}.jsonl")),
+                    target: PathBuf::from("state").join(name),
                     bytes,
                 });
             }
@@ -133,6 +142,9 @@ mod tests {
         fs::write(config.join("relay.json"), b"{\"enabled\":true}").unwrap();
         fs::write(config.join("animations/sample.LED"), b"#00FF80").unwrap();
         fs::write(logs.join("junie.jsonl"), b"captured audit\n").unwrap();
+        for name in ["event-status.jsonl", "status-history.jsonl", "latest.json"] {
+            fs::write(logs.join(name), b"{\"retained\":true}\n").unwrap();
+        }
         let import = LegacyImport::new(Some(&config), Some(&logs)).unwrap();
         import.copy(&target).unwrap();
         assert_eq!(
@@ -148,6 +160,12 @@ mod tests {
             b"#00FF80"
         );
         assert!(target.join("state/junie.jsonl").is_file());
+        for name in ["event-status.jsonl", "status-history.jsonl", "latest.json"] {
+            assert_eq!(
+                fs::read(logs.join(name)).unwrap(),
+                fs::read(target.join("state").join(name)).unwrap()
+            );
+        }
         assert!(!target.join("relay.json").exists());
         fs::write(config.join("settings.json"), b"{}").unwrap();
         assert!(import.check().is_err());
