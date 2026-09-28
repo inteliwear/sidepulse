@@ -22,7 +22,7 @@ pub use delivery::{run_delivery, run_phone_link};
 pub use helpers::{run_sd_guard, run_status_bar};
 
 pub use leds::run_leds;
-pub use lifecycle::{run_lifecycle, run_setup};
+pub use lifecycle::{run_lifecycle, run_setup, run_upgrade};
 
 pub fn preview_endpoint() -> Option<String> {
     std::env::var("SIDEPULSE_NEXT_ENDPOINT").ok().or_else(|| {

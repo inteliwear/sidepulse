@@ -645,3 +645,39 @@ Tests compare actual CLI output with captured Python two-LED programs, follow a
 new completion event through the continuous loop, verify custom filenames and
 no writes during previews, and exercise native compatibility names. Staged
 smoke checks now exercise those entry points and require graceful service exit.
+
+
+## Offline preview updates, rollback, and recovery
+
+`sidepulse update --source-dir DOWNLOAD --stage-dir PREVIEW --backup-dir BACKUP`
+prepares all nine native binaries, aliases, application bundles, and launch files
+in a sibling temporary directory. The selected service must be stopped before
+replacement. Its endpoint and startup paths remain stable. Raw `settings.json`,
+`links.json`, `relay.json`, and all ordinary files under `state/` are retained,
+including unknown settings and log fields. State is bounded to 128 MiB and
+10,000 files; symlinks and special files are refused, except stale IPC sockets.
+Unknown files elsewhere in the old bundle remain in the backup.
+
+`sidepulse rollback --stage-dir PREVIEW --backup-dir BACKUP --save-current SAVED`
+restores older native executables while preserving the latest runtime settings
+and logs. Deleted runtime files are not revived. Both saved bundles remain
+available for another rollback. Backups contain identity and payload checksums;
+modified backups are refused. Advisory filesystem locks prevent concurrent
+native updates. Settings, payloads, and source binaries are rechecked before
+publication. `--dry-run` prints each plan without making changes.
+
+A durable receipt is written before the original directory moves. Publication
+failures restore it when its original path remains vacant. If a process is
+interrupted in the gap between directory moves, `sidepulse recover --stage-dir
+PREVIEW --backup-dir BACKUP` restores the checksum-verified original. Recovery
+refuses to overwrite any directory at the original location. On Windows, run
+bundle replacement from the downloaded binaries outside the selected bundle;
+open executables can prevent filesystem replacement. Restart existing preview
+startup entries after an update; these commands do not change their registration.
+
+Tests cover raw data preservation, rollback and redo, deleted files, edited
+plans and backups, concurrent operations, live endpoints, publication failure,
+and interrupted publication recovery. Actual native executable update and
+rollback smoke tests use isolated previews. This is a native preview migration
+path; ownership transfer from the production Python installation is still gated
+on hardware, UI, and release validation.

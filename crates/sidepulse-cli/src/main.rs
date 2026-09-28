@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         None | Some("--help" | "-h") => {
             println!(
-                "SidePulse native preview\n\nUsage: sidepulse-next COMMAND\n\nCommands:\n  agent-monitor   Status, live monitoring, LEDs, and provider hooks\n  battery         Battery status, LEDs, and settings\n  status-bar      Tray and sleep-helper controls\n  settings        Open settings\n  virtual-display Open the virtual LED display\n  write, push     LED programs and phone notifications\n  link, phone-link Configure relay and phone links\n  reply           Local reply classifier\n  setup           Assemble a native preview bundle\n  service         Install, start, stop, inspect, or remove a preview service\n  sdejectguard    macOS SD eject protection\n  doctor, version Inspect installation or version\n\nStartup commands use --stage-dir DIR; add --dry-run to inspect a plan."
+                "SidePulse native preview\n\nUsage: sidepulse-next COMMAND\n\nCommands:\n  agent-monitor   Status, live monitoring, LEDs, and provider hooks\n  battery         Battery status, LEDs, and settings\n  status-bar      Tray and sleep-helper controls\n  settings        Open settings\n  virtual-display Open the virtual LED display\n  write, push     LED programs and phone notifications\n  link, phone-link Configure relay and phone links\n  reply           Local reply classifier\n  setup           Assemble a native preview bundle\n  update, rollback, recover Replace or restore an offline preview\n  service         Install, start, stop, inspect, or remove a preview service\n  sdejectguard    macOS SD eject protection\n  doctor, version Inspect installation or version\n\nStartup commands use --stage-dir DIR; add --dry-run to inspect a plan."
             );
             ExitCode::SUCCESS
         }
@@ -75,6 +75,9 @@ fn main() -> ExitCode {
         Some("phone-link") => sidepulse_cli::run_phone_link(args),
         Some("reply") => sidepulse_cli::run_reply(args),
         Some("setup") => sidepulse_cli::run_setup(args),
+        Some(command @ ("update" | "rollback" | "recover")) => {
+            sidepulse_cli::run_upgrade(command, args)
+        }
         Some("service") => {
             sidepulse_cli::run_lifecycle(sidepulse_installer::startup::Job::Service, args)
         }

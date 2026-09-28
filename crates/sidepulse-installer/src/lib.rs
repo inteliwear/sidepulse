@@ -1,7 +1,8 @@
-//! Side-by-side Rust preview bundle. It never registers startup jobs or changes
-//! the installed Python application's hooks, settings, or device ownership.
+//! Native preview staging, explicit startup management, and reversible updates.
+//! Preview operations keep separate paths from the installed Python application.
 
 pub mod startup;
+pub mod upgrade;
 
 use std::fs;
 use std::io::{self, Write};
@@ -81,9 +82,17 @@ pub struct StagePlan {
 
 impl StagePlan {
     pub fn new(source_dir: &Path, stage_dir: &Path, platform: Platform) -> io::Result<Self> {
+        Self::new_internal(source_dir, stage_dir, platform, false)
+    }
+    fn new_internal(
+        source_dir: &Path,
+        stage_dir: &Path,
+        platform: Platform,
+        existing: bool,
+    ) -> io::Result<Self> {
         let source_dir = fs::canonicalize(source_dir)?;
         let stage_dir = absolute_stage_path(stage_dir)?;
-        if fs::symlink_metadata(&stage_dir).is_ok() {
+        if !existing && fs::symlink_metadata(&stage_dir).is_ok() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "stage directory already exists",
@@ -174,6 +183,12 @@ impl StagePlan {
                 "stage directory already exists",
             ));
         }
+        let temporary = self.prepare()?;
+        fs::rename(temporary.path(), final_dir)?;
+        Ok(&self.manifest)
+    }
+    fn prepare(&self) -> io::Result<tempfile::TempDir> {
+        let final_dir = &self.manifest.stage_dir;
         let parent = final_dir.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -257,8 +272,7 @@ impl StagePlan {
         manifest_file.write_all(b"\n")?;
         manifest_file.sync_all()?;
         drop(manifest_file);
-        fs::rename(temporary.path(), final_dir)?;
-        Ok(&self.manifest)
+        Ok(temporary)
     }
 }
 
@@ -266,8 +280,16 @@ impl StagePlan {
 /// This never installs hooks, registers startup jobs, or configures a device.
 pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
     let stage_dir = fs::canonicalize(stage_dir)?;
-    let manifest: StageManifest =
-        serde_json::from_slice(&fs::read(stage_dir.join("manifest.json"))?)?;
+    read_stage_at(&stage_dir, &stage_dir)
+}
+
+fn read_stage_at(storage: &Path, identity: &Path) -> io::Result<StageManifest> {
+    let stage_dir = identity.to_path_buf();
+    let path = storage.join("manifest.json");
+    if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 1024 * 1024) {
+        return Err(io::Error::other("manifest is not a bounded regular file"));
+    }
+    let manifest: StageManifest = serde_json::from_slice(&fs::read(path)?)?;
     let platform = Platform::current()?;
     let expected_binaries = BINARIES
         .iter()
@@ -301,7 +323,11 @@ pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
         ));
     }
     for binary in manifest.binaries.iter().chain(&manifest.aliases) {
-        if !fs::symlink_metadata(binary).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        if !fs::symlink_metadata(
+            storage.join(binary.strip_prefix(identity).map_err(io::Error::other)?),
+        )
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "bundle binary is missing or is not a regular file",
@@ -325,7 +351,15 @@ pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
             "bundle manifest contains an unexpected tray command or schema",
         ));
     }
-    if !fs::symlink_metadata(&tray_executable).is_ok_and(|m| m.is_file()) {
+    if !fs::symlink_metadata(
+        storage.join(
+            tray_executable
+                .strip_prefix(identity)
+                .map_err(io::Error::other)?,
+        ),
+    )
+    .is_ok_and(|m| m.is_file())
+    {
         return Err(io::Error::other(
             "tray executable is missing or is not a regular file",
         ));

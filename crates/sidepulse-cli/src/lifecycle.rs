@@ -58,6 +58,81 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
         Err(error) => fail(error),
     }
 }
+pub fn run_upgrade(operation: &str, mut args: impl Iterator<Item = String>) -> ExitCode {
+    use sidepulse_installer::upgrade::{RecoveryPlan, RollbackPlan, UpdatePlan};
+    let mut source = None;
+    let mut stage = None;
+    let mut backup = None;
+    let mut replaced = None;
+    let mut dry_run = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!(
+                    "Usage: sidepulse update --stage-dir DIR --backup-dir DIR [--source-dir DIR] [--dry-run]\n       sidepulse rollback --stage-dir DIR --backup-dir DIR --save-current DIR [--dry-run]\n       sidepulse recover --stage-dir DIR --backup-dir DIR [--dry-run]\n\nStop the selected preview before replacing its bundle. Backup directories must be siblings of the preview. Recovery requires its original location to be absent."
+                );
+                return ExitCode::SUCCESS;
+            }
+            "--dry-run" => dry_run = true,
+            "--source-dir" | "--stage-dir" | "--backup-dir" | "--save-current" => {
+                let Some(value) = args.next() else {
+                    return fail(format!("{arg} requires a directory"));
+                };
+                match arg.as_str() {
+                    "--source-dir" if operation == "update" => source = Some(PathBuf::from(value)),
+                    "--stage-dir" => stage = Some(PathBuf::from(value)),
+                    "--backup-dir" => backup = Some(PathBuf::from(value)),
+                    "--save-current" if operation == "rollback" => {
+                        replaced = Some(PathBuf::from(value))
+                    }
+                    _ => return fail(format!("{arg} is not supported for {operation}")),
+                }
+            }
+            _ => return fail(format!("unknown {operation} option {arg}")),
+        }
+    }
+    let result = (|| -> io::Result<serde_json::Value> {
+        let stage = stage.ok_or_else(|| io::Error::other("provide --stage-dir DIR"))?;
+        let backup = backup.ok_or_else(|| io::Error::other("provide --backup-dir DIR"))?;
+        match operation {
+            "update" => {
+                let source = match source {
+                    Some(path) => path,
+                    None => env::current_exe()?.parent().unwrap().to_path_buf(),
+                };
+                let plan = UpdatePlan::new(&source, &stage, &backup)?;
+                if !dry_run {
+                    plan.apply()?;
+                }
+                Ok(serde_json::to_value(plan)?)
+            }
+            "rollback" => {
+                let replaced =
+                    replaced.ok_or_else(|| io::Error::other("provide --save-current DIR"))?;
+                let plan = RollbackPlan::new(&stage, &backup, &replaced)?;
+                if !dry_run {
+                    plan.apply()?;
+                }
+                Ok(serde_json::to_value(plan)?)
+            }
+            "recover" => {
+                let plan = RecoveryPlan::new(&stage, &backup)?;
+                if !dry_run {
+                    plan.apply()?;
+                }
+                Ok(serde_json::to_value(plan)?)
+            }
+            _ => Err(io::Error::other("unknown bundle operation")),
+        }
+    })();
+    match result {
+        Ok(value) => {
+            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(error),
+    }
+}
 pub fn run_lifecycle(job: Job, mut args: impl Iterator<Item = String>) -> ExitCode {
     let operation = args.next().unwrap_or_else(|| "status".into());
     if matches!(operation.as_str(), "--help" | "-h") {

@@ -4255,6 +4255,7 @@ dependencies = [
  "roxmltree",
  "serde",
  "serde_json",
+ "sha2",
  "sidepulse-core",
  "sidepulse-ipc",
  "tempfile",

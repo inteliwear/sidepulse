@@ -10,6 +10,7 @@ name = "sidepulse-next-stage"
 path = "src/main.rs"
 
 [dependencies]
+sha2 = "0.10"
 roxmltree = "0.21"
 serde.workspace = true
 serde_json.workspace = true
