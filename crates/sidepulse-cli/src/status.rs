@@ -15,6 +15,7 @@ use sidepulse_core::{AgentStatus, Monitor, MonitorSnapshot, MonitoringPolicy};
 use sidepulse_sources::{PROVIDERS, SourceSpec, load_recent_events, sources_from_environment};
 
 struct Options {
+    help: bool,
     json: bool,
     include_stale: bool,
     policy: MonitoringPolicy,
@@ -26,6 +27,7 @@ struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            help: false,
             json: false,
             include_stale: false,
             policy: MonitoringPolicy::default(),
@@ -44,6 +46,9 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if options.help {
+        return print_help(false);
+    }
     let (snapshot, sources) = match collect_snapshot(&options) {
         Ok(result) => result,
         Err(error) => {
@@ -51,16 +56,64 @@ pub fn run_status(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if options.json {
-        let output = snapshot_json(&snapshot, &sources);
-        println!(
+    let mut output = io::stdout().lock();
+    let result = if options.json {
+        let document = snapshot_json(&snapshot, &sources);
+        writeln!(
+            output,
             "{}",
-            serde_json::to_string_pretty(&output).expect("status JSON serializes")
-        );
+            serde_json::to_string_pretty(&document).expect("status JSON serializes")
+        )
     } else {
-        print_snapshot(&snapshot, &sources, options.include_stale, None);
+        write_snapshot(
+            &mut output,
+            &snapshot,
+            &sources,
+            options.include_stale,
+            None,
+        )
+    };
+    output_exit(result.and_then(|()| output.flush()), "status")
+}
+
+fn output_exit(result: io::Result<()>, command: &str) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("sidepulse-next {command}: {error}");
+            ExitCode::FAILURE
+        }
     }
-    ExitCode::SUCCESS
+}
+
+fn print_help(live: bool) -> ExitCode {
+    let mut output = io::stdout().lock();
+    let result = (|| -> io::Result<()> {
+        writeln!(
+            output,
+            "Usage: sidepulse agent-monitor {} [OPTIONS]",
+            if live { "live|watch" } else { "status" }
+        )?;
+        writeln!(
+            output,
+            "\nSources:\n  --codex-log PATH, --claude-log PATH, --grok-log PATH\n  --cursor-log PATH, --junie-log PATH\n  --codex-transcripts DIR, --claude-transcripts DIR\n\nMonitoring:\n  --max-lines COUNT              Initial replay limit (default: 5000)\n  --stale-after SECONDS          Agent inactivity timeout\n  --tool-running-timeout SECONDS Tool-running timeout\n  --all                         Include stale agents"
+        )?;
+        if live {
+            writeln!(
+                output,
+                "\nLive display:\n  --interval SECONDS             Refresh interval (default: 1)\n  --recent-seconds SECONDS       Display age limit (default: 3600; 0 disables)\n  --no-color                     Plain text output\n\nPress Ctrl-C to stop. A closed output pipe also stops monitoring."
+            )?;
+        } else {
+            writeln!(
+                output,
+                "  --json                        Print the status JSON document"
+            )?;
+        }
+        writeln!(output, "\n  -h, --help                    Show this help")?;
+        output.flush()
+    })();
+    output_exit(result, "help")
 }
 
 fn collect_snapshot(options: &Options) -> io::Result<(MonitorSnapshot, Vec<SourceSpec>)> {
@@ -126,6 +179,7 @@ pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args;
     while let Some(flag) = args.next() {
         match flag.as_str() {
+            "--help" | "-h" => return print_help(true),
             "--interval" | "--recent-seconds" => {
                 let Some(value) = args.next() else {
                     eprintln!("sidepulse-next watch: {flag} needs a value");
@@ -135,7 +189,9 @@ pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {
                     eprintln!("sidepulse-next watch: invalid {flag}: {value}");
                     return ExitCode::from(2);
                 };
-                if !number.is_finite() || number <= 0.0 || (flag == "--interval" && number > 3600.0)
+                if !number.is_finite()
+                    || number < 0.0
+                    || (flag == "--interval" && (number == 0.0 || number > 3600.0))
                 {
                     eprintln!("sidepulse-next watch: invalid {flag}: {value}");
                     return ExitCode::from(2);
@@ -174,21 +230,27 @@ pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {
         eprintln!("sidepulse-next watch: {error}");
         return ExitCode::FAILURE;
     }
-    let interactive = io::stdout().is_terminal();
+    let stdout = io::stdout();
+    let interactive = stdout.is_terminal();
     while !stop.load(Ordering::Acquire) {
         match monitor.snapshot() {
             Ok(snapshot) => {
-                if interactive {
-                    print!("\x1b[2J\x1b[H");
-                }
-                print_snapshot(
-                    &snapshot,
-                    &monitor.sources,
-                    options.include_stale,
-                    Some(recent_seconds),
-                );
-                if io::stdout().flush().is_err() {
-                    return ExitCode::SUCCESS;
+                let mut output = stdout.lock();
+                let result = (|| -> io::Result<()> {
+                    if interactive {
+                        write!(output, "\x1b[2J\x1b[H")?;
+                    }
+                    write_snapshot(
+                        &mut output,
+                        &snapshot,
+                        &monitor.sources,
+                        options.include_stale,
+                        Some(recent_seconds),
+                    )?;
+                    output.flush()
+                })();
+                if result.is_err() {
+                    return output_exit(result, "watch");
                 }
             }
             Err(error) => eprintln!("sidepulse-next watch: {error}"),
@@ -209,6 +271,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut args = args.peekable();
     while let Some(flag) = args.next() {
         match flag.as_str() {
+            "--help" | "-h" => {
+                options.help = true;
+                break;
+            }
             "--json" => options.json = true,
             "--all" => options.include_stale = true,
             "--stale-after" | "--tool-running-timeout" => {
@@ -309,24 +375,31 @@ fn describe_status(status: &AgentStatus, now: DateTime<Utc>) -> String {
     text
 }
 
-fn print_snapshot(
+fn write_snapshot(
+    output: &mut impl Write,
     snapshot: &MonitorSnapshot,
     sources: &[SourceSpec],
     include_stale: bool,
     recent_seconds: Option<f64>,
-) {
-    println!(
+) -> io::Result<()> {
+    writeln!(
+        output,
         "Aggregate: {} ({} active, {} stale)",
         snapshot.aggregate.mode.label(),
         snapshot.aggregate.active_count,
         snapshot.aggregate.stale_count
-    );
+    )?;
     if let Some(status) = &snapshot.aggregate.representative {
-        println!("Reason: {}", describe_status(status, snapshot.collected_at));
+        writeln!(
+            output,
+            "Reason: {}",
+            describe_status(status, snapshot.collected_at)
+        )?;
     }
-    println!("\nSources:");
+    writeln!(output, "\nSources:")?;
     for source in sources {
-        println!(
+        writeln!(
+            output,
             "  {}: {} [{}]",
             source.provider,
             source.path.display(),
@@ -335,9 +408,9 @@ fn print_snapshot(
             } else {
                 "missing"
             }
-        );
+        )?;
     }
-    println!("\nAgents:");
+    writeln!(output, "\nAgents:")?;
     let statuses = snapshot.statuses.iter().chain(if include_stale {
         snapshot.stale_statuses.iter()
     } else {
@@ -346,15 +419,21 @@ fn print_snapshot(
     let mut any = false;
     for status in statuses {
         if !include_stale
-            && recent_seconds
-                .is_some_and(|seconds| status.age_seconds(snapshot.collected_at) > seconds)
+            && recent_seconds.is_some_and(|seconds| {
+                seconds > 0.0 && status.age_seconds(snapshot.collected_at) > seconds
+            })
         {
             continue;
         }
         any = true;
-        println!("  {}", describe_status(status, snapshot.collected_at));
+        writeln!(
+            output,
+            "  {}",
+            describe_status(status, snapshot.collected_at)
+        )?;
     }
     if !any {
-        println!("  none");
+        writeln!(output, "  none")?;
     }
+    Ok(())
 }

@@ -15,6 +15,18 @@ impl Drop for Process {
     }
 }
 
+fn wait_for_success(child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "unexpected exit: {status}");
+            return;
+        }
+        assert!(Instant::now() < deadline, "command did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn event(name: &str) -> String {
     serde_json::json!({"logged_at":chrono::Utc::now().to_rfc3339(),"hook_event_name":name,"session_id":"pending-permission","tool_name":"Shell","tool_input":{"command":"date"}}).to_string()+"\n"
 }
@@ -109,4 +121,65 @@ fn watch_retains_permissions_beyond_replay_limit_and_redirects_plain_text() {
         child.0.wait().unwrap();
     }
     reader.join().unwrap();
+}
+
+#[test]
+fn zero_recent_window_keeps_older_agents_and_closed_output_stops_watch() {
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("claude.jsonl");
+    let mut row: serde_json::Value = serde_json::from_str(&event("PermissionRequest")).unwrap();
+    row["logged_at"] = (chrono::Utc::now() - chrono::Duration::minutes(2))
+        .to_rfc3339()
+        .into();
+    fs::write(&log, format!("{row}\n")).unwrap();
+    let mut child = Process(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next"))
+            .args([
+                "agent-monitor",
+                "live",
+                "--interval",
+                "0.1",
+                "--recent-seconds",
+                "0",
+                "--stale-after",
+                "3600",
+                "--claude-log",
+            ])
+            .arg(&log)
+            .env("HOME", root.path())
+            .env("USERPROFILE", root.path())
+            .env("XDG_STATE_HOME", root.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = child.0.stdout.take().unwrap();
+    let (sent, received) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sent.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        if received.recv_timeout(Duration::from_secs(10)).unwrap() == "Agents:" {
+            break;
+        }
+    }
+    let agent = received.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        agent.contains("Waiting for Input") && agent.contains("event=PermissionRequest"),
+        "{agent}"
+    );
+    // Simulate a reader such as `head` closing the pipe after its desired output.
+    drop(received);
+    wait_for_success(&mut child.0);
+    reader.join().unwrap();
+    let stderr = child.0.stderr.take().unwrap();
+    assert!(
+        BufReader::new(stderr).lines().next().is_none(),
+        "closed output should not print a panic"
+    );
 }

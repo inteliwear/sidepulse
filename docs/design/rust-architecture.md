@@ -71,13 +71,18 @@ Rust migration. Their model behavior requires separate parity evaluation.
 ## Settings window implementation
 
 The cross-platform settings window uses Rust `egui`/`eframe` as a separate
-client executable. It reads the same shared presentation model as the tray
+client executable. The `sidepulse-ui-client` crate owns renderer-independent
+state collection, validated IPC, polling/reconnection, save results, exports,
+and local setup actions. The window uses its typed commands and updates and
+reads the same shared presentation model as the tray
 and sends versioned service requests for every setting change. A background
 client worker performs IPC so reconnects and saves cannot block drawing. The
 service remains the owner of settings validation, persistence, monitoring,
 power policy, and device output. Native tray clients and the CLI open the
 sibling settings executable with their existing endpoint. The window is
 included in preview bundles but does not register itself for startup.
+The client crate has no renderer dependency; a webview host can reuse it.
+See [webview-ui-proposal.md](webview-ui-proposal.md) for the proposed UI direction.
 The window covers live activity, device selection, brightness, agent /
 battery / manual display, charger baseline and power-change previews,
 transcript monitoring, and macOS awake preferences. macOS staging now includes
@@ -329,6 +334,8 @@ the replay limit. Redirected output has no terminal cursor commands, and
 termination signals stop the loop cleanly. Their terminal presentation uses the
 one-shot status view instead of Python's wider colored table; source paths,
 aggregate/reason text, and agent details remain available.
+Text/JSON status and live output return cleanly when a downstream reader closes
+its pipe. A zero `--recent-seconds` disables the live age filter, matching Python.
 Codex requires a user trust review for new or changed non-managed hooks. The
 Rust installer reports this step and does not write trust hashes itself. The
 Python installer still has its legacy automatic trust refresh, so cutover

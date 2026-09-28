@@ -1,6 +1,9 @@
 //! Exercise the actual presentation code without starting a window or OS helper.
 use super::*;
 use eframe::App;
+use sidepulse_core::ServerPayload;
+use sidepulse_ui_model::{SettingsView, TrayState};
+use std::sync::mpsc;
 
 struct Harness {
     app: SettingsApp,

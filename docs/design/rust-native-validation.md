@@ -6,7 +6,7 @@ cutover is a separate delivery gate.
 
 ## Automated and isolated checks
 
-- Formatting, workspace lint with all features, 221 tests, and release builds pass
+- Formatting, workspace lint with all features, 226 tests, and release builds pass
   locally. CI builds, tests, packages, archives, stages, and smoke-checks macOS,
   Windows, and Linux.
 - Captured Python comparisons cover 75 origin cases, 20 transcript cases,
@@ -28,6 +28,15 @@ cutover is a separate delivery gate.
   limit, applies appended completion events, writes plain redirected output,
   and exits cleanly on Unix termination signals. Live monitoring keeps one
   monitor instance across refreshes, matching the Python state lifetime.
+- Closing a status text/JSON or live-monitor output pipe exits successfully
+  without a panic. A zero recent-time window disables age filtering, matching
+  Python; actual process tests cover both behaviors. Status/live help returns
+  successfully without opening sources or starting the monitor.
+- The Settings client now lives in a renderer-independent Rust crate. Local
+  transport tests load its complete view without creating a window and reject
+  invalid protocol versions/request IDs while preserving service conflict
+  messages. Existing Settings interaction and layout tests still pass through
+  the shared command/update types.
 - CSV/HTML export tests cover the legacy columns, Unicode and quoting, HTML
   escaping, malformed rows, size limits, atomic publication, multiple audit
   sources, and retained source bytes.

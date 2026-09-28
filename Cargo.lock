@@ -4607,7 +4607,7 @@ dependencies = [
  "sidepulse-core",
  "sidepulse-installer",
  "sidepulse-ipc",
- "sidepulse-platform",
+ "sidepulse-ui-client",
  "sidepulse-ui-model",
 ]
 
@@ -4633,6 +4633,21 @@ dependencies = [
  "sidepulse-ui-model",
  "tao",
  "tray-icon",
+]
+
+[[package]]
+name = "sidepulse-ui-client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "interprocess",
+ "serde_json",
+ "sidepulse-core",
+ "sidepulse-installer",
+ "sidepulse-ipc",
+ "sidepulse-platform",
+ "sidepulse-ui-model",
+ "tempfile",
 ]
 
 [[package]]

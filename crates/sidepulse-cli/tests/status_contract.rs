@@ -7,6 +7,40 @@ use serde_json::Value;
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[test]
+fn status_and_live_help_do_not_start_monitoring() {
+    let dir = tempfile::tempdir().unwrap();
+    for (route, live) in [
+        (vec!["status", "--json", "--help"], false),
+        (vec!["agent-monitor", "status", "-h"], false),
+        (vec!["watch", "--help"], true),
+        (vec!["agent-monitor", "live", "--no-color", "-h"], true),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"))
+            .args(route)
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("XDG_STATE_HOME", dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            help.contains("Usage:")
+                && help.contains("--claude-log")
+                && help.contains("--codex-transcripts"),
+            "{help}"
+        );
+        assert_eq!(help.contains("--recent-seconds"), live);
+        assert_eq!(help.contains("--json"), !live);
+        assert!(dir.path().read_dir().unwrap().next().is_none());
+    }
+}
+
 fn scratch_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "sidepulse-status-test-{}-{}",
@@ -194,4 +228,53 @@ fn status_can_include_explicit_transcript_source() {
     );
     assert_eq!(value["sources"].as_array().unwrap().len(), 5);
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn status_text_and_json_exit_cleanly_when_output_is_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("claude.jsonl");
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = (0..2000).map(|index| serde_json::json!({
+        "logged_at":now,"hook_event_name":"PreToolUse","session_id":format!("pipe-{index}"),"tool_name":"Shell"
+    }).to_string()+"\n").collect::<String>();
+    fs::write(&log, rows).unwrap();
+    for json in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sidepulse-next"));
+        command
+            .args(["status", "--claude-log"])
+            .arg(&log)
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("XDG_STATE_HOME", dir.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if json {
+            command.arg("--json");
+        }
+        let mut child = command.spawn().unwrap();
+        drop(child.stdout.take());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("status hung after output closed");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(status.success(), "json={json}: {status}");
+        use std::io::Read;
+        let mut error = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut error)
+            .unwrap();
+        assert!(error.is_empty(), "{error}");
+    }
 }
