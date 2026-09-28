@@ -1,6 +1,7 @@
 //! Native preview staging, explicit startup management, and reversible updates.
 //! Preview operations keep separate paths from the installed Python application.
 
+pub mod package;
 pub mod startup;
 pub mod upgrade;
 
@@ -90,7 +91,7 @@ impl StagePlan {
         platform: Platform,
         existing: bool,
     ) -> io::Result<Self> {
-        let source_dir = fs::canonicalize(source_dir)?;
+        let source_dir = package::resolve_source(source_dir)?;
         let stage_dir = absolute_stage_path(stage_dir)?;
         if !existing && fs::symlink_metadata(&stage_dir).is_ok() {
             return Err(io::Error::new(
@@ -230,26 +231,33 @@ impl StagePlan {
                 (6, "SidePulse Virtual", "io.sidepulse.next.virtual", true),
             ])
         {
-            let contents = temporary
+            let target = temporary
                 .path()
                 .join("applications")
-                .join(bundle.file_name().unwrap())
-                .join("Contents");
-            fs::create_dir_all(contents.join("MacOS"))?;
-            fs::create_dir_all(contents.join("Resources"))?;
+                .join(bundle.file_name().unwrap());
             let filename = self.manifest.binaries[binary_index].file_name().unwrap();
-            fs::copy(
-                self.source_dir.join(filename),
-                contents.join("MacOS").join(filename),
-            )?;
-            fs::write(
-                contents.join("Resources/endpoint.txt"),
-                &self.manifest.endpoint,
-            )?;
-            fs::write(
-                contents.join("Info.plist"),
-                render_app_info(label, identifier, &filename.to_string_lossy(), tray),
-            )?;
+            let info = render_app_info(label, identifier, &filename.to_string_lossy(), tray);
+            if let Some(source) =
+                package::application_source(&self.source_dir, bundle.file_name().unwrap())
+            {
+                if upgrade::bounded_read(&source.join("Contents/Info.plist"), 1024 * 1024)?
+                    != info.as_bytes()
+                {
+                    return Err(io::Error::other(
+                        "packaged application metadata differs from the native layout",
+                    ));
+                }
+                package::copy_tree(&source, &target)?;
+            } else {
+                let contents = target.join("Contents");
+                fs::create_dir_all(contents.join("MacOS"))?;
+                fs::create_dir_all(contents.join("Resources"))?;
+                fs::copy(
+                    self.source_dir.join(filename),
+                    contents.join("MacOS").join(filename),
+                )?;
+                fs::write(contents.join("Info.plist"), info)?;
+            }
         }
         fs::write(temporary.path().join("settings.json"), b"{}\n")?;
         fs::write(temporary.path().join("relay.json"), b"{\"version\":1}\n")?;
@@ -728,10 +736,7 @@ mod tests {
             if platform == Platform::Macos {
                 assert_eq!(manifest.application_bundles.len(), 3);
                 for bundle in &manifest.application_bundles {
-                    assert_eq!(
-                        fs::read_to_string(bundle.join("Contents/Resources/endpoint.txt")).unwrap(),
-                        manifest.endpoint
-                    );
+                    assert!(!bundle.join("Contents/Resources/endpoint.txt").exists());
                     assert!(
                         fs::read_to_string(bundle.join("Contents/Info.plist"))
                             .unwrap()
@@ -797,6 +802,29 @@ mod tests {
                     .unwrap()
                     .kind(),
                 io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn immutable_app_bundles_resolve_endpoint_from_external_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let platform = Platform::current().unwrap();
+        dummy_binaries(&source, platform);
+        let stage = directory.path().join("preview");
+        let plan = StagePlan::new(&source, &stage, platform).unwrap();
+        let manifest = plan.stage().unwrap();
+        assert_eq!(
+            endpoint_from_executable(&manifest.binaries[3]).unwrap(),
+            Some(manifest.endpoint.clone())
+        );
+        if platform == Platform::Macos {
+            let executable =
+                manifest.application_bundles[1].join("Contents/MacOS/sidepulse-next-settings");
+            assert_eq!(
+                endpoint_from_executable(&executable).unwrap(),
+                Some(manifest.endpoint.clone())
             );
         }
     }

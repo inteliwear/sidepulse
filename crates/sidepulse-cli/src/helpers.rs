@@ -12,7 +12,7 @@ pub fn run_sd_guard(mut args: impl Iterator<Item = String>) -> ExitCode {
     let operation = args.next().unwrap_or_else(|| "check".into());
     if matches!(operation.as_str(), "--help" | "-h") {
         println!(
-            "Usage: sidepulse sdejectguard check|run [--no-mount]\n       sidepulse sdejectguard install|start|stop|uninstall|status --stage-dir DIR [--dry-run]"
+            "Usage: sidepulse sdejectguard check|run [--no-mount]\n       sidepulse sdejectguard install|start|stop|uninstall|status --stage-dir DIR [--dry-run]\n       System SD guard: install|start|stop|uninstall|status --scope system [--dry-run]"
         );
         return ExitCode::SUCCESS;
     }

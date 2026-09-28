@@ -4252,6 +4252,7 @@ dependencies = [
 name = "sidepulse-installer"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "roxmltree",
  "serde",
  "serde_json",
@@ -4259,6 +4260,7 @@ dependencies = [
  "sidepulse-core",
  "sidepulse-ipc",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -4337,6 +4339,7 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "sidepulse-core",
+ "sidepulse-installer",
  "sidepulse-ipc",
  "sidepulse-platform",
  "sidepulse-ui-model",
@@ -4358,6 +4361,7 @@ name = "sidepulse-tray"
 version = "0.1.0"
 dependencies = [
  "sidepulse-core",
+ "sidepulse-installer",
  "sidepulse-ipc",
  "sidepulse-platform",
  "sidepulse-ui-model",

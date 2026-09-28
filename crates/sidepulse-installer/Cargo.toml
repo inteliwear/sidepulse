@@ -10,6 +10,7 @@ name = "sidepulse-next-stage"
 path = "src/main.rs"
 
 [dependencies]
+zip = { version = "7.2", default-features = false }
 sha2 = "0.10"
 roxmltree = "0.21"
 serde.workspace = true
@@ -17,3 +18,6 @@ serde_json.workspace = true
 tempfile = "3"
 sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

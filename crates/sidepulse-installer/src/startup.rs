@@ -69,6 +69,7 @@ pub struct StartupPlan {
     pub job: Job,
     pub operation: Operation,
     pub start: bool,
+    pub system: bool,
     pub label: String,
     pub path: PathBuf,
     pub contents: String,
@@ -308,6 +309,7 @@ impl StartupPlan {
             job,
             operation,
             start,
+            system: false,
             label,
             path,
             contents,
@@ -316,7 +318,103 @@ impl StartupPlan {
             expected,
         })
     }
+    pub fn system_sd_guard(operation: Operation, start: bool) -> io::Result<Self> {
+        if Platform::current()? != Platform::Macos {
+            return Err(io::Error::other("system SD guard requires macOS"));
+        }
+        let root = Path::new(crate::package::SYSTEM_PAYLOAD);
+        if matches!(operation, Operation::Install | Operation::Start) {
+            crate::package::verify(root)?;
+            #[cfg(target_os = "macos")]
+            verify_root_owned(root)?;
+        }
+        Self::system_guard_at(root, Path::new("/Library/LaunchDaemons"), operation, start)
+    }
+    fn system_guard_at(
+        root: &Path,
+        directory: &Path,
+        mut operation: Operation,
+        start: bool,
+    ) -> io::Result<Self> {
+        let label = "io.sidepulse.next.sd-guard.system".to_owned();
+        let path = directory.join(format!("{label}.plist"));
+        let command = vec![
+            root.join("bin/sidepulse-next-sd-guard")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        let mut contents = render_plist(&label, &command, root);
+        contents = contents.replace("</dict>", "<key>UserName</key><string>root</string>\n<key>ExitTimeOut</key><integer>30</integer>\n<key>StandardOutPath</key><string>/var/log/sidepulse-next-sd-guard.log</string>\n<key>StandardErrorPath</key><string>/var/log/sidepulse-next-sd-guard.err.log</string>\n</dict>");
+        let expected = regular_bytes(&path)?;
+        if expected
+            .as_ref()
+            .is_some_and(|bytes| bytes != contents.as_bytes())
+        {
+            return Err(io::Error::other(
+                "system guard entry belongs to a different command; preserved",
+            ));
+        }
+        if operation == Operation::Start && expected.is_none() {
+            operation = Operation::Install;
+        }
+        let target = format!("system/{label}");
+        let mut commands = Vec::new();
+        match operation {
+            Operation::Install | Operation::Start => {
+                commands.push(spec("/bin/launchctl", strings(&["enable", &target])));
+                if start {
+                    commands.push(spec(
+                        "/bin/launchctl",
+                        vec![
+                            "bootstrap".into(),
+                            "system".into(),
+                            path.to_string_lossy().into_owned(),
+                        ],
+                    ));
+                }
+            }
+            Operation::Stop => {
+                commands.push(spec("/bin/launchctl", strings(&["bootout", &target])))
+            }
+            Operation::Uninstall => {
+                commands.push(spec("/bin/launchctl", strings(&["bootout", &target])));
+                commands.push(spec("/bin/launchctl", strings(&["disable", &target])));
+            }
+            Operation::Status => {}
+        }
+        Ok(Self {
+            endpoint: String::new(),
+            platform: Platform::Macos,
+            job: Job::SdGuard,
+            operation,
+            start,
+            system: true,
+            label,
+            path,
+            contents,
+            probe: spec("/bin/launchctl", strings(&["print", &target])),
+            commands,
+            expected,
+        })
+    }
     pub fn apply(&self) -> io::Result<StartupResult> {
+        if self.system {
+            #[cfg(target_os = "macos")]
+            {
+                if self.operation != Operation::Status && unsafe { libc::geteuid() } != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "system SD guard installation requires root",
+                    ));
+                }
+                if matches!(self.operation, Operation::Install | Operation::Start) {
+                    verify_root_owned(Path::new(crate::package::SYSTEM_PAYLOAD))?;
+                    crate::package::verify(Path::new(crate::package::SYSTEM_PAYLOAD))?;
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err(io::Error::other("system SD guard requires macOS"));
+        }
         if self.platform != Platform::current()? {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -663,7 +761,7 @@ fn decode(bytes: Vec<u8>) -> String {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 }
-fn run_command(spec: &CommandSpec) -> io::Result<CommandResult> {
+pub(crate) fn run_command(spec: &CommandSpec) -> io::Result<CommandResult> {
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
     let mut child = Command::new(&spec.program)
@@ -703,6 +801,45 @@ fn run_command(spec: &CommandSpec) -> io::Result<CommandResult> {
     })
 }
 
+#[cfg(target_os = "macos")]
+fn verify_root_owned(root: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    for path in root.ancestors() {
+        let meta = fs::symlink_metadata(path)?;
+        if !meta.is_dir() || meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+            return Err(io::Error::other(
+                "system payload and every parent must be root-owned directories without group or other write access",
+            ));
+        }
+    }
+    let mut paths = Vec::new();
+    crate::upgrade::files(root, Path::new(""), &mut paths)?;
+    for relative in paths {
+        let meta = fs::symlink_metadata(root.join(relative))?;
+        if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+            return Err(io::Error::other(
+                "system payload file is writable or not root-owned",
+            ));
+        }
+    }
+    fn directories(path: &Path) -> io::Result<()> {
+        let meta = fs::symlink_metadata(path)?;
+        if !meta.is_dir() {
+            return Ok(());
+        }
+        if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+            return Err(io::Error::other(
+                "system payload directory is writable or not root-owned",
+            ));
+        }
+        for entry in fs::read_dir(path)? {
+            directories(&entry?.path())?;
+        }
+        Ok(())
+    }
+    directories(root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +864,59 @@ mod tests {
             stdout,
             stderr: String::new(),
         }
+    }
+    #[test]
+    fn system_sd_guard_uses_immutable_payload_and_separate_system_domain() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("immutable payload");
+        let launchd = directory.path().join("LaunchDaemons");
+        let plan =
+            StartupPlan::system_guard_at(&root, &launchd, Operation::Install, false).unwrap();
+        assert!(plan.system);
+        assert!(plan.contents.contains("<string>root</string>"));
+        assert!(
+            plan.contents
+                .contains("immutable payload/bin/sidepulse-next-sd-guard")
+        );
+        assert!(plan.probe.args[1].starts_with("system/"));
+        assert!(
+            !plan
+                .commands
+                .iter()
+                .any(|command| command.args.contains(&"bootstrap".into()))
+        );
+        let result = plan
+            .apply_with(|_| {
+                Ok(CommandResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
+            })
+            .unwrap_err();
+        assert!(result.to_string().contains("startup manager"));
+        // Owned file remains after manager failure and can be explicitly removed.
+        assert!(plan.path.is_file());
+        let remove =
+            StartupPlan::system_guard_at(&root, &launchd, Operation::Uninstall, false).unwrap();
+        remove
+            .apply_with(|command| {
+                Ok(CommandResult {
+                    success: command.args[0] != "print",
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
+            })
+            .unwrap();
+        assert!(!plan.path.exists());
+        fs::write(&plan.path, b"external job").unwrap();
+        assert!(StartupPlan::system_guard_at(&root, &launchd, Operation::Install, false).is_err());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_guard_refuses_a_user_owned_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(verify_root_owned(directory.path()).is_err());
     }
     #[test]
     fn platform_plans_install_without_starting_then_remove_only_owned_entries() {

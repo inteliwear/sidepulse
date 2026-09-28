@@ -141,6 +141,7 @@ pub fn run_lifecycle(job: Job, mut args: impl Iterator<Item = String>) -> ExitCo
         );
         return ExitCode::SUCCESS;
     }
+    let mut system = false;
     let mut stage = None;
     let mut directory = None;
     let mut user = None;
@@ -149,6 +150,11 @@ pub fn run_lifecycle(job: Job, mut args: impl Iterator<Item = String>) -> ExitCo
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            "--scope" => match args.next().as_deref() {
+                Some("system") if job == Job::SdGuard => system = true,
+                Some("user") => system = false,
+                _ => return fail("--scope system is available only for the macOS SD guard"),
+            },
             "--no-start" => start = false,
             "--stage-dir" | "--startup-dir" | "--user" => {
                 let Some(value) = args.next() else {
@@ -164,6 +170,25 @@ pub fn run_lifecycle(job: Job, mut args: impl Iterator<Item = String>) -> ExitCo
         }
     }
     let result = (|| -> io::Result<serde_json::Value> {
+        if system {
+            if stage.is_some() || directory.is_some() || user.is_some() {
+                return Err(io::Error::other(
+                    "system scope uses only the root-owned native package and fixed LaunchDaemon location",
+                ));
+            }
+            let operation = Operation::parse(&operation)?;
+            if !start && operation != Operation::Install {
+                return Err(io::Error::other(
+                    "--no-start is supported only for installation",
+                ));
+            }
+            let plan = StartupPlan::system_sd_guard(operation, start)?;
+            return if dry_run {
+                Ok(serde_json::to_value(plan)?)
+            } else {
+                Ok(serde_json::to_value(plan.apply()?)?)
+            };
+        }
         let stage = stage
             .ok_or_else(|| io::Error::other("provide --stage-dir DIR for the native preview"))?;
         let manifest = read_stage(&stage)?;

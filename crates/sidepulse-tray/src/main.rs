@@ -963,13 +963,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .or_else(|| env::var("SIDEPULSE_NEXT_ENDPOINT").ok())
         .or_else(|| {
             let executable = env::current_exe().ok()?;
-            std::fs::read_to_string(
-                executable
-                    .parent()?
-                    .parent()?
-                    .join("Resources/endpoint.txt"),
-            )
-            .ok()
+            sidepulse_installer::endpoint_from_executable(&executable)
+                .ok()
+                .flatten()
         })
         .ok_or("usage: sidepulse-next-tray ENDPOINT")?;
     run(endpoint)

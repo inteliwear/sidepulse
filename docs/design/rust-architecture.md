@@ -339,28 +339,24 @@ Python installer still has its legacy automatic trust refresh, so cutover
 must validate the new review flow. This follows the current
 [official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
 
-Further origin parity, production relay launch, production provider hook installation,
-production device discovery,
-physical device validation, the remaining status bar settings and controls,
-native helpers, full CLI parity, and release packaging still need
-implementation before cutover. The Python application
-remains authoritative for users until the delivery gates above pass.
+The Python application remains authoritative until the delivery gates pass.
+The Rust preview now implements the native helpers, phone transport, settings
+controls, compatibility entry points, and native startup lifecycle described
+below. Runtime UI and physical device validation remain outstanding.
 
 ## Remaining work, in delivery order
 
-1. Verify native hook installation and removal against captured real configs
-   for all five providers, preserving unrelated config and backups.
-2. Finish source parity: transcript edge cases, captured process ancestry and
+1. Finish captured source parity: transcript edge cases, process ancestry,
    Junie cases, and Python-to-Rust transition comparisons.
-3. Finish native helper lifecycle management and remaining settings controls.
-   Phone pairing, automatic output, manual delivery, notifications, and power
-   helper recovery are implemented in service modules.
-4. Complete tray and settings controls behind the shared UI model, including
-   macOS-specific status bar behavior and Windows/Linux capability adapters.
-5. Cover the remaining CLI entry points, turn the staged native binaries into
-   installable, signed packages, and implement platform startup registration.
-6. Verify upgrades and rollback against an existing Python setup, then switch
-   hook and state-file ownership only after the delivery gates pass.
+2. Verify native hook installation and removal against captured real configs
+   for all five providers, preserving unrelated configuration and backups.
+3. Finish existing-terminal focus/reuse and native visual checks for tray,
+   settings, session opening, virtual display, and window placement.
+4. Verify portable packages, platform signatures, and root-owned helper
+   installation. Preview startup and native update/rollback are implemented.
+5. Validate real devices and Windows/Linux native UI behavior.
+6. Verify migration from a captured Python setup, then switch hook and state
+   ownership only after the delivery gates pass.
 
 ## Portable local reply classifier
 
@@ -681,3 +677,36 @@ and interrupted publication recovery. Actual native executable update and
 rollback smoke tests use isolated previews. This is a native preview migration
 path; ownership transfer from the production Python installation is still gated
 on hardware, UI, and release validation.
+
+
+## Relocatable native release payloads
+
+`sidepulse-next-stage --package SOURCE PACKAGE VERSION` creates a portable
+payload containing nine binaries, compatibility aliases, and immutable macOS
+application bundles. Settings, state, startup entries, and absolute paths are
+excluded. `--verify-package PACKAGE` checks platform, architecture, exact file
+list, sizes, executable modes, and SHA-256 hashes. `--archive-package PACKAGE ZIP`
+creates an archive without replacing any existing output and retains Unix
+executable permissions. All three CI jobs now build, archive, stage, and
+smoke-check this payload.
+
+A downloaded package can be passed directly to `setup --source-dir PACKAGE` or
+`update --source-dir PACKAGE`. macOS application bundles and signature resources
+are copied byte-for-byte. UI clients derive the service endpoint from the
+external preview manifest, so no application resource changes during staging.
+The updater verifies both standalone binaries and copied application bundles.
+
+`--sign-package PACKAGE IDENTITY --dry-run` reports native signing commands.
+On macOS the implementation signs standalone binaries and then application
+bundles with hardened runtime and a secure timestamp, verifying every result
+before resealing checksums. On Windows it uses a certificate thumbprint and
+`--timestamp-url HTTPS_URL`, SHA-256 file/timestamp digests, and Authenticode
+verification. Actual distribution signing requires publisher credentials.
+Linux archives use a detached GPG signature. Checksums indicate integrity and
+do not authenticate the publisher.
+
+The signing sequence follows [Apple's distribution signing guidance](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
+and [Microsoft's SignTool documentation](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool).
+Notarization and native installer wrapping are described in
+`packaging/NATIVE.md`; genuine distribution signing and OS trust verification
+remain external release gates until credentials are available.

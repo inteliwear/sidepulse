@@ -65,7 +65,7 @@ fn hash(bytes: &[u8]) -> String {
 fn manifest_bytes(root: &Path) -> io::Result<Vec<u8>> {
     bounded_read(&root.join("manifest.json"), 1024 * 1024)
 }
-fn bounded_read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn bounded_read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_file() || meta.len() > limit {
         return Err(fail("bundle data is not a bounded regular file"));
@@ -79,7 +79,7 @@ fn bounded_read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn files(root: &Path, relative: &Path, result: &mut Vec<PathBuf>) -> io::Result<()> {
+pub(crate) fn files(root: &Path, relative: &Path, result: &mut Vec<PathBuf>) -> io::Result<()> {
     let path = root.join(relative);
     let meta = match fs::symlink_metadata(&path) {
         Ok(meta) => meta,
@@ -166,7 +166,7 @@ fn payload_hash(root: &Path) -> io::Result<String> {
     paths.sort();
     hash_paths(root, &paths)
 }
-fn hash_paths(root: &Path, paths: &[PathBuf]) -> io::Result<String> {
+pub(crate) fn hash_paths(root: &Path, paths: &[PathBuf]) -> io::Result<String> {
     let mut digest = Sha256::new();
     let mut total = 0;
     let mut buffer = [0u8; 65536];
@@ -200,6 +200,22 @@ fn hash_paths(root: &Path, paths: &[PathBuf]) -> io::Result<String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 fn source_hash(root: &Path) -> io::Result<String> {
+    crate::package::verify_source(root)?;
+    let mut digest = Sha256::new();
+    digest.update(binaries_hash(root)?);
+    for name in [
+        "SidePulse Tray.app",
+        "SidePulse Settings.app",
+        "SidePulse Virtual.app",
+    ] {
+        if let Some(app) = crate::package::application_source(root, std::ffi::OsStr::new(name)) {
+            digest.update(name);
+            digest.update(crate::package::tree_hash(&app)?);
+        }
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+fn binaries_hash(root: &Path) -> io::Result<String> {
     hash_paths(
         root,
         &crate::BINARIES
@@ -304,20 +320,23 @@ fn update_lock(destination: &Path) -> io::Result<fs::File> {
     Ok(file)
 }
 fn verify_prepared_binaries(root: &Path, stage: &StagePlan, expected: &str) -> io::Result<()> {
-    if source_hash(&root.join("bin"))? != expected {
+    if source_hash(&stage.source_dir)? != expected
+        || binaries_hash(&root.join("bin"))? != binaries_hash(&stage.source_dir)?
+    {
         return Err(fail("prepared binaries differ from the planned payload"));
     }
     for (bundle, index) in stage.manifest.application_bundles.iter().zip([3, 5, 6]) {
         let name = stage.manifest.binaries[index].file_name().unwrap();
-        if hash_paths(&root.join("bin"), &[name.into()])?
-            != hash_paths(
-                &root
-                    .join("applications")
-                    .join(bundle.file_name().unwrap())
-                    .join("Contents/MacOS"),
-                &[name.into()],
-            )?
+        let app = root.join("applications").join(bundle.file_name().unwrap());
+        let matches = if let Some(source) =
+            crate::package::application_source(&stage.source_dir, bundle.file_name().unwrap())
         {
+            crate::package::tree_hash(&source)? == crate::package::tree_hash(&app)?
+        } else {
+            hash_paths(&root.join("bin"), &[name.into()])?
+                == hash_paths(&app.join("Contents/MacOS"), &[name.into()])?
+        };
+        if !matches {
             return Err(fail(
                 "prepared application binary differs from the planned payload",
             ));
@@ -332,7 +351,7 @@ impl UpdatePlan {
         let backup = vacant_sibling(&destination, backup)?;
         let stage = StagePlan::new_internal(source, &destination, Platform::current()?, true)?;
         let data = snapshot(&destination)?;
-        let source_dir = fs::canonicalize(source)?;
+        let source_dir = crate::package::resolve_source(source)?;
         Ok(Self {
             destination: destination.clone(),
             backup,

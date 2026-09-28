@@ -159,13 +159,9 @@ fn main() -> eframe::Result {
         (Some(endpoint), None) => Some(endpoint),
         (None, None) => std::env::var("SIDEPULSE_NEXT_ENDPOINT").ok().or_else(|| {
             let executable = std::env::current_exe().ok()?;
-            std::fs::read_to_string(
-                executable
-                    .parent()?
-                    .parent()?
-                    .join("Resources/endpoint.txt"),
-            )
-            .ok()
+            sidepulse_installer::endpoint_from_executable(&executable)
+                .ok()
+                .flatten()
         }),
         _ => None,
     };

@@ -26,28 +26,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace --release --bins
-      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --source-dir target/release --stage-dir target/sidepulse-preview
+      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --package target/release target/native-package 0.1.0-preview
+      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --verify-package target/native-package
+      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --archive-package target/native-package target/sidepulse-native-preview.zip
+      - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --source-dir target/native-package --stage-dir target/sidepulse-preview
       - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --smoke-stage target/sidepulse-preview
       - uses: actions/upload-artifact@v4
         with:
           name: sidepulse-rust-preview-${{ matrix.os }}
           if-no-files-found: error
-          path: |
-            target/release/sidepulse-next
-            target/release/sidepulse-next-hook
-            target/release/sidepulse-next-service
-            target/release/sidepulse-next-tray
-            target/release/sidepulse-next-stage
-            target/release/sidepulse-next-settings
-            target/release/sidepulse-next-virtual
-            target/release/sidepulse-next-sd-guard
-            target/release/sidepulse-next-reply
-            target/release/sidepulse-next.exe
-            target/release/sidepulse-next-hook.exe
-            target/release/sidepulse-next-service.exe
-            target/release/sidepulse-next-tray.exe
-            target/release/sidepulse-next-stage.exe
-            target/release/sidepulse-next-settings.exe
-            target/release/sidepulse-next-virtual.exe
-            target/release/sidepulse-next-sd-guard.exe
-            target/release/sidepulse-next-reply.exe
+          path: target/sidepulse-native-preview.zip
