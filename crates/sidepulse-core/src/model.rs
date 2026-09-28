@@ -16,6 +16,29 @@ pub enum AgentMode {
 }
 
 impl AgentMode {
+    pub const ALL: [Self; 8] = [
+        Self::IdleReady,
+        Self::Working,
+        Self::ToolRunning,
+        Self::WaitingForInput,
+        Self::LongTaskProgress,
+        Self::BlockedError,
+        Self::Completed,
+        Self::Unknown,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::IdleReady => "idle_ready",
+            Self::Working => "working",
+            Self::ToolRunning => "tool_running",
+            Self::WaitingForInput => "waiting_for_input",
+            Self::LongTaskProgress => "long_task_progress",
+            Self::BlockedError => "blocked_error",
+            Self::Completed => "completed",
+            Self::Unknown => "unknown",
+        }
+    }
     pub fn priority(self) -> u8 {
         match self {
             Self::BlockedError => 1,

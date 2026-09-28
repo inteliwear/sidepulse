@@ -6,6 +6,31 @@ use sidepulse_core::AgentMode;
 
 use crate::{apply_brightness, normalize_led_text, program_for_mode, validate_led_text};
 
+pub const BUILTIN_ANIMATIONS: &[(&str, &str)] = &[
+    ("idle-pulse", "Idle pulse"),
+    ("cyan-roll", "Cyan roll"),
+    ("kitt", "KITT"),
+    ("kitt-red", "Red KITT"),
+    ("ember-idle", "Ember idle"),
+    ("ember-tide", "Ember tide"),
+    ("ember-lid-open", "Ember lid open"),
+    ("night-rider", "Night rider"),
+    ("purple-idle", "Purple idle"),
+    ("purple-tide", "Purple tide"),
+    ("purple-lid-open", "Purple lid open"),
+    ("lid-open", "Lid open"),
+    ("lid-closed", "Lid closed"),
+    ("amber-pulse", "Amber pulse"),
+    ("solid-green", "Solid green"),
+    ("cyan-complete", "Cyan complete"),
+    ("ember-attention", "Ember attention"),
+    ("ember-complete", "Ember complete"),
+    ("purple-attention", "Purple attention"),
+    ("purple-complete", "Purple complete"),
+    ("off", "Fade off"),
+    ("immediate-off", "Off"),
+];
+
 pub fn builtin_animation(id: &str, led_count: usize) -> Option<&'static str> {
     let dot = led_count == 2;
     Some(match (id, dot) {

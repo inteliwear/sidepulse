@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{MonitorSnapshot, PowerSnapshot};
+use crate::{AgentMode, MonitorSnapshot, PowerSnapshot};
 
 /// IPC data model shared by the service, CLI, and platform UI adapters.
 /// Each JSON message occupies one line and is limited to 1 MiB on the wire.
@@ -22,17 +22,45 @@ pub enum RequestKind {
     Settings,
     Power,
     Devices,
-    SelectDevice { root: String },
-    SetBrightness { brightness: u8 },
-    SetDisplayMode { mode: String },
-    SetBatterySettings { patch: BatterySettingsPatch },
-    SetAgentListSettings { patch: AgentListSettingsPatch },
-    SetSleepSettings { patch: SleepSettingsPatch },
-    SetSleepPolicy { policy: String },
-    SetTranscriptMonitoring { provider: String, enabled: bool },
+    Animations,
+    SetAgentAnimation {
+        mode: AgentMode,
+        style: String,
+        custom_program: Option<String>,
+    },
+    SelectDevice {
+        root: String,
+    },
+    SetBrightness {
+        brightness: u8,
+    },
+    SetDisplayMode {
+        mode: String,
+    },
+    SetBatterySettings {
+        patch: BatterySettingsPatch,
+    },
+    SetAgentListSettings {
+        patch: AgentListSettingsPatch,
+    },
+    SetSleepSettings {
+        patch: SleepSettingsPatch,
+    },
+    SetSleepPolicy {
+        policy: String,
+    },
+    SetTranscriptMonitoring {
+        provider: String,
+        enabled: bool,
+    },
     Subscribe,
-    IngestHook { provider: String, line: Value },
-    IngestRelay { message: Value },
+    IngestHook {
+        provider: String,
+        line: Value,
+    },
+    IngestRelay {
+        message: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +91,10 @@ pub enum ServerPayload {
         devices: Vec<DeviceInfo>,
         active_device: Option<String>,
     },
+    Animations {
+        choices: Vec<AnimationChoice>,
+        states: Vec<AgentAnimationState>,
+    },
     StateChanged {
         state: MonitorSnapshot,
     },
@@ -80,6 +112,19 @@ pub struct DeviceInfo {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnimationChoice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentAnimationState {
+    pub mode: AgentMode,
+    pub style: String,
+    pub program: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -212,6 +257,19 @@ impl ClientRequest {
             && root.is_empty()
         {
             return Err("invalid device root");
+        }
+        if let RequestKind::SetAgentAnimation {
+            style,
+            custom_program,
+            ..
+        } = &self.kind
+            && (style.is_empty()
+                || style.len() > 128
+                || custom_program
+                    .as_ref()
+                    .is_some_and(|program| program.len() > 65536))
+        {
+            return Err("invalid animation setting");
         }
         Ok(())
     }

@@ -2,6 +2,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -239,6 +240,56 @@ fn main() -> ExitCode {
             }
             service_settings_request(&endpoint, RequestKind::SetAgentListSettings { patch })
         }
+        Some("service-animation") => {
+            let (Some(endpoint), Some(mode), Some(style)) = (args.next(), args.next(), args.next())
+            else {
+                eprintln!(
+                    "usage: sidepulse-next service-animation ENDPOINT MODE STYLE [--program FILE]"
+                );
+                return ExitCode::from(2);
+            };
+            let mode = match serde_json::from_value(serde_json::Value::String(mode)) {
+                Ok(mode) => mode,
+                Err(_) => {
+                    eprintln!("sidepulse-next: invalid agent mode");
+                    return ExitCode::from(2);
+                }
+            };
+            let custom_program = match (args.next(), args.next(), args.next()) {
+                (None, None, None) => None,
+                (Some(flag), Some(path), None) if flag == "--program" => {
+                    match fs::File::open(path).and_then(|file| {
+                        let mut program = String::new();
+                        file.take(65_537).read_to_string(&mut program)?;
+                        if program.len() > 65_536 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "custom program exceeds 65536 bytes",
+                            ));
+                        }
+                        Ok(program)
+                    }) {
+                        Ok(program) => Some(program),
+                        Err(error) => {
+                            eprintln!("sidepulse-next: {error}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("sidepulse-next: use --program FILE for a custom animation");
+                    return ExitCode::from(2);
+                }
+            };
+            service_settings_request(
+                &endpoint,
+                RequestKind::SetAgentAnimation {
+                    mode,
+                    style,
+                    custom_program,
+                },
+            )
+        }
         Some("service-transcript") => {
             let (Some(endpoint), Some(provider), Some(state), None) =
                 (args.next(), args.next(), args.next(), args.next())
@@ -304,7 +355,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

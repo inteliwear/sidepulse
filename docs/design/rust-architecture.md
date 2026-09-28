@@ -84,9 +84,12 @@ transcript monitoring, and macOS awake preferences. macOS staging now includes
 native `.app` bundles for tray and settings, with the isolated endpoint in
 their resources. Local window checks exercised saving, preserving manual LED
 output, visible external-edit conflicts, retained edits, and reconnecting
-after a service restart. Animation editing, session-opening preferences,
-history, relay controls, virtual display, and broader sleep controls still
-need implementation.
+after a service restart. The animation page saves built-in presets and per-status custom LED programs
+through the service, validates 2- and 8-LED output before saving, and keeps the
+working/tool/progress modes grouped as in the Python application. Existing
+named custom assets remain selectable and are preserved. Named asset and
+profile editing, session-opening preferences, history, relay controls, virtual
+display, and broader sleep controls still need implementation.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent

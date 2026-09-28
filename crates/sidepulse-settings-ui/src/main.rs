@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use eframe::egui;
 use sidepulse_core::{
-    AgentListSettingsPatch, BatterySettingsPatch, ChargerBaseline, ClientRequest, DeviceInfo,
-    MonitorSnapshot, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload,
+    AgentAnimationState, AgentListSettingsPatch, AgentMode, AnimationChoice, BatterySettingsPatch,
+    ChargerBaseline, ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, RequestKind,
+    ServerMessage, ServerPayload,
 };
 use sidepulse_ui_model::{DISPLAY_CHOICES, SettingsView, TrayState, device_display_name};
 
@@ -15,6 +16,8 @@ struct ServiceState {
     activity: TrayState,
     devices: Vec<DeviceInfo>,
     active_device: Option<String>,
+    animation_choices: Vec<AnimationChoice>,
+    animation_states: Vec<AgentAnimationState>,
 }
 
 enum Update {
@@ -31,6 +34,7 @@ enum DraftKind {
     Battery,
     Monitoring,
     Sleep,
+    Animation,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -73,11 +77,17 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
         &snapshot,
         settings.controls.recent_session_retention_seconds,
     );
+    let ServerPayload::Animations { choices, states } = request(endpoint, RequestKind::Animations)?
+    else {
+        return Err("The service did not return animations.".into());
+    };
     Ok(ServiceState {
         settings,
         activity,
         devices,
         active_device,
+        animation_choices: choices,
+        animation_states: states,
     })
 }
 
@@ -98,6 +108,7 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
                         RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
                         RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
+                        RequestKind::SetAgentAnimation { .. } => DraftKind::Animation,
                         _ => DraftKind::None,
                     };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
@@ -123,6 +134,7 @@ enum Page {
     Battery,
     Monitoring,
     Sleep,
+    Animations,
 }
 
 struct SettingsApp {
@@ -147,6 +159,11 @@ struct SettingsApp {
     sleep_dirty: bool,
     sleep_saving: bool,
     sleep_battery_percent: f64,
+    animation_mode: AgentMode,
+    animation_style: String,
+    animation_program: String,
+    animation_dirty: bool,
+    animation_saving: bool,
 }
 
 impl SettingsApp {
@@ -174,6 +191,11 @@ impl SettingsApp {
             sleep_dirty: false,
             sleep_saving: false,
             sleep_battery_percent: 20.0,
+            animation_mode: AgentMode::Working,
+            animation_style: "cyan-roll".into(),
+            animation_program: String::new(),
+            animation_dirty: false,
+            animation_saving: false,
         }
     }
 
@@ -207,6 +229,15 @@ impl SettingsApp {
                     if !self.sleep_dirty {
                         self.sleep_battery_percent = state.settings.sleep_min_battery_percent;
                     }
+                    if !self.animation_dirty
+                        && let Some(animation) = state
+                            .animation_states
+                            .iter()
+                            .find(|animation| animation.mode == self.animation_mode)
+                    {
+                        self.animation_style = animation.style.clone();
+                        self.animation_program = animation.program.clone();
+                    }
                     self.state = Some(*state);
                 }
                 Update::State(Err(_)) => self.connected = false,
@@ -232,6 +263,12 @@ impl SettingsApp {
                             }
                         }
                         DraftKind::None => {}
+                        DraftKind::Animation => {
+                            self.animation_saving = false;
+                            if success {
+                                self.animation_dirty = false;
+                            }
+                        }
                     }
                     self.message = Some(match result {
                         Ok(()) => ("Saved".into(), false),
@@ -530,6 +567,99 @@ impl SettingsApp {
         #[cfg(not(target_os = "macos"))]
         ui.label("Sleep prevention is currently available on macOS.");
     }
+
+    fn animations(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Agent animations");
+        ui.label("Choose a device animation for each agent status.");
+        ui.add_space(16.0);
+        let Some(state) = &self.state else {
+            return;
+        };
+        let choices = state.animation_choices.clone();
+        let states = state.animation_states.clone();
+        ui.add_enabled_ui(!self.animation_saving, |ui| {
+            ui.add_enabled_ui(!self.animation_dirty, |ui| {
+                egui::ComboBox::from_id_salt("animation-mode")
+                    .selected_text(self.animation_mode.label())
+                    .show_ui(ui, |ui| {
+                        for mode in AgentMode::ALL {
+                            if ui
+                                .selectable_value(&mut self.animation_mode, mode, mode.label())
+                                .changed()
+                                && let Some(animation) =
+                                    states.iter().find(|animation| animation.mode == mode)
+                            {
+                                self.animation_style = animation.style.clone();
+                                self.animation_program = animation.program.clone();
+                            }
+                        }
+                    });
+            });
+            ui.add_space(8.0);
+            let selected = choices
+                .iter()
+                .find(|choice| choice.id == self.animation_style)
+                .map_or(self.animation_style.as_str(), |choice| choice.name.as_str())
+                .to_owned();
+            egui::ComboBox::from_id_salt("animation-style")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for choice in choices {
+                        if ui
+                            .selectable_value(&mut self.animation_style, choice.id, choice.name)
+                            .changed()
+                        {
+                            self.animation_dirty = true;
+                            if self.animation_style == "custom"
+                                && self.animation_program.trim().is_empty()
+                            {
+                                self.animation_program = "#00E5FF 500ms pulse\nrepeat\n".into();
+                            }
+                        }
+                    }
+                });
+            if matches!(
+                self.animation_mode,
+                AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress
+            ) {
+                ui.weak("Working, tool running, and long task progress share their animation.");
+            }
+            if self.animation_style == "custom" {
+                ui.add_space(12.0);
+                ui.label("Custom LED program");
+                self.animation_dirty |= ui
+                    .add(
+                        egui::TextEdit::multiline(&mut self.animation_program)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(10),
+                    )
+                    .changed();
+                ui.weak("The program is checked before it is saved or sent to a device.");
+            }
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.animation_dirty, egui::Button::new("Save animation"))
+                    .clicked()
+                {
+                    self.send(RequestKind::SetAgentAnimation {
+                        mode: self.animation_mode,
+                        style: self.animation_style.clone(),
+                        custom_program: (self.animation_style == "custom")
+                            .then(|| self.animation_program.clone()),
+                    });
+                    self.animation_saving = true;
+                }
+                if ui
+                    .add_enabled(self.animation_dirty, egui::Button::new("Reset changes"))
+                    .clicked()
+                {
+                    self.animation_dirty = false;
+                }
+            });
+        });
+    }
 }
 
 impl eframe::App for SettingsApp {
@@ -556,6 +686,7 @@ impl eframe::App for SettingsApp {
                     (Page::Battery, "Battery"),
                     (Page::Monitoring, "Monitoring"),
                     (Page::Sleep, "Sleep"),
+                    (Page::Animations, "Animations"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -578,6 +709,7 @@ impl eframe::App for SettingsApp {
                     }
                     Page::Monitoring => self.monitoring(ui),
                     Page::Sleep => self.sleep(ui),
+                    Page::Animations => self.animations(ui),
                 });
             });
         });

@@ -271,6 +271,19 @@ impl Service {
         Ok(())
     }
 
+    pub fn set_agent_animation(
+        &self,
+        mode: sidepulse_core::AgentMode,
+        style: &str,
+        custom_program: Option<&str>,
+    ) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_agent_animation(mode, style, custom_program)
+    }
+
     pub fn set_sleep_settings(&self, patch: &SleepSettingsPatch) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -476,6 +489,30 @@ impl Service {
             );
         }
         match request.kind {
+            RequestKind::Animations => {
+                let payload = self
+                    .settings
+                    .lock()
+                    .map_err(poisoned)?
+                    .as_ref()
+                    .map(|store| store.animation_catalog())
+                    .transpose()?
+                    .map_or_else(
+                        || ServerPayload::Error {
+                            code: "settings_unavailable".into(),
+                            message: "no settings path is configured".into(),
+                        },
+                        |(choices, states)| ServerPayload::Animations { choices, states },
+                    );
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::Snapshot => write_message(
                 &mut stream,
                 &ServerMessage {
@@ -674,10 +711,16 @@ impl Service {
                     },
                 )
             }
-            kind @ (RequestKind::SetBatterySettings { .. }
+            kind @ (RequestKind::SetAgentAnimation { .. }
+            | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::SetAgentAnimation {
+                        mode,
+                        style,
+                        custom_program,
+                    } => self.set_agent_animation(mode, &style, custom_program.as_deref()),
                     RequestKind::SetBatterySettings { patch } => self.set_battery_settings(&patch),
                     RequestKind::SetAgentListSettings { patch } => {
                         self.set_agent_list_settings(&patch)
@@ -1566,6 +1609,77 @@ mod tests {
                 ""
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn animation_changes_apply_to_device_and_working_modes_without_losing_settings() {
+        use sidepulse_core::AgentMode;
+        let directory = tempfile::tempdir().unwrap();
+        let device = directory.path().join("SidePulseDot");
+        fs::create_dir(&device).unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"agent_animations":{"working":{"custom":"keep"}},"unknown":9}"#,
+        )
+        .unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service.configure_device(&device, 255).unwrap();
+        let event = parse_log_line("claude", &serde_json::json!({"hook_event_name":"PreToolUse","session_id":"animation","logged_at":Utc::now().to_rfc3339()}).to_string()).unwrap();
+        service.ingest_record(&event).unwrap();
+        service
+            .set_agent_animation(AgentMode::Working, "kitt-red", None)
+            .unwrap();
+        service.sync_device().unwrap();
+        let expected = program_for_style(AgentMode::ToolRunning, 2, 255, "kitt-red", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(device.join("LEDS.LED")).unwrap(),
+            expected
+        );
+        let saved = service.settings_snapshot().unwrap().unwrap().document;
+        for mode in ["working", "tool_running", "long_task_progress"] {
+            assert_eq!(saved["agent_animations"][mode]["style"], "kitt-red");
+        }
+        assert_eq!(saved["agent_animations"]["working"]["custom"], "keep");
+        assert_eq!(saved["unknown"], 9);
+        let before = fs::read(&path).unwrap();
+        assert!(
+            service
+                .set_agent_animation(AgentMode::Working, "custom", Some(&"#123456\n".repeat(21)))
+                .is_err()
+        );
+        assert!(
+            service
+                .set_agent_animation(AgentMode::Working, "missing-style", None)
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        service
+            .set_agent_animation(
+                AgentMode::ToolRunning,
+                "custom",
+                Some("#123456 200ms ease\nrepeat"),
+            )
+            .unwrap();
+        service.sync_device().unwrap();
+        assert!(
+            fs::read_to_string(device.join("LEDS.LED"))
+                .unwrap()
+                .contains("#123456 200ms ease")
+        );
+        let settings = service.settings.lock().unwrap();
+        let (choices, states) = settings.as_ref().unwrap().animation_catalog().unwrap();
+        assert!(choices.iter().any(|choice| choice.id == "kitt-red"));
+        assert!(
+            states
+                .iter()
+                .filter(|state| matches!(
+                    state.mode,
+                    AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress
+                ))
+                .all(|state| state.style == "custom" && state.program.contains("#123456"))
         );
     }
 

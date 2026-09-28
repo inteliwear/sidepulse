@@ -13,7 +13,7 @@ use sidepulse_core::SleepSettingsPatch;
 use sidepulse_core::{
     AgentListSettingsPatch, AgentMode, BatterySettingsPatch, ChargerBaseline, MonitoringPolicy,
 };
-use sidepulse_device::animations::builtin_animation;
+use sidepulse_device::animations::{BUILTIN_ANIMATIONS, builtin_animation, program_for_style};
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
 
@@ -286,16 +286,7 @@ impl SettingsStore {
     }
 
     pub fn animation_for_mode(&self, mode: AgentMode) -> io::Result<(String, String)> {
-        let key = match mode {
-            AgentMode::IdleReady => "idle_ready",
-            AgentMode::Working => "working",
-            AgentMode::ToolRunning => "tool_running",
-            AgentMode::WaitingForInput => "waiting_for_input",
-            AgentMode::LongTaskProgress => "long_task_progress",
-            AgentMode::BlockedError => "blocked_error",
-            AgentMode::Completed => "completed",
-            AgentMode::Unknown => "unknown",
-        };
+        let key = mode.key();
         let default = match mode {
             AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress => {
                 "cyan-roll"
@@ -376,6 +367,157 @@ impl SettingsStore {
         } else {
             Ok((default.to_owned(), String::new()))
         }
+    }
+
+    pub fn animation_catalog(
+        &self,
+    ) -> io::Result<(
+        Vec<sidepulse_core::AnimationChoice>,
+        Vec<sidepulse_core::AgentAnimationState>,
+    )> {
+        use sidepulse_core::{AgentAnimationState, AnimationChoice};
+        let mut choices = vec![AnimationChoice {
+            id: "default".into(),
+            name: "Use default".into(),
+        }];
+        choices.extend(BUILTIN_ANIMATIONS.iter().map(|(id, name)| AnimationChoice {
+            id: (*id).into(),
+            name: (*name).into(),
+        }));
+        let custom = self
+            .document
+            .get("custom_agent_animations")
+            .and_then(Value::as_object);
+        if let Some(custom) = custom {
+            let mut named = custom
+                .iter()
+                .filter(|(id, value)| id.starts_with("custom:") && value.is_object())
+                .map(|(id, value)| AnimationChoice {
+                    id: id.clone(),
+                    name: value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or(id)
+                        .into(),
+                })
+                .collect::<Vec<_>>();
+            named.sort_by_key(|choice| choice.name.to_lowercase());
+            choices.extend(named);
+        }
+        choices.push(AnimationChoice {
+            id: "custom".into(),
+            name: "Custom program for this status".into(),
+        });
+        let states = AgentMode::ALL
+            .into_iter()
+            .map(|mode| {
+                let (style, program) = self.animation_for_mode(mode)?;
+                let raw = self
+                    .document
+                    .get("agent_animations")
+                    .and_then(|items| items.get(mode.key()))
+                    .and_then(|value| value.get("style"))
+                    .and_then(Value::as_str);
+                let style = raw
+                    .filter(|raw| choices.iter().any(|choice| choice.id == *raw))
+                    .unwrap_or(&style)
+                    .to_owned();
+                Ok(AgentAnimationState {
+                    mode,
+                    style,
+                    program,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok((choices, states))
+    }
+
+    pub fn set_agent_animation(
+        &mut self,
+        mode: AgentMode,
+        style: &str,
+        custom_program: Option<&str>,
+    ) -> io::Result<()> {
+        let valid = matches!(style, "default" | "custom")
+            || builtin_animation(style, 8).is_some()
+            || (style.starts_with("custom:")
+                && self
+                    .document
+                    .get("custom_agent_animations")
+                    .and_then(|items| items.get(style))
+                    .is_some());
+        if !valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown animation style",
+            ));
+        }
+        let program = if style == "custom" {
+            Some(sidepulse_device::normalize_led_text(
+                custom_program.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "custom program is required")
+                })?,
+            ))
+        } else {
+            None
+        };
+        let mut updated = self.document.clone();
+        let animations = updated
+            .entry("agent_animations")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "agent_animations must be an object",
+                )
+            })?;
+        let targets = if matches!(
+            mode,
+            AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress
+        ) {
+            vec![
+                AgentMode::Working,
+                AgentMode::ToolRunning,
+                AgentMode::LongTaskProgress,
+            ]
+        } else {
+            vec![mode]
+        };
+        for target in targets {
+            let setting = animations
+                .entry(target.key())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "animation setting must be an object",
+                    )
+                })?;
+            setting.insert("style".into(), json!(style));
+            if let Some(program) = &program {
+                setting.insert("custom_program".into(), json!(program));
+            } else {
+                setting.remove("custom_program");
+            }
+        }
+        let candidate = Self {
+            path: self.path.clone(),
+            document: updated.clone(),
+            original: self.original.clone(),
+        };
+        let (resolved_style, resolved_program) = candidate.animation_for_mode(mode)?;
+        for count in [2, 8] {
+            program_for_style(mode, count, 255, &resolved_style, &resolved_program)?;
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
     }
 
     pub fn set_brightness_for_device(&mut self, path: &Path, brightness: u8) -> io::Result<()> {
