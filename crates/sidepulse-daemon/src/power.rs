@@ -42,7 +42,7 @@ impl MacPowerController {
             let running = self
                 .caffeinate
                 .as_mut()
-                .is_some_and(|child| child.try_wait().ok().flatten().is_none());
+                .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()));
             if !running {
                 self.caffeinate = Some(
                     Command::new("/usr/bin/caffeinate")

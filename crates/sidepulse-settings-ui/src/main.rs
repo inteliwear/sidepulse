@@ -23,6 +23,7 @@ struct ServiceState {
     history_points: Vec<sidepulse_core::HistoryPoint>,
     history_timeframe: u32,
     history_sampled: bool,
+    lid_durations: [f64; 2],
 }
 
 enum Update {
@@ -44,6 +45,7 @@ enum DraftKind {
     Animation,
     Terminal,
     Library,
+    LidTiming,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -115,6 +117,21 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
         history_points: points,
         history_timeframe: timeframe_seconds,
         history_sampled: sampled,
+        lid_durations: match payload {
+            ServerPayload::Settings { settings, .. } => [
+                settings
+                    .get("lid_open_animation")
+                    .and_then(|value| value.get("duration_seconds"))
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.0),
+                settings
+                    .get("lid_closed_animation")
+                    .and_then(|value| value.get("duration_seconds"))
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(1.3),
+            ],
+            _ => [1.0, 1.3],
+        },
     })
 }
 
@@ -180,6 +197,7 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         RequestKind::SetSessionTerminal { .. } => DraftKind::Terminal,
                         RequestKind::EditAnimationLibrary { .. }
                         | RequestKind::SetAnimationState { .. } => DraftKind::Library,
+                        RequestKind::SetLidAnimationTiming { .. } => DraftKind::LidTiming,
                         _ => DraftKind::None,
                     };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
@@ -252,6 +270,8 @@ struct SettingsApp {
     asset_name: String,
     asset_program: String,
     library_saving: bool,
+    lid_durations: [f64; 2],
+    lid_duration_dirty: bool,
 }
 
 impl SettingsApp {
@@ -299,6 +319,8 @@ impl SettingsApp {
             asset_name: String::new(),
             asset_program: "#00E5FF".into(),
             library_saving: false,
+            lid_durations: [1.0, 1.3],
+            lid_duration_dirty: false,
         }
     }
 
@@ -374,6 +396,9 @@ impl SettingsApp {
                     if !self.sleep_dirty {
                         self.sleep_battery_percent = state.settings.sleep_min_battery_percent;
                     }
+                    if !self.lid_duration_dirty {
+                        self.lid_durations = state.lid_durations;
+                    }
                     if !self.animation_dirty
                         && let Some(animation) = state
                             .animation_states
@@ -445,6 +470,12 @@ impl SettingsApp {
                         DraftKind::None => {}
                         DraftKind::Library => {
                             self.library_saving = false;
+                        }
+                        DraftKind::LidTiming => {
+                            self.library_saving = false;
+                            if success {
+                                self.lid_duration_dirty = false;
+                            }
                         }
                         DraftKind::Animation => {
                             self.animation_saving = false;
@@ -1339,7 +1370,19 @@ impl SettingsApp {
                             }
                         });
                     }
+                    ui.weak("Custom transition duration; default lid presets use their built-in timing.");
+                ui.horizontal(|ui| {
+                    ui.label("Open seconds");
+                    self.lid_duration_dirty |= ui.add(egui::DragValue::new(&mut self.lid_durations[0]).range(0.1..=10.0).speed(0.1)).changed();
+                    ui.label("Close seconds");
+                    self.lid_duration_dirty |= ui.add(egui::DragValue::new(&mut self.lid_durations[1]).range(0.1..=10.0).speed(0.1)).changed();
+                    if ui.add_enabled(self.lid_duration_dirty, egui::Button::new("Save timing")).clicked() {
+                        self.send(RequestKind::SetLidAnimationTiming { open_seconds: Some(self.lid_durations[0]), close_seconds: Some(self.lid_durations[1]) });
+                        self.library_saving = true;
+                    }
+                    if ui.add_enabled(self.lid_duration_dirty, egui::Button::new("Reset timing")).clicked() { self.lid_duration_dirty = false; }
                 });
+            });
             },
         );
     }

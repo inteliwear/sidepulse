@@ -293,6 +293,7 @@ pub struct DeviceOutput {
     target: PathBuf,
     brightness: u8,
     last_program: Option<String>,
+    last_keepalive: Option<std::time::Instant>,
 }
 
 impl DeviceOutput {
@@ -301,6 +302,7 @@ impl DeviceOutput {
             target: target_from_device_path(path),
             brightness,
             last_program: None,
+            last_keepalive: None,
         }
     }
 
@@ -314,6 +316,37 @@ impl DeviceOutput {
 
     pub fn set_brightness(&mut self, brightness: u8) {
         self.brightness = brightness;
+    }
+
+    /// Touch the firmware keepalive file once a minute without changing content.
+    pub fn poke_keepalive(&mut self, now: std::time::Instant) -> io::Result<bool> {
+        if self.last_keepalive.is_some_and(|previous| {
+            now.saturating_duration_since(previous) < std::time::Duration::from_secs(60)
+        }) {
+            return Ok(false);
+        }
+        self.last_keepalive = Some(now);
+        let parent = self.target.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "device target has no parent")
+        })?;
+        let path = parent.join("keepalive");
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing to touch a keepalive symlink",
+            ));
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        let wall_time = std::time::SystemTime::now();
+        file.set_times(
+            fs::FileTimes::new()
+                .set_accessed(wall_time)
+                .set_modified(wall_time),
+        )?;
+        Ok(true)
     }
 
     pub fn sync(&mut self, mode: AgentMode) -> io::Result<bool> {
@@ -439,5 +472,26 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].root, drive);
         fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn keepalive_preserves_content_and_respects_the_saved_interval() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("keepalive");
+        fs::write(&path, "firmware metadata").unwrap();
+        let mut output = DeviceOutput::new(directory.path(), 255);
+        let now = std::time::Instant::now();
+        assert!(output.poke_keepalive(now).unwrap());
+        assert!(
+            !output
+                .poke_keepalive(now + std::time::Duration::from_secs(59))
+                .unwrap()
+        );
+        assert!(
+            output
+                .poke_keepalive(now + std::time::Duration::from_secs(60))
+                .unwrap()
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "firmware metadata");
+        assert!(!directory.path().join("LEDS.LED").exists());
     }
 }

@@ -30,6 +30,10 @@ pub enum RequestKind {
     ExportAnimationProfile {
         id: Option<String>,
     },
+    SetLidAnimationTiming {
+        open_seconds: Option<f64>,
+        close_seconds: Option<f64>,
+    },
     SetAnimationState {
         state: String,
         style: String,
@@ -400,6 +404,17 @@ impl ClientRequest {
         }
         if let RequestKind::ExportAnimationProfile { id: Some(id) } = &self.kind {
             crate::validate_animation_id(id, "profile:")?;
+        }
+        if let RequestKind::SetLidAnimationTiming {
+            open_seconds,
+            close_seconds,
+        } = &self.kind
+            && [open_seconds, close_seconds]
+                .into_iter()
+                .flatten()
+                .any(|seconds| !seconds.is_finite() || !(0.1..=10.0).contains(seconds))
+        {
+            return Err("lid duration must be between 0.1 and 10 seconds");
         }
         if let RequestKind::SetAnimationState {
             state,

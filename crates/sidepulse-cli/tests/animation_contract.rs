@@ -28,7 +28,7 @@ fn profiles_and_named_assets_round_trip_through_cli_and_ipc() {
     service.configure_settings(&path).unwrap();
     let listener = sidepulse_ipc::bind(&endpoint).unwrap();
     let server = std::thread::spawn(move || {
-        for _ in 0..12 {
+        for _ in 0..13 {
             service
                 .serve_connection(listener.accept().unwrap())
                 .unwrap();
@@ -64,6 +64,8 @@ fn profiles_and_named_assets_round_trip_through_cli_and_ipc() {
         &["save", "My light", program.to_str().unwrap()],
     );
     success("service-animation", &["working", "custom:my-light"]);
+    let timing = success("service-lid-duration", &["lid_closed", "2.5"]);
+    assert_eq!(timing["lid_closed_animation"]["duration_seconds"], 2.5);
     success("animation-profile", &["save", "Custom pattern"]);
     let mut exported = success("animation-profile", &["export", "profile:custom-pattern"]);
     assert_eq!(

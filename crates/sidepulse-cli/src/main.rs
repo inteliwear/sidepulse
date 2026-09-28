@@ -361,6 +361,31 @@ fn main() -> ExitCode {
             }
             service_settings_request(&endpoint, RequestKind::SetAgentListSettings { patch })
         }
+        Some("service-lid-duration") => {
+            let (Some(endpoint), Some(state), Some(seconds), None) =
+                (args.next(), args.next(), args.next(), args.next())
+            else {
+                eprintln!(
+                    "usage: sidepulse-next service-lid-duration ENDPOINT lid_open|lid_closed SECONDS"
+                );
+                return ExitCode::from(2);
+            };
+            let Ok(seconds) = seconds.parse() else {
+                eprintln!("sidepulse-next: invalid duration");
+                return ExitCode::from(2);
+            };
+            if !matches!(state.as_str(), "lid_open" | "lid_closed") {
+                eprintln!("sidepulse-next: invalid lid animation state");
+                return ExitCode::from(2);
+            }
+            service_settings_request(
+                &endpoint,
+                RequestKind::SetLidAnimationTiming {
+                    open_seconds: (state == "lid_open").then_some(seconds),
+                    close_seconds: (state == "lid_closed").then_some(seconds),
+                },
+            )
+        }
         Some("service-animation") => {
             let (Some(endpoint), Some(mode), Some(style)) = (args.next(), args.next(), args.next())
             else {
@@ -473,7 +498,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | animation-profile ENDPOINT OPERATION | animation-asset ENDPOINT OPERATION | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | animation-profile ENDPOINT OPERATION | animation-asset ENDPOINT OPERATION | service-lid-duration ENDPOINT lid_open|lid_closed SECONDS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

@@ -351,8 +351,7 @@ remains authoritative for users until the delivery gates above pass.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
 3. Port the remaining settings controls, relay, link, battery and sleep policy,
-   lid transition output and final-frame holding, and native helper recovery
-   into service modules.
+   native helper recovery into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
 5. Cover the remaining CLI entry points, turn the staged native binaries into
@@ -406,9 +405,33 @@ referenced by statuses or profiles cannot be deleted. Named assets are editable
 in the native window. Profiles can be applied, captured, imported from JSON, and
 exported as JSON there. The CLI provides `animation-profile` and `animation-asset`
 commands for file-based workflows; `service-animation` also accepts `lid_open`
-and `lid_closed` state selections. Actual lid-event output remains separate work.
+and `lid_closed` state selections. Lid-event output and final-frame holding are described below.
 
 Portable CLI/IPC tests cover import/export, identifier collisions, working-mode
 grouping, invalid programs, and built-in protection. Persistence tests cover
 external-edit conflicts, rollback of new files, inline promotion, restart, and
 symlink directories. Native controls still await visual checks on an unlocked Mac.
+
+
+## Lid output and device keepalive
+
+The core now owns lid edge detection, transition timing, interrupted transitions,
+and final-output holding. The service caches read-only power observations and
+applies this policy when it drives a physical device. A close transition can
+finish and retain its final frame until opening the lid or resuming work releases
+the hold. Unknown observations preserve the last known lid state, and startup
+with a closed lid does not invent an animation event. Manual output remains
+untouched. The virtual display keeps its existing independent behavior.
+
+The legacy 0.15-second restore allowance, default transition durations, working
+awake behavior, and five-minute completion/input/error grace are represented
+in pure policy types. Custom transition duration saves are atomic and retain
+existing programs and unknown settings. The native animation page and CLI can
+save timing. The service touches the firmware's `keepalive` file once a minute,
+preserving its content, including while output is manual or held.
+
+Deterministic tests drive simulated lid observations into a real temporary LED
+file, verify transition/hold/open/manual behavior, interrupted transitions,
+unknown readings, startup, grace expiry, and atomic duration saves. Native lid
+hardware and power-control execution still need validation; automatic system
+power changes remain behind the explicit `--power-control` preview flag.

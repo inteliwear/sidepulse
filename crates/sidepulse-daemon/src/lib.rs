@@ -57,6 +57,16 @@ pub struct Service {
     history: Arc<Mutex<history::HistoryStore>>,
     battery_diagnostics: Arc<Mutex<Option<BatterySnapshot>>>,
     history_power: Arc<Mutex<HistoryPowerState>>,
+    power_observation: Arc<Mutex<Option<sidepulse_core::PowerSnapshot>>>,
+    lid_output: Arc<Mutex<sidepulse_core::LidOutputPolicy>>,
+    output_started: Arc<OutputClock>,
+}
+
+struct OutputClock(Instant);
+impl Default for OutputClock {
+    fn default() -> Self {
+        Self(Instant::now())
+    }
 }
 
 #[derive(Default)]
@@ -646,6 +656,31 @@ impl Service {
     }
 
     /// Only the service calls this; tray and CLI clients receive read-only snapshots.
+    pub fn set_lid_animation_timing(
+        &self,
+        open_seconds: Option<f64>,
+        close_seconds: Option<f64>,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_lid_animation_timing(open_seconds, close_seconds)
+    }
+
+    pub fn observe_power(&self, observation: &sidepulse_core::PowerSnapshot) -> io::Result<()> {
+        let mut cached = self.power_observation.lock().map_err(poisoned)?;
+        let mut observation = observation.clone();
+        if observation.lid_closed.is_none() {
+            observation.lid_closed = cached.as_ref().and_then(|cached| cached.lid_closed);
+        }
+        *cached = Some(observation);
+        Ok(())
+    }
+
     pub fn sync_device(&self) -> io::Result<Option<bool>> {
         let battery = self.battery_preview.lock().map_err(poisoned)?.latest;
         self.render_device_with_battery_at(battery, Instant::now())
@@ -686,7 +721,8 @@ impl Service {
         battery: Option<BatteryState>,
         now: Instant,
     ) -> io::Result<Option<bool>> {
-        let mode = self.snapshot()?.aggregate.mode;
+        let snapshot = self.snapshot()?;
+        let mode = snapshot.aggregate.mode;
         let mut device = self.device.lock().map_err(poisoned)?;
         let settings = self.settings.lock().map_err(poisoned)?;
         let Some(output) = device.as_mut() else {
@@ -701,8 +737,65 @@ impl Service {
             .map_err(poisoned)?
             .display(configured, now)
             .to_owned();
+        let observation = self
+            .power_observation
+            .lock()
+            .map_err(poisoned)?
+            .clone()
+            .unwrap_or_default();
+        let store = settings.as_ref();
+        let policy = store.map_or(
+            sidepulse_core::AwakePolicy::Agents,
+            SettingsStore::sleep_policy,
+        );
+        let threshold = store.map_or(20.0, SettingsStore::sleep_battery_threshold);
+        let inputs = sidepulse_core::SleepInputs {
+            policy,
+            agents_active: Some(snapshot.aggregate.active_count > 0),
+            battery_safeguard_active: sidepulse_core::battery_safeguard_active(
+                battery.map(|battery| sidepulse_core::BatteryPower {
+                    percent: f64::from(battery.percent),
+                    present: true,
+                    plugged_in: battery.is_plugged,
+                }),
+                threshold,
+            ),
+            lid_closed: observation.lid_closed,
+            external_display_active: observation.external_display_active,
+        };
+        let now_ms = now
+            .saturating_duration_since(self.output_started.0)
+            .as_millis() as u64;
+        let action = self.lid_output.lock().map_err(poisoned)?.action(
+            inputs,
+            now_ms,
+            store.map_or(1000, |store| store.lid_animation_duration_ms("lid_open")),
+            store.map_or(1300, |store| store.lid_animation_duration_ms("lid_closed")),
+        );
         if display == "custom" {
             return Ok(Some(false));
+        }
+        match action {
+            sidepulse_core::LidOutputAction::Hold => return Ok(Some(false)),
+            sidepulse_core::LidOutputAction::Transition { state } => {
+                let (style, custom) = if let Some(store) = store {
+                    store.animation_for_state(state)?
+                } else {
+                    (
+                        sidepulse_core::default_animation(state).into(),
+                        String::new(),
+                    )
+                };
+                let program = program_for_style(
+                    mode,
+                    led_count_for_target(output.target()),
+                    output.brightness(),
+                    &style,
+                    &custom,
+                )?;
+                return output.sync_program(&program).map(Some);
+            }
+            sidepulse_core::LidOutputAction::Live => {}
         }
         let battery_display = display == "battery";
         if battery_display && battery.is_none() {
@@ -1093,7 +1186,8 @@ impl Service {
                     },
                 )
             }
-            kind @ (RequestKind::EditAnimationLibrary { .. }
+            kind @ (RequestKind::SetLidAnimationTiming { .. }
+            | RequestKind::EditAnimationLibrary { .. }
             | RequestKind::SetAnimationState { .. }
             | RequestKind::SetAgentAnimation { .. }
             | RequestKind::SetSessionOpenPreference { .. }
@@ -1104,6 +1198,10 @@ impl Service {
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::SetLidAnimationTiming {
+                        open_seconds,
+                        close_seconds,
+                    } => self.set_lid_animation_timing(open_seconds, close_seconds),
                     RequestKind::EditAnimationLibrary { edit } => {
                         self.edit_animation_library(&edit)
                     }
@@ -1439,6 +1537,8 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         let power_service = service.clone();
         std::thread::spawn(move || {
             let mut controller = power::MacPowerController::new();
+            let mut activity = sidepulse_core::AwakeActivity::default();
+            let started = Instant::now();
             let mut last_error = None;
             loop {
                 let result = (|| -> io::Result<()> {
@@ -1465,13 +1565,17 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                             plugged_in: state.is_plugged,
                         });
                     let observation = power::observe()?;
-                    let plan = plan_sleep(SleepInputs {
-                        policy,
-                        agents_active: Some(state.aggregate.active_count > 0),
-                        battery_safeguard_active: battery_safeguard_active(battery, threshold),
-                        lid_closed: observation.lid_closed,
-                        external_display_active: observation.external_display_active,
-                    });
+                    let plan =
+                        plan_sleep(SleepInputs {
+                            policy,
+                            agents_active: Some(activity.requested(
+                                state.aggregate.mode,
+                                started.elapsed().as_millis() as u64,
+                            )),
+                            battery_safeguard_active: battery_safeguard_active(battery, threshold),
+                            lid_closed: observation.lid_closed,
+                            external_display_active: observation.external_display_active,
+                        });
                     controller.sync(plan, allow_override)?;
                     *power_service.history_power.lock().map_err(poisoned)? = HistoryPowerState {
                         requested: plan.hold_caffeinate,
@@ -1607,6 +1711,14 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         std::thread::spawn(move || {
             let mut last_error = None;
             loop {
+                if let Some(output) = output_service.device.lock().ok().and_then(|mut device| {
+                    device
+                        .as_mut()
+                        .map(|output| output.poke_keepalive(Instant::now()))
+                }) && let Err(error) = output
+                {
+                    eprintln!("sidepulse-next-service: device keepalive: {error}");
+                }
                 match output_service.sync_device() {
                     Ok(_) => last_error = None,
                     Err(error) => {
@@ -1653,13 +1765,28 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             }
         });
     }
-    if history_path.is_some() {
+    if history_path.is_some()
+        || device.is_some()
+        || auto_device
+        || settings_path.is_some()
+        || power_control
+    {
+        let record_history = history_path.is_some();
         let history_service = service.clone();
         std::thread::spawn(move || {
             let mut last_error = None;
             loop {
                 let observation = power::observe().ok();
-                match history_service.record_history(observation.as_ref()) {
+                let result = (|| -> io::Result<()> {
+                    if let Some(observation) = &observation {
+                        history_service.observe_power(observation)?;
+                    }
+                    if record_history {
+                        history_service.record_history(observation.as_ref())?;
+                    }
+                    Ok(())
+                })();
+                match result {
                     Ok(()) => last_error = None,
                     Err(error) => {
                         let message = error.to_string();
@@ -2300,5 +2427,139 @@ mod tests {
             })
             .unwrap();
         assert!(service.settings_snapshot().unwrap().unwrap().document["battery_monitoring"]["full_charge_watts"].is_null());
+    }
+    #[test]
+    fn lid_output_is_owned_by_service_and_respects_manual_display() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r#"{"sleep_prevention_policy":"never"}"#).unwrap();
+        let target = directory.path().join("LEDS.LED");
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service.configure_device(&target, 255).unwrap();
+        service
+            .set_animation_state("idle_ready", "custom", Some("#111111"))
+            .unwrap();
+        service
+            .set_animation_state("lid_closed", "custom", Some("#222222"))
+            .unwrap();
+        service
+            .set_animation_state("lid_open", "custom", Some("#333333"))
+            .unwrap();
+        let observation = |closed| sidepulse_core::PowerSnapshot {
+            lid_closed: Some(closed),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        service.observe_power(&observation(false)).unwrap();
+        assert_eq!(
+            service.render_device_with_battery_at(None, now).unwrap(),
+            Some(true)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "#111111");
+        service.observe_power(&observation(true)).unwrap();
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_millis(10))
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "#222222");
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(2))
+                .unwrap(),
+            Some(false)
+        );
+        fs::write(&target, "external frame").unwrap();
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(3))
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "external frame");
+        service.observe_power(&observation(false)).unwrap();
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(4))
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "#333333");
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(6))
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "#111111");
+        service.set_display_mode("custom").unwrap();
+        fs::write(&target, "manual output").unwrap();
+        service.observe_power(&observation(true)).unwrap();
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(7))
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "manual output");
+    }
+
+    #[test]
+    fn closed_lid_awake_policy_skips_transition_without_starting_power_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r#"{"sleep_prevention_policy":"always"}"#).unwrap();
+        let target = directory.path().join("LEDS.LED");
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service.configure_device(&target, 255).unwrap();
+        let now = Instant::now();
+        service
+            .observe_power(&sidepulse_core::PowerSnapshot {
+                lid_closed: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        service.render_device_with_battery_at(None, now).unwrap();
+        let before = fs::read(&target).unwrap();
+        service
+            .observe_power(&sidepulse_core::PowerSnapshot {
+                lid_closed: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            service
+                .render_device_with_battery_at(None, now + Duration::from_secs(1))
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(fs::read(target).unwrap(), before);
+    }
+    #[test]
+    fn lid_timing_is_atomic_and_preserves_programs_and_unknown_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r##"{"other":7,"lid_open_animation":{"program":"#123456","other":"keep"},"lid_closed_animation":{"program":"off"}}"##).unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service
+            .set_lid_animation_timing(Some(2.0), Some(3.0))
+            .unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["lid_open_animation"]["duration_seconds"], 2.0);
+        assert_eq!(saved["lid_closed_animation"]["duration_seconds"], 3.0);
+        assert_eq!(saved["lid_open_animation"]["program"], "#123456");
+        assert_eq!(saved["lid_open_animation"]["other"], "keep");
+        assert_eq!(saved["other"], 7);
+        assert!(
+            service
+                .set_lid_animation_timing(Some(4.0), Some(f64::NAN))
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
     }
 }

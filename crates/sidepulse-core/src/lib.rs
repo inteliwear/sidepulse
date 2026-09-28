@@ -43,3 +43,8 @@ pub use sleep::{
 
 mod animation;
 pub use animation::*;
+
+mod lid;
+pub use lid::{LidOutputAction, LidOutputPolicy};
+
+pub use sleep::AwakeActivity;

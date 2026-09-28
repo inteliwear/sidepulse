@@ -6,7 +6,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
-#[cfg(any(target_os = "macos", test))]
 use sidepulse_core::AwakePolicy;
 #[cfg(any(target_os = "macos", test))]
 use sidepulse_core::SleepSettingsPatch;
@@ -293,7 +292,6 @@ impl SettingsStore {
         Ok(())
     }
 
-    #[cfg(any(target_os = "macos", test))]
     pub fn sleep_policy(&self) -> AwakePolicy {
         match self
             .document
@@ -380,7 +378,6 @@ impl SettingsStore {
         Ok(())
     }
 
-    #[cfg(any(target_os = "macos", test))]
     pub fn sleep_battery_threshold(&self) -> f64 {
         self.document
             .get("sleep_prevention")
@@ -445,6 +442,73 @@ impl SettingsStore {
         )?);
         self.document = updated;
         Ok(())
+    }
+
+    pub fn set_lid_animation_timing(
+        &mut self,
+        open_seconds: Option<f64>,
+        close_seconds: Option<f64>,
+    ) -> io::Result<()> {
+        if [open_seconds, close_seconds]
+            .into_iter()
+            .flatten()
+            .any(|seconds| !seconds.is_finite() || !(0.1..=10.0).contains(&seconds))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "lid duration must be between 0.1 and 10 seconds",
+            ));
+        }
+        let mut updated = self.document.clone();
+        for (key, seconds) in [
+            ("lid_open_animation", open_seconds),
+            ("lid_closed_animation", close_seconds),
+        ] {
+            if let Some(seconds) = seconds {
+                let animation = updated
+                    .entry(key)
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "lid animation must be an object",
+                        )
+                    })?;
+                animation.insert("duration_seconds".into(), json!(seconds));
+            }
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
+    pub fn lid_animation_duration_ms(&self, state: &str) -> u64 {
+        let default = if state == "lid_closed" { 1300 } else { 1000 };
+        let style = self
+            .document
+            .get("agent_animations")
+            .and_then(|items| items.get(state))
+            .and_then(|value| value.get("style"))
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+        if matches!(style, "default" | "lid-open" | "lid-closed") {
+            return default;
+        }
+        self.document
+            .get(if state == "lid_closed" {
+                "lid_closed_animation"
+            } else {
+                "lid_open_animation"
+            })
+            .and_then(|value| value.get("duration_seconds"))
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite() && (0.1..=10.0).contains(seconds))
+            .map_or(default, |seconds| (seconds * 1000.0) as u64)
     }
 
     pub fn animation_for_mode(&self, mode: AgentMode) -> io::Result<(String, String)> {

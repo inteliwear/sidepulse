@@ -260,3 +260,50 @@ mod tests {
         assert_eq!(snapshot.sleep_prevented(), None);
     }
 }
+
+/// Working keeps the machine awake; terminal statuses retain the legacy
+/// five-minute grace, without extending it on each repeated observation.
+#[derive(Debug, Clone, Default)]
+pub struct AwakeActivity {
+    last_mode: Option<crate::AgentMode>,
+    grace_until_ms: Option<u64>,
+}
+impl AwakeActivity {
+    pub fn requested(&mut self, mode: crate::AgentMode, now_ms: u64) -> bool {
+        use crate::AgentMode;
+        let requested = match mode {
+            AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress => {
+                self.grace_until_ms = None;
+                true
+            }
+            AgentMode::Completed | AgentMode::WaitingForInput | AgentMode::BlockedError => {
+                if self.last_mode != Some(mode) || self.grace_until_ms.is_none() {
+                    self.grace_until_ms = Some(now_ms.saturating_add(300_000));
+                }
+                self.grace_until_ms.is_some_and(|until| now_ms < until)
+            }
+            _ => self.grace_until_ms.is_some_and(|until| now_ms < until),
+        };
+        self.last_mode = Some(mode);
+        requested
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    use crate::AgentMode;
+    #[test]
+    fn terminal_grace_expires_without_refreshing_and_work_restarts_it() {
+        let mut activity = AwakeActivity::default();
+        assert!(!activity.requested(AgentMode::IdleReady, 0));
+        assert!(activity.requested(AgentMode::Working, 1));
+        assert!(activity.requested(AgentMode::Completed, 10));
+        assert!(activity.requested(AgentMode::Completed, 300009));
+        assert!(!activity.requested(AgentMode::Completed, 300010));
+        assert!(!activity.requested(AgentMode::IdleReady, 300011));
+        assert!(activity.requested(AgentMode::Working, 300012));
+        assert!(activity.requested(AgentMode::WaitingForInput, 300013));
+        assert!(activity.requested(AgentMode::IdleReady, 300014));
+    }
+}
