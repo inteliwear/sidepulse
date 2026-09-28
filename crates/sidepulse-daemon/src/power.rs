@@ -21,6 +21,16 @@ impl MacPowerController {
         }
     }
 
+    pub fn active(&mut self) -> bool {
+        self.caffeinate
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+    }
+
+    pub fn system_sleep_disabled(&self) -> bool {
+        self.system_disabled
+    }
+
     pub fn sync(
         &mut self,
         plan: sidepulse_core::SleepPlan,

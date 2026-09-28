@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
         );
         return ExitCode::from(2);
     };
@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let mut device = None;
     let mut auto_device = false;
     let mut state = None;
+    let mut history = None;
     let mut settings = None;
     let mut relay_config = None;
     let mut power_control = false;
@@ -22,7 +23,7 @@ fn main() -> ExitCode {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
                     );
                     return ExitCode::from(2);
                 };
@@ -58,6 +59,13 @@ fn main() -> ExitCode {
                 };
                 state = Some(PathBuf::from(path));
             }
+            "--history" => {
+                let Some(path) = args.next() else {
+                    eprintln!("sidepulse-next-service: --history requires a path");
+                    return ExitCode::from(2);
+                };
+                history = Some(PathBuf::from(path));
+            }
             "--settings" => {
                 let Some(path) = args.next() else {
                     eprintln!("sidepulse-next-service: --settings requires a path");
@@ -82,7 +90,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
                 );
                 return ExitCode::from(2);
             }
@@ -104,6 +112,7 @@ fn main() -> ExitCode {
             auto_device,
             relay_config_path: relay_config.as_deref(),
             power_control,
+            history_path: history.as_deref(),
         },
     ) {
         eprintln!("sidepulse-next-service: {error}");

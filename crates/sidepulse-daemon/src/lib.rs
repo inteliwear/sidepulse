@@ -1,5 +1,6 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
+mod history;
 mod power;
 mod settings;
 mod virtual_display;
@@ -21,8 +22,8 @@ use sidepulse_core::{
 };
 use sidepulse_device::animations::program_for_style;
 use sidepulse_device::battery::{BatteryState, program_for_battery};
+use sidepulse_device::battery_diagnostics::{BatterySnapshot, read_battery_snapshot};
 use sidepulse_device::battery_preview::BatteryPreview;
-use sidepulse_device::battery_source::read_battery_state;
 use sidepulse_device::led_count_for_target;
 use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
 use sidepulse_ipc::{read_message, write_message};
@@ -53,6 +54,17 @@ pub struct Service {
     relay_publisher: Arc<Mutex<Option<RelayPublisher>>>,
     battery_preview: Arc<Mutex<BatteryPreview>>,
     virtual_output: Arc<Mutex<virtual_display::VirtualOutput>>,
+    history: Arc<Mutex<history::HistoryStore>>,
+    battery_diagnostics: Arc<Mutex<Option<BatterySnapshot>>>,
+    history_power: Arc<Mutex<HistoryPowerState>>,
+}
+
+#[derive(Default)]
+struct HistoryPowerState {
+    requested: bool,
+    active: bool,
+    closed_lid_requested: bool,
+    closed_lid_active: bool,
 }
 
 #[derive(Default)]
@@ -271,6 +283,120 @@ impl Service {
                 )
             });
         Ok(())
+    }
+
+    pub fn configure_history(&self, path: &Path) -> io::Result<()> {
+        *self.history.lock().map_err(poisoned)? = history::HistoryStore::load(path)?;
+        Ok(())
+    }
+
+    pub fn set_history_timeframe(&self, seconds: u32) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_history_timeframe(seconds)
+    }
+
+    pub fn history_snapshot(&self) -> io::Result<ServerPayload> {
+        let seconds = self
+            .settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map_or(43200, SettingsStore::history_timeframe);
+        let (points, sampled) = self.history.lock().map_err(poisoned)?.snapshot(seconds);
+        Ok(ServerPayload::History {
+            points,
+            timeframe_seconds: seconds,
+            sampled,
+        })
+    }
+
+    pub fn record_history(
+        &self,
+        observation: Option<&sidepulse_core::PowerSnapshot>,
+    ) -> io::Result<()> {
+        use serde_json::json;
+        let state = self.snapshot()?;
+        let battery = self.battery_diagnostics.lock().map_err(poisoned)?.clone();
+        let settings = self.settings.lock().map_err(poisoned)?;
+        let document = settings
+            .as_ref()
+            .map_or_else(|| json!({}), SettingsStore::snapshot);
+        let policy = document
+            .get("sleep_prevention_policy")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("agents");
+        let threshold = document
+            .get("sleep_prevention")
+            .and_then(|value| value.get("min_battery_percent"))
+            .or_else(|| document.get("sleep_prevention_min_battery_percent"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(20.0)
+            .clamp(0.0, 100.0);
+        let safeguard = sidepulse_core::battery_safeguard_active(
+            battery
+                .as_ref()
+                .map(|battery| sidepulse_core::BatteryPower {
+                    percent: f64::from(battery.percent),
+                    present: battery.battery_present,
+                    plugged_in: battery.is_plugged,
+                }),
+            threshold,
+        );
+        let power = self.history_power.lock().map_err(poisoned)?;
+        let sleep = observation.map(|snapshot| &snapshot.mac_sleep);
+        let lid = observation.and_then(|snapshot| snapshot.lid_closed);
+        let round = |value: f64| (value * 100.0).round() / 100.0;
+        let rich = battery.as_ref().filter(|_| cfg!(target_os = "macos"));
+        let record = json!({
+            "recorded_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "agent_status": state.aggregate.mode,
+            "display_status": match sidepulse_device::display_state_for_mode(state.aggregate.mode) {
+                sidepulse_device::LedDisplayState::Idle => "Idle",
+                sidepulse_device::LedDisplayState::Working => "Working",
+                sidepulse_device::LedDisplayState::Done => "Done",
+                sidepulse_device::LedDisplayState::Ask => "Ask",
+            },
+            "battery_level": battery.as_ref().map(|battery| battery.percent),
+            "battery_charging": battery.as_ref().map(|battery| battery.is_charging),
+            "battery_charged": battery.as_ref().map(|battery| battery.is_charged),
+            "battery_present": battery.as_ref().map(|battery| battery.battery_present),
+            "battery_power_watts": rich.map(|battery| round(battery.battery_watts)),
+            "charger_connected": battery.as_ref().map(|battery| battery.is_plugged),
+            "adapter_connected": rich.map(|battery| battery.adapter_connected),
+            "charger_power_watts": rich.map(|battery| round(battery.adapter_power())),
+            "adapter_watts": rich.map(|battery| battery.adapter_watts),
+            "adapter_voltage": rich.map(|battery| round(battery.adapter_voltage)),
+            "adapter_current": rich.map(|battery| round(battery.adapter_current)),
+            "adapter_name": rich.map_or("", |battery| battery.adapter_name.as_str()),
+            "adapter_manufacturer": rich.map_or("", |battery| battery.adapter_manufacturer.as_str()),
+            "adapter_model": rich.map_or("", |battery| battery.adapter_model.as_str()),
+            "lid_closed": lid,
+            "lid_status": match lid { Some(true) => "closed", Some(false) => "open", None => "unknown" },
+            "sidepulse_keep_awake_requested": power.requested,
+            "sidepulse_keep_awake_active": power.active,
+            "sleep_prevention_policy": policy,
+            "sleep_prevention_battery_safeguard_active": safeguard,
+            "sleep_prevention_min_battery_percent": threshold,
+            "sidepulse_closed_lid_awake_requested": power.closed_lid_requested,
+            "sidepulse_closed_lid_awake_active": power.closed_lid_active,
+            "mac_sleep_prevented": sleep.and_then(|sleep| sleep.sleep_prevented()),
+            "mac_sleep_disabled": sleep.and_then(|sleep| sleep.sleep_disabled),
+            "mac_prevent_system_sleep": sleep.and_then(|sleep| sleep.prevent_system_sleep),
+            "mac_prevent_user_idle_system_sleep": sleep.and_then(|sleep| sleep.prevent_user_idle_system_sleep),
+            "mac_prevent_user_idle_display_sleep": sleep.and_then(|sleep| sleep.prevent_user_idle_display_sleep),
+            "mac_user_is_active": sleep.and_then(|sleep| sleep.user_is_active),
+            "mac_sleep_status": match sleep.and_then(|sleep| sleep.sleep_prevented()) { Some(true) => "prevented", Some(false) => "allowed", None => "unknown" },
+            "mac_sleep_error": "",
+        });
+        drop(power);
+        drop(settings);
+        self.history.lock().map_err(poisoned)?.append(&record)
     }
 
     pub fn set_virtual_display(
@@ -611,6 +737,14 @@ impl Service {
                     },
                 )
             }
+            RequestKind::History => write_message(
+                &mut stream,
+                &ServerMessage {
+                    version: PROTOCOL_VERSION,
+                    request_id: Some(request.request_id),
+                    payload: self.history_snapshot()?,
+                },
+            ),
             RequestKind::SelectDevice { root } => {
                 let payload = match self.select_device(&root) {
                     Ok(()) => {
@@ -786,11 +920,15 @@ impl Service {
                 )
             }
             kind @ (RequestKind::SetAgentAnimation { .. }
+            | RequestKind::SetHistoryTimeframe { .. }
             | RequestKind::SetVirtualDisplay { .. }
             | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::SetHistoryTimeframe { seconds } => {
+                        self.set_history_timeframe(seconds)
+                    }
                     RequestKind::SetVirtualDisplay { patch } => self.set_virtual_display(&patch),
                     RequestKind::SetAgentAnimation {
                         mode,
@@ -1024,6 +1162,7 @@ pub fn run_with_logs_and_device(
             auto_device: false,
             relay_config_path: None,
             power_control: false,
+            history_path: None,
         },
     )
 }
@@ -1036,6 +1175,7 @@ pub struct RunOptions<'a> {
     pub auto_device: bool,
     pub relay_config_path: Option<&'a Path>,
     pub power_control: bool,
+    pub history_path: Option<&'a Path>,
 }
 
 fn source_overrides_with_settings(
@@ -1066,6 +1206,7 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         auto_device,
         relay_config_path,
         power_control,
+        history_path,
     } = options;
     #[cfg(not(target_os = "macos"))]
     if power_control {
@@ -1086,6 +1227,15 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
     });
     if let Some(path) = settings_path {
         service.configure_settings(path)?;
+    }
+    let history_path = history_path.map(Path::to_path_buf).or_else(|| {
+        latest_state_path
+            .or(settings_path)
+            .and_then(Path::parent)
+            .map(|parent| parent.join("status-history.jsonl"))
+    });
+    if let Some(path) = &history_path {
+        service.configure_history(path)?;
     }
     #[cfg(target_os = "macos")]
     if power_control {
@@ -1127,7 +1277,14 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         lid_closed: observation.lid_closed,
                         external_display_active: observation.external_display_active,
                     });
-                    controller.sync(plan, allow_override)
+                    controller.sync(plan, allow_override)?;
+                    *power_service.history_power.lock().map_err(poisoned)? = HistoryPowerState {
+                        requested: plan.hold_caffeinate,
+                        active: controller.active(),
+                        closed_lid_requested: allow_override && plan.disable_system_sleep,
+                        closed_lid_active: controller.system_sleep_disabled(),
+                    };
+                    Ok(())
                 })();
                 match result {
                     Ok(()) => last_error = None,
@@ -1269,13 +1426,24 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             }
         });
     }
-    if device.is_some() || auto_device || power_control {
+    if device.is_some()
+        || auto_device
+        || power_control
+        || settings_path.is_some()
+        || history_path.is_some()
+    {
         let battery_service = service.clone();
         std::thread::spawn(move || {
             let mut last_error = None;
             loop {
-                let result = read_battery_state()
-                    .and_then(|battery| battery_service.accept_battery(battery, Instant::now()));
+                let result = read_battery_snapshot(None).and_then(|battery| {
+                    battery_service.accept_battery(battery.led_state(), Instant::now())?;
+                    *battery_service
+                        .battery_diagnostics
+                        .lock()
+                        .map_err(poisoned)? = Some(battery);
+                    Ok(())
+                });
                 match result {
                     Ok(()) => last_error = None,
                     Err(error) => {
@@ -1287,6 +1455,26 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                     }
                 }
                 std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    }
+    if history_path.is_some() {
+        let history_service = service.clone();
+        std::thread::spawn(move || {
+            let mut last_error = None;
+            loop {
+                let observation = power::observe().ok();
+                match history_service.record_history(observation.as_ref()) {
+                    Ok(()) => last_error = None,
+                    Err(error) => {
+                        let message = error.to_string();
+                        if last_error.as_deref() != Some(message.as_str()) {
+                            eprintln!("sidepulse-next-service: history: {message}");
+                        }
+                        last_error = Some(message);
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(2));
             }
         });
     }
@@ -1686,6 +1874,30 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn history_record_matches_python_schema_and_survives_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.jsonl");
+        let service = Service::new();
+        service.configure_history(&path).unwrap();
+        service.record_history(None).unwrap();
+        let mut recorded: serde_json::Value =
+            serde_json::from_str(fs::read_to_string(&path).unwrap().trim()).unwrap();
+        recorded["recorded_at"] = "2026-01-01T00:00:00Z".into();
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../resources/fixtures/history-idle.expected.json"
+        ))
+        .unwrap();
+        assert_eq!(recorded, expected);
+        let recovered = Service::new();
+        recovered.configure_history(&path).unwrap();
+        let ServerPayload::History { points, .. } = recovered.history_snapshot().unwrap() else {
+            panic!("missing history");
+        };
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].agent_status, sidepulse_core::AgentMode::IdleReady);
     }
 
     #[test]

@@ -122,6 +122,62 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some(command @ ("service-history" | "service-virtual-frame")) => {
+            let (Some(endpoint), None) = (args.next(), args.next()) else {
+                eprintln!("usage: sidepulse-next {command} ENDPOINT");
+                return ExitCode::from(2);
+            };
+            let kind = if command == "service-history" {
+                RequestKind::History
+            } else {
+                RequestKind::VirtualDisplay
+            };
+            let request = ClientRequest {
+                version: PROTOCOL_VERSION,
+                request_id: 1,
+                kind,
+            };
+            let reply: Result<ServerMessage, _> =
+                sidepulse_ipc::request(&endpoint, &request, Duration::from_secs(2));
+            match reply {
+                Ok(ServerMessage {
+                    payload: ServerPayload::Error { message, .. },
+                    ..
+                }) => {
+                    eprintln!("sidepulse-next: {message}");
+                    ExitCode::FAILURE
+                }
+                Ok(reply) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&reply.payload)
+                            .expect("service payload serializes")
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("sidepulse-next: service unavailable: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("service-history-timeframe") => {
+            let (Some(endpoint), Some(hours), None) = (args.next(), args.next(), args.next())
+            else {
+                eprintln!("usage: sidepulse-next service-history-timeframe ENDPOINT 1|6|12|24|48");
+                return ExitCode::from(2);
+            };
+            let Some(seconds) = hours
+                .parse::<u32>()
+                .ok()
+                .and_then(|hours| hours.checked_mul(3600))
+                .filter(|seconds| sidepulse_core::HISTORY_TIMEFRAMES.contains(seconds))
+            else {
+                eprintln!("sidepulse-next: history timeframe must be 1, 6, 12, 24, or 48 hours");
+                return ExitCode::from(2);
+            };
+            service_settings_request(&endpoint, RequestKind::SetHistoryTimeframe { seconds })
+        }
         Some("service-settings") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next service-settings ENDPOINT");
@@ -369,7 +425,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

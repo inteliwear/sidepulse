@@ -22,8 +22,9 @@ pub use origin::{
 };
 pub use protocol::{
     AgentAnimationState, AgentListSettingsPatch, AnimationChoice, BatterySettingsPatch,
-    ChargerBaseline, ClientRequest, DeviceInfo, PROTOCOL_VERSION, RequestKind, ServerMessage,
-    ServerPayload, SleepSettingsPatch, VirtualDisplayFrame, VirtualDisplaySettingsPatch,
+    ChargerBaseline, ClientRequest, DeviceInfo, HISTORY_TIMEFRAMES, HistoryPoint, PROTOCOL_VERSION,
+    RequestKind, ServerMessage, ServerPayload, SleepSettingsPatch, VirtualDisplayFrame,
+    VirtualDisplaySettingsPatch,
 };
 pub use provider::{
     canonical_event_name, format_hook_payload, infer_hook_provider, normalize_cursor_payload,

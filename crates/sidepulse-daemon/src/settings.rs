@@ -51,6 +51,36 @@ impl SettingsStore {
         Value::Object(self.document.clone())
     }
 
+    pub fn history_timeframe(&self) -> u32 {
+        self.document
+            .get("history_timeframe_seconds")
+            .and_then(Value::as_f64)
+            .and_then(|seconds| {
+                sidepulse_core::HISTORY_TIMEFRAMES
+                    .into_iter()
+                    .find(|choice| (f64::from(*choice) - seconds).abs() < 0.5)
+            })
+            .unwrap_or(43200)
+    }
+
+    pub fn set_history_timeframe(&mut self, seconds: u32) -> io::Result<()> {
+        if !sidepulse_core::HISTORY_TIMEFRAMES.contains(&seconds) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid history timeframe",
+            ));
+        }
+        let mut updated = self.document.clone();
+        updated.insert("history_timeframe_seconds".into(), json!(seconds));
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn virtual_display_settings(&self) -> (bool, u8, &str) {
         let enabled = self
             .document

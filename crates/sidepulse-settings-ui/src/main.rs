@@ -18,6 +18,9 @@ struct ServiceState {
     active_device: Option<String>,
     animation_choices: Vec<AnimationChoice>,
     animation_states: Vec<AgentAnimationState>,
+    history_points: Vec<sidepulse_core::HistoryPoint>,
+    history_timeframe: u32,
+    history_sampled: bool,
 }
 
 enum Update {
@@ -81,6 +84,14 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return animations.".into());
     };
+    let ServerPayload::History {
+        points,
+        timeframe_seconds,
+        sampled,
+    } = request(endpoint, RequestKind::History)?
+    else {
+        return Err("The service did not return history.".into());
+    };
     Ok(ServiceState {
         settings,
         activity,
@@ -88,6 +99,9 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
         active_device,
         animation_choices: choices,
         animation_states: states,
+        history_points: points,
+        history_timeframe: timeframe_seconds,
+        history_sampled: sampled,
     })
 }
 
@@ -135,6 +149,7 @@ enum Page {
     Monitoring,
     Sleep,
     Animations,
+    History,
 }
 
 struct SettingsApp {
@@ -680,6 +695,208 @@ impl SettingsApp {
         ui.label("Sleep prevention is currently available on macOS.");
     }
 
+    fn history(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Activity history");
+        ui.label("Agent status, battery level, charger power, and sleep activity over time.");
+        let Some(state) = &self.state else {
+            return;
+        };
+        let points = state.history_points.clone();
+        let mut timeframe = state.history_timeframe;
+        let sampled = state.history_sampled;
+        ui.add_space(12.0);
+        egui::ComboBox::from_id_salt("history-timeframe")
+            .selected_text(format!("Last {} hours", timeframe / 3600))
+            .show_ui(ui, |ui| {
+                for choice in sidepulse_core::HISTORY_TIMEFRAMES {
+                    if ui
+                        .selectable_value(
+                            &mut timeframe,
+                            choice,
+                            format!("{} hours", choice / 3600),
+                        )
+                        .changed()
+                    {
+                        self.send(RequestKind::SetHistoryTimeframe { seconds: choice });
+                    }
+                }
+            });
+        if points.is_empty() {
+            ui.add_space(20.0);
+            ui.label("No history yet. New observations appear while the service is running.");
+            return;
+        }
+        if sampled {
+            ui.weak("Showing a summary of the recorded observations.");
+        }
+        ui.add_space(16.0);
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 260.0),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+        let chart = rect.shrink2(egui::vec2(12.0, 20.0));
+        painter.rect_filled(rect, 6, ui.visuals().faint_bg_color);
+        let first = points.first().unwrap().recorded_at.timestamp_millis();
+        let last = points.last().unwrap().recorded_at.timestamp_millis();
+        let span = (last - first).max(1) as f32;
+        let x = |point: &sidepulse_core::HistoryPoint| {
+            chart.left()
+                + (point.recorded_at.timestamp_millis() - first) as f32 / span * chart.width()
+        };
+        let battery_rect =
+            egui::Rect::from_min_max(chart.min, egui::pos2(chart.right(), chart.top() + 95.0));
+        let charger_rect = egui::Rect::from_min_max(
+            egui::pos2(chart.left(), chart.top() + 115.0),
+            egui::pos2(chart.right(), chart.top() + 175.0),
+        );
+        let charger_max = points
+            .iter()
+            .filter_map(|point| point.charger_power_watts)
+            .fold(10.0_f64, f64::max)
+            .max(10.0);
+        for level in [0.0_f32, 0.5, 1.0] {
+            let y = battery_rect.bottom() - level * battery_rect.height();
+            painter.line_segment(
+                [egui::pos2(chart.left(), y), egui::pos2(chart.right(), y)],
+                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            );
+        }
+        for pair in points.windows(2) {
+            let a = &pair[0];
+            let b = &pair[1];
+            if let (Some(a_value), Some(b_value)) = (a.battery_level, b.battery_level) {
+                painter.line_segment(
+                    [
+                        egui::pos2(
+                            x(a),
+                            battery_rect.bottom()
+                                - a_value.clamp(0.0, 100.0) as f32 / 100.0 * battery_rect.height(),
+                        ),
+                        egui::pos2(
+                            x(b),
+                            battery_rect.bottom()
+                                - b_value.clamp(0.0, 100.0) as f32 / 100.0 * battery_rect.height(),
+                        ),
+                    ],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 190, 130)),
+                );
+            }
+            if let (Some(a_value), Some(b_value)) = (a.charger_power_watts, b.charger_power_watts) {
+                painter.line_segment(
+                    [
+                        egui::pos2(
+                            x(a),
+                            charger_rect.bottom()
+                                - (a_value / charger_max) as f32 * charger_rect.height(),
+                        ),
+                        egui::pos2(
+                            x(b),
+                            charger_rect.bottom()
+                                - (b_value / charger_max) as f32 * charger_rect.height(),
+                        ),
+                    ],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(95, 165, 230)),
+                );
+            }
+            let color = match a.agent_status {
+                AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress => {
+                    egui::Color32::from_rgb(50, 190, 210)
+                }
+                AgentMode::WaitingForInput | AgentMode::BlockedError => {
+                    egui::Color32::from_rgb(225, 155, 55)
+                }
+                AgentMode::Completed => egui::Color32::from_rgb(80, 190, 130),
+                _ => ui.visuals().weak_text_color(),
+            };
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(a), chart.bottom() - 14.0),
+                    egui::pos2(x(b).max(x(a) + 1.0), chart.bottom() - 6.0),
+                ),
+                0,
+                color,
+            );
+        }
+        painter.text(
+            battery_rect.left_top(),
+            egui::Align2::LEFT_TOP,
+            "Battery · 0–100%",
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
+        painter.text(
+            charger_rect.left_top(),
+            egui::Align2::LEFT_TOP,
+            format!("Charger · 0–{charger_max:.0} W"),
+            egui::FontId::proportional(12.0),
+            ui.visuals().text_color(),
+        );
+        if let Some(position) = response.hover_pos() {
+            let nearest = points
+                .iter()
+                .min_by(|a, b| {
+                    (x(a) - position.x)
+                        .abs()
+                        .total_cmp(&(x(b) - position.x).abs())
+                })
+                .unwrap();
+            response.on_hover_text(format!(
+                "{}\n{}\nBattery: {}\nCharger: {}\nLid: {}\nKeeping awake: {}",
+                nearest.recorded_at.format("%b %d %H:%M:%S UTC"),
+                nearest.agent_status.label(),
+                nearest
+                    .battery_level
+                    .map_or("Unknown".into(), |value| format!("{value:.0}%")),
+                nearest
+                    .charger_power_watts
+                    .map_or("Unknown".into(), |value| format!("{value:.1} W")),
+                nearest.lid_closed.map_or("Unknown", |closed| if closed {
+                    "Closed"
+                } else {
+                    "Open"
+                }),
+                nearest
+                    .keep_awake_active
+                    .map_or("Unknown", |active| if active { "Yes" } else { "No" })
+            ));
+        }
+        ui.horizontal(|ui| {
+            ui.weak(
+                points
+                    .first()
+                    .unwrap()
+                    .recorded_at
+                    .format("%b %d %H:%M UTC")
+                    .to_string(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak(
+                    points
+                        .last()
+                        .unwrap()
+                        .recorded_at
+                        .format("%b %d %H:%M UTC")
+                        .to_string(),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        ui.label("Status: cyan = working · amber = needs attention · green = completed");
+        if let Some(latest) = points.last() {
+            ui.label(format!(
+                "Latest: {} · Battery {} · Charger {}",
+                latest.agent_status.label(),
+                latest
+                    .battery_level
+                    .map_or("unknown".into(), |value| format!("{value:.0}%")),
+                latest
+                    .charger_power_watts
+                    .map_or("unknown".into(), |value| format!("{value:.1} W"))
+            ));
+        }
+    }
+
     fn animations(&mut self, ui: &mut egui::Ui) {
         ui.heading("Agent animations");
         ui.label("Choose a device animation for each agent status.");
@@ -799,6 +1016,7 @@ impl eframe::App for SettingsApp {
                     (Page::Monitoring, "Monitoring"),
                     (Page::Sleep, "Sleep"),
                     (Page::Animations, "Animations"),
+                    (Page::History, "History"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -822,6 +1040,7 @@ impl eframe::App for SettingsApp {
                     Page::Monitoring => self.monitoring(ui),
                     Page::Sleep => self.sleep(ui),
                     Page::Animations => self.animations(ui),
+                    Page::History => self.history(ui),
                 });
             });
         });

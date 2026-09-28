@@ -88,7 +88,7 @@ after a service restart. The animation page saves built-in presets and per-statu
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
 named custom assets remain selectable and are preserved. Named asset and
-profile editing, session-opening preferences, history, relay controls, and broader sleep controls still need implementation.
+profile editing, session-opening preferences, relay controls, and broader sleep controls still need implementation.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -97,6 +97,21 @@ the macOS battery sleep safeguard through validated requests; the development
 CLI exposes `service-agent-list` and `service-sleep-safeguard` for the same
 operations. Sleep controls still report an unsupported-platform error on
 Windows and Linux.
+
+## Activity history
+
+The service records status, battery, charger, lid, and sleep observations every
+two seconds in the existing `status-history.jsonl` schema. Its 34 fields match
+a captured Python record. The file defaults beside the explicit state file,
+or beside an explicit settings file; `--history PATH` overrides it. Preview
+history stays inside its isolated directory. Recording runs independently of
+any window and restores existing rows on startup. The service keeps a bounded
+in-memory timeline, replays at most 128 MiB at startup, and limits chart replies
+to 2,000 observations, including the first and latest. Long timelines are
+sampled and the window labels that summary. The settings window charts agent
+state, battery percentage, and charger power, with lid and awake details on
+hover. The five legacy timeframes are saved through the service. Native chart
+layout checks await an unlocked desktop.
 
 ## Current migration state
 
@@ -147,7 +162,7 @@ development service can write one device with `--device PATH` and optional
 programs; the tray never touches the device file. A macOS smoke test passed
 from the Rust hook through the service into `LEDS.LED` in a temporary folder.
 Physical hardware behavior still needs validation. Automatic selection and
-saved animation styles are covered below; profile editing remains UI work.
+saved animation styles are covered below; profile editing remains service and UI work.
 
 The development CLI now shares one fail-open hook handler between
 `sidepulse-next hook-log`, `sidepulse-next agent-monitor hook-log`, and
@@ -324,8 +339,8 @@ must validate the new review flow. This follows the current
 
 Further origin parity, production relay launch, production provider hook installation,
 production device discovery,
-physical device selection, virtual device output, full status bar settings and
-controls, native helpers, full CLI parity, and release packaging still need
+physical device validation, the remaining status bar settings and controls,
+native helpers, full CLI parity, and release packaging still need
 implementation before cutover. The Python application
 remains authoritative for users until the delivery gates above pass.
 
@@ -336,7 +351,7 @@ remains authoritative for users until the delivery gates above pass.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
 3. Port the remaining settings controls, relay, link, battery and sleep policy,
-   custom animations, platform device discovery, and virtual device output
+   animation profiles and named custom assets, and native helper recovery
    into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.

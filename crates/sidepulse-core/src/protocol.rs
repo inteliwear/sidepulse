@@ -24,6 +24,10 @@ pub enum RequestKind {
     Devices,
     Animations,
     VirtualDisplay,
+    History,
+    SetHistoryTimeframe {
+        seconds: u32,
+    },
     SetVirtualDisplay {
         patch: VirtualDisplaySettingsPatch,
     },
@@ -102,6 +106,11 @@ pub enum ServerPayload {
     VirtualDisplay {
         frame: VirtualDisplayFrame,
     },
+    History {
+        points: Vec<HistoryPoint>,
+        timeframe_seconds: u32,
+        sampled: bool,
+    },
     StateChanged {
         state: MonitorSnapshot,
     },
@@ -161,6 +170,19 @@ pub struct VirtualDisplayFrame {
     pub display: String,
     pub pixels: Vec<[u8; 3]>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPoint {
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
+    pub agent_status: AgentMode,
+    pub display_status: String,
+    pub battery_level: Option<f64>,
+    pub charger_power_watts: Option<f64>,
+    pub lid_closed: Option<bool>,
+    pub keep_awake_active: Option<bool>,
+}
+
+pub const HISTORY_TIMEFRAMES: [u32; 5] = [3600, 21600, 43200, 86400, 172800];
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -274,6 +296,11 @@ impl ClientRequest {
         }
         if let RequestKind::SetVirtualDisplay { patch } = &self.kind {
             patch.validate()?;
+        }
+        if let RequestKind::SetHistoryTimeframe { seconds } = &self.kind
+            && !HISTORY_TIMEFRAMES.contains(seconds)
+        {
+            return Err("invalid history timeframe");
         }
         if let RequestKind::SetAgentListSettings { patch } = &self.kind {
             patch.validate()?;
