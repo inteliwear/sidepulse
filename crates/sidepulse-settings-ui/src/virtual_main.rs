@@ -71,17 +71,22 @@ impl eframe::App for VirtualApp {
         [0.0; 4]
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Hidden viewports receive logic callbacks, but no drawing callbacks.
+        // Consume service frames here so startup, re-enabling, and reconnects
+        // can make the window visible without requiring an existing UI pass.
         while let Ok(frame) = self.frames.try_recv() {
             self.frame = frame;
         }
         let visible = self.frame.as_ref().is_some_and(|frame| frame.enabled);
         if self.visible != visible {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Visible(visible));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
             self.visible = visible;
         }
-        if !visible {
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.visible {
             return;
         }
         #[cfg(not(target_os = "macos"))]
@@ -206,4 +211,50 @@ fn main() -> eframe::Result {
         },
         Box::new(move |context| Ok(Box::new(VirtualApp::new(endpoint, context)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::App;
+
+    #[test]
+    fn hidden_window_wakes_on_enabled_frames_and_recovers_after_disconnect() {
+        let (sent, frames) = mpsc::sync_channel(1);
+        let mut app = VirtualApp {
+            frames,
+            frame: None,
+            visible: false,
+        };
+        let ctx = egui::Context::default();
+        let mut native_frame = eframe::Frame::_new_kittest();
+        // Reproduce eframe's hidden-window path: logic runs, UI never runs.
+        // A window must wake on its first frame and after manual mode or IPC loss.
+        for (frame, visible) in [
+            (Some(true), true),
+            (Some(false), false),
+            (Some(true), true),
+            (None, false),
+            (Some(true), true),
+        ] {
+            sent.send(frame.map(|enabled| VirtualDisplayFrame {
+                enabled,
+                display: if enabled { "agent" } else { "custom" }.into(),
+                pixels: if enabled {
+                    vec![[255, 0, 128]; 8]
+                } else {
+                    vec![]
+                },
+            }))
+            .unwrap();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.logic(ui.ctx(), &mut native_frame);
+            });
+            assert_eq!(app.visible, visible);
+            assert!(output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Visible(value) if *value == visible)));
+        }
+    }
 }
