@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(endpoint) = args.next() else {
         eprintln!(
-            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+            "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control | --mock-power JSON_PATH]"
         );
         return ExitCode::from(2);
     };
@@ -17,13 +17,14 @@ fn main() -> ExitCode {
     let mut settings = None;
     let mut relay_config = None;
     let mut power_control = false;
+    let mut power_observation = None;
     let mut brightness = None;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--log" => {
                 let (Some(provider), Some(path)) = (args.next(), args.next()) else {
                     eprintln!(
-                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+                        "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control | --mock-power JSON_PATH]"
                     );
                     return ExitCode::from(2);
                 };
@@ -81,6 +82,13 @@ fn main() -> ExitCode {
                 relay_config = Some(PathBuf::from(path));
             }
             "--power-control" => power_control = true,
+            "--mock-power" => {
+                let Some(path) = args.next() else {
+                    eprintln!("sidepulse-next-service: --mock-power requires a JSON path");
+                    return ExitCode::from(2);
+                };
+                power_observation = Some(PathBuf::from(path));
+            }
             "--brightness" => {
                 let Some(value) = args.next().and_then(|value| value.parse::<u8>().ok()) else {
                     eprintln!("sidepulse-next-service: brightness must be 0-255");
@@ -90,7 +98,7 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!(
-                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control]"
+                    "usage: sidepulse-next-service ENDPOINT [--log PROVIDER PATH]... [--transcript codex|claude DIR]... [--device PATH | --auto-device] [--brightness 0-255] [--state PATH] [--history PATH] [--settings PATH] [--relay-config PATH] [--power-control | --mock-power JSON_PATH]"
                 );
                 return ExitCode::from(2);
             }
@@ -112,6 +120,7 @@ fn main() -> ExitCode {
             auto_device,
             relay_config_path: relay_config.as_deref(),
             power_control,
+            power_observation_path: power_observation.as_deref(),
             history_path: history.as_deref(),
         },
     ) {

@@ -1,13 +1,16 @@
 //! Relay connection settings and SSE framing, shared by CLI and service.
 
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Value, json};
-use tempfile::NamedTempFile;
+mod store;
+pub use store::RelayConfigStore;
 use url::Url;
 
 pub const DEFAULT_BRIDGE_SERVER: &str = "https://bridge.sidepulse.io";
@@ -117,28 +120,7 @@ pub fn load_config(path: &Path, machine_name: &str) -> io::Result<RelayConfig> {
 }
 
 pub fn save_config(path: &Path, config: &RelayConfig) -> io::Result<()> {
-    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "refusing to replace a relay config symlink",
-        ));
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let mut temporary = NamedTempFile::new_in(parent)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    let body = serde_json::to_vec_pretty(&config.to_legacy_json()?)?;
-    temporary.write_all(&body)?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    RelayConfigStore::load(path, &config.machine_name)?.save(config.clone())
 }
 
 pub fn normalize_server(input: &str) -> io::Result<String> {
@@ -220,6 +202,14 @@ pub fn publish_event(config: &RelayConfig, provider: &str, line: &Value) -> io::
 /// Read one SSE connection. The caller handles reconnects and event parsing.
 pub fn receive_once(
     config: &RelayConfig,
+    on_event: impl FnMut(String) -> io::Result<()>,
+) -> io::Result<()> {
+    receive_once_while(config, || true, on_event)
+}
+
+pub fn receive_once_while(
+    config: &RelayConfig,
+    mut is_current: impl FnMut() -> bool,
     mut on_event: impl FnMut(String) -> io::Result<()>,
 ) -> io::Result<()> {
     let url = config.endpoint(&config.receiver_channel)?;
@@ -246,9 +236,15 @@ pub fn receive_once(
             ));
         }
         if count == 0 {
+            if !is_current() {
+                return Ok(());
+            }
             if let Some(message) = decoder.finish() {
                 on_event(message)?;
             }
+            return Ok(());
+        }
+        if !is_current() {
             return Ok(());
         }
         let line = String::from_utf8_lossy(&line);
@@ -423,5 +419,46 @@ mod tests {
         .unwrap();
         assert_eq!(received, ["first\nsecond"]);
         receiver.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[test]
+    fn replacing_configuration_stops_an_existing_event_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut config = RelayConfig::default_for_host("Test")
+            .with_receiver_channel()
+            .unwrap();
+        config.server = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: first\n\ndata: stale\n\n").unwrap();
+        });
+        let current = AtomicBool::new(true);
+        let mut seen = Vec::new();
+        receive_once_while(
+            &config,
+            || current.load(Ordering::Acquire),
+            |message| {
+                seen.push(message);
+                current.store(false, Ordering::Release);
+                Ok(())
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(seen, vec!["first"]);
     }
 }

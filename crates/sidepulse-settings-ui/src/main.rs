@@ -24,6 +24,7 @@ struct ServiceState {
     history_timeframe: u32,
     history_sampled: bool,
     lid_durations: [f64; 2],
+    relay: sidepulse_core::RelaySettings,
 }
 
 enum Update {
@@ -46,6 +47,8 @@ enum DraftKind {
     Terminal,
     Library,
     LidTiming,
+    Relay,
+    RelayControl,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -105,8 +108,14 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return animation profiles.".into());
     };
+    let ServerPayload::RelaySettings { settings: relay } =
+        request(endpoint, RequestKind::RelaySettings)?
+    else {
+        return Err("The service did not return relay settings.".into());
+    };
     Ok(ServiceState {
         settings,
+        relay,
         activity,
         agents: snapshot.statuses,
         devices,
@@ -198,10 +207,29 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         RequestKind::EditAnimationLibrary { .. }
                         | RequestKind::SetAnimationState { .. } => DraftKind::Library,
                         RequestKind::SetLidAnimationTiming { .. } => DraftKind::LidTiming,
+                        RequestKind::SetRelaySettings { ref patch }
+                            if patch.server.is_none()
+                                && patch.machine_name.is_none()
+                                && patch.outbound_code.is_some() =>
+                        {
+                            DraftKind::RelayControl
+                        }
+                        RequestKind::SetRelaySettings { ref patch }
+                            if patch.server.is_some()
+                                || patch.machine_name.is_some()
+                                || patch.outbound_code.is_some() =>
+                        {
+                            DraftKind::Relay
+                        }
+                        RequestKind::SetRelaySettings { .. } | RequestKind::ReloadRelaySettings => {
+                            DraftKind::RelayControl
+                        }
                         _ => DraftKind::None,
                     };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
-                        ServerPayload::Settings { .. } | ServerPayload::Devices { .. } => Ok(()),
+                        ServerPayload::Settings { .. }
+                        | ServerPayload::Devices { .. }
+                        | ServerPayload::RelaySettings { .. } => Ok(()),
                         _ => Err("The service did not confirm the change.".into()),
                     });
                     if updates.send(Update::Saved { result, draft }).is_err() {
@@ -226,6 +254,7 @@ enum Page {
     Animations,
     History,
     Sessions,
+    Relay,
 }
 
 struct SettingsApp {
@@ -272,6 +301,11 @@ struct SettingsApp {
     library_saving: bool,
     lid_durations: [f64; 2],
     lid_duration_dirty: bool,
+    relay_dirty: bool,
+    relay_saving: bool,
+    relay_server: String,
+    relay_name: String,
+    relay_outbound: String,
 }
 
 impl SettingsApp {
@@ -321,6 +355,11 @@ impl SettingsApp {
             library_saving: false,
             lid_durations: [1.0, 1.3],
             lid_duration_dirty: false,
+            relay_dirty: false,
+            relay_saving: false,
+            relay_server: String::new(),
+            relay_name: String::new(),
+            relay_outbound: String::new(),
         }
     }
 
@@ -396,6 +435,11 @@ impl SettingsApp {
                     if !self.sleep_dirty {
                         self.sleep_battery_percent = state.settings.sleep_min_battery_percent;
                     }
+                    if !self.relay_dirty {
+                        self.relay_server = state.relay.server.clone();
+                        self.relay_name = state.relay.machine_name.clone();
+                        self.relay_outbound = state.relay.outbound_code.clone();
+                    }
                     if !self.lid_duration_dirty {
                         self.lid_durations = state.lid_durations;
                     }
@@ -466,6 +510,15 @@ impl SettingsApp {
                             if success {
                                 self.terminal_dirty = false;
                             }
+                        }
+                        DraftKind::Relay => {
+                            self.relay_saving = false;
+                            if success {
+                                self.relay_dirty = false;
+                            }
+                        }
+                        DraftKind::RelayControl => {
+                            self.relay_saving = false;
                         }
                         DraftKind::None => {}
                         DraftKind::Library => {
@@ -1185,6 +1238,135 @@ impl SettingsApp {
         }
     }
 
+    fn relay(&mut self, ui: &mut egui::Ui) {
+        use sidepulse_core::RelaySettingsPatch;
+        ui.heading("Link computers");
+        ui.label("See agent activity from your other computers.");
+        let Some(state) = &self.state else {
+            return;
+        };
+        let relay = state.relay.clone();
+        if !relay.configured {
+            ui.weak("Relay is unavailable in this session.");
+            return;
+        }
+        ui.add_space(16.0);
+        ui.add_enabled_ui(!self.relay_saving, |ui| {
+            ui.heading("Receive activity here");
+            if relay.receiver_code.is_empty() {
+                if ui.button("Create receiving code").clicked() {
+                    self.send(RequestKind::SetRelaySettings {
+                        patch: RelaySettingsPatch {
+                            receiver_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    });
+                    self.relay_saving = true;
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    ui.monospace(&relay.receiver_code);
+                    if ui.button("Copy code").clicked() {
+                        ui.ctx().copy_text(relay.receiver_code.clone());
+                    }
+                });
+                ui.weak("Use this code to link the sending computer.");
+                ui.horizontal(|ui| {
+                    if ui.button("Replace code").clicked() {
+                        self.send(RequestKind::SetRelaySettings {
+                            patch: RelaySettingsPatch {
+                                rotate_receiver: true,
+                                ..Default::default()
+                            },
+                        });
+                        self.relay_saving = true;
+                    }
+                    if ui.button("Stop receiving").clicked() {
+                        self.send(RequestKind::SetRelaySettings {
+                            patch: RelaySettingsPatch {
+                                receiver_enabled: Some(false),
+                                ..Default::default()
+                            },
+                        });
+                        self.relay_saving = true;
+                    }
+                });
+                if let Some(at) = relay.last_received_at {
+                    ui.weak(format!(
+                        "Last activity received: {} UTC",
+                        at.format("%Y-%m-%d %H:%M:%S")
+                    ));
+                }
+                if let Some(error) = &relay.receive_error {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(210, 80, 65),
+                        format!("Could not receive activity: {error}"),
+                    );
+                }
+            }
+            ui.separator();
+            ui.heading("Send activity to another computer");
+            ui.label("Receiving code from the other computer");
+            self.relay_dirty |= ui.text_edit_singleline(&mut self.relay_outbound).changed();
+            ui.label("This computer's name");
+            self.relay_dirty |= ui.text_edit_singleline(&mut self.relay_name).changed();
+            ui.collapsing("Server", |ui| {
+                self.relay_dirty |= ui.text_edit_singleline(&mut self.relay_server).changed();
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.relay_dirty, egui::Button::new("Save link"))
+                    .clicked()
+                {
+                    self.send(RequestKind::SetRelaySettings {
+                        patch: RelaySettingsPatch {
+                            server: Some(self.relay_server.clone()),
+                            machine_name: Some(self.relay_name.clone()),
+                            outbound_code: Some(self.relay_outbound.clone()),
+                            ..Default::default()
+                        },
+                    });
+                    self.relay_saving = true;
+                }
+                if ui
+                    .add_enabled(self.relay_dirty, egui::Button::new("Reset changes"))
+                    .clicked()
+                {
+                    self.relay_dirty = false;
+                }
+                if ui.button("Reload saved link").clicked() {
+                    self.send(RequestKind::ReloadRelaySettings);
+                    self.relay_saving = true;
+                }
+            });
+            if !relay.outbound_code.is_empty() {
+                if ui.button("Disconnect sending link").clicked() {
+                    self.relay_outbound.clear();
+                    self.relay_dirty = true;
+                    self.send(RequestKind::SetRelaySettings {
+                        patch: RelaySettingsPatch {
+                            outbound_code: Some(String::new()),
+                            ..Default::default()
+                        },
+                    });
+                    self.relay_saving = true;
+                }
+                if let Some(at) = relay.last_sent_at {
+                    ui.weak(format!(
+                        "Last activity sent: {} UTC",
+                        at.format("%Y-%m-%d %H:%M:%S")
+                    ));
+                }
+                if let Some(error) = &relay.send_error {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(210, 80, 65),
+                        format!("Could not send activity: {error}"),
+                    );
+                }
+            }
+        });
+    }
+
     fn edit_library(&mut self, edit: sidepulse_core::AnimationLibraryEdit) {
         self.send(RequestKind::EditAnimationLibrary { edit });
         self.library_saving = true;
@@ -1510,6 +1692,7 @@ impl eframe::App for SettingsApp {
                     (Page::Animations, "Animations"),
                     (Page::History, "History"),
                     (Page::Sessions, "Sessions"),
+                    (Page::Relay, "Link computers"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -1535,6 +1718,7 @@ impl eframe::App for SettingsApp {
                     Page::Animations => self.animations(ui),
                     Page::History => self.history(ui),
                     Page::Sessions => self.sessions(ui),
+                    Page::Relay => self.relay(ui),
                 });
             });
         });

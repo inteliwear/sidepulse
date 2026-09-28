@@ -209,6 +209,7 @@ impl StagePlan {
             )?;
         }
         fs::write(temporary.path().join("settings.json"), b"{}\n")?;
+        fs::write(temporary.path().join("relay.json"), b"{\"version\":1}\n")?;
         let rendered = render_launch_files(&self.manifest);
         for (path, contents) in self.manifest.launch_files.iter().zip(rendered) {
             fs::write(
@@ -393,6 +394,8 @@ fn service_command_for_stage(stage: &Path, executable: &Path, endpoint: &str) ->
             .into_owned(),
         "--settings".into(),
         stage.join("settings.json").to_string_lossy().into_owned(),
+        "--relay-config".into(),
+        stage.join("relay.json").to_string_lossy().into_owned(),
     ];
     for provider in ["codex", "claude", "grok", "cursor", "junie"] {
         command.push("--log".into());
@@ -531,7 +534,7 @@ mod tests {
             let manifest = plan.stage().unwrap();
             assert_eq!(manifest.binaries.len(), 7);
             assert_eq!(manifest.launch_files.len(), 2);
-            assert_eq!(manifest.service_command.len(), 21);
+            assert_eq!(manifest.service_command.len(), 23);
             assert!(manifest.service_command.contains(&"cursor".to_owned()));
             assert!(
                 manifest

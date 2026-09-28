@@ -88,7 +88,7 @@ after a service restart. The animation page saves built-in presets and per-statu
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
 named custom assets remain selectable and are preserved. Named assets, profiles, and session-opening preferences now have service-owned
-operations and native controls. Relay controls and broader sleep controls remain open.
+operations and native controls. Relay controls now use the service as well; native helper recovery and release controls remain open.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -350,8 +350,8 @@ remains authoritative for users until the delivery gates above pass.
    for all five providers, preserving unrelated config and backups.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
-3. Port the remaining settings controls, relay, link, battery and sleep policy,
-   native helper recovery into service modules.
+3. Port phone linking, manual delivery and push notifications, native helper
+   recovery, and the remaining settings controls into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
 5. Cover the remaining CLI entry points, turn the staged native binaries into
@@ -435,3 +435,26 @@ file, verify transition/hold/open/manual behavior, interrupted transitions,
 unknown readings, startup, grace expiry, and atomic duration saves. Native lid
 hardware and power-control execution still need validation; automatic system
 power changes remain behind the explicit `--power-control` preview flag.
+
+## Relay configuration controls
+
+The service now owns relay settings when started with an explicit `--relay-config`
+path. The native Link computers page creates and replaces receiving codes,
+configures sending links and the computer name, disconnects either direction,
+and shows the last successful activity and transport errors. The Rust CLI can
+use `link --endpoint` for the same service-owned writes, or manage an explicit
+legacy relay file offline. Unknown fields and private permissions are preserved;
+external edits produce a conflict until the saved file is explicitly reloaded.
+
+Receiving connections are tied to the configuration generation. Changing or
+stopping a link discards later messages from its previous stream, then reconnects
+using the new configuration. An idle connection may take up to its bounded
+read timeout to close, but its old messages cannot enter the monitor after the
+change. Isolated preview bundles include their own disabled relay file. No
+network relay starts until a receiving code or sending link is configured.
+
+Portable tests cover actual CLI/IPC updates, code replacement, conflicts and
+reload, unknown fields, permissions, and SSE cancellation. Local HTTP process
+tests exercise publishing, receiving, and rejecting stale events after a receiver
+is disabled. A `--mock-power` JSON input supports deterministic device/lid process
+checks on every platform and cannot be combined with system power control.

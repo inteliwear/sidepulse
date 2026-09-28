@@ -41,6 +41,11 @@ pub enum RequestKind {
     },
     VirtualDisplay,
     History,
+    RelaySettings,
+    SetRelaySettings {
+        patch: crate::RelaySettingsPatch,
+    },
+    ReloadRelaySettings,
     SessionTargets {
         agent_id: String,
         action: Option<SessionAction>,
@@ -112,6 +117,9 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    RelaySettings {
+        settings: crate::RelaySettings,
+    },
     AnimationLibrary {
         library: crate::AnimationLibrary,
     },
@@ -331,6 +339,9 @@ impl ClientRequest {
             && !matches!(mode.as_str(), "agent" | "battery" | "custom")
         {
             return Err("invalid display mode");
+        }
+        if let RequestKind::SetRelaySettings { patch } = &self.kind {
+            patch.validate()?;
         }
         if let RequestKind::SetBatterySettings { patch } = &self.kind {
             patch.validate()?;

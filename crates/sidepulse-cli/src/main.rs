@@ -122,15 +122,21 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(command @ ("service-history" | "service-virtual-frame")) => {
+        Some(
+            command @ ("service-history"
+            | "service-virtual-frame"
+            | "service-relay-settings"
+            | "service-relay-reload"),
+        ) => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next {command} ENDPOINT");
                 return ExitCode::from(2);
             };
-            let kind = if command == "service-history" {
-                RequestKind::History
-            } else {
-                RequestKind::VirtualDisplay
+            let kind = match command {
+                "service-history" => RequestKind::History,
+                "service-relay-settings" => RequestKind::RelaySettings,
+                "service-relay-reload" => RequestKind::ReloadRelaySettings,
+                _ => RequestKind::VirtualDisplay,
             };
             let request = ClientRequest {
                 version: PROTOCOL_VERSION,
@@ -498,7 +504,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | animation-profile ENDPOINT OPERATION | animation-asset ENDPOINT OPERATION | service-lid-duration ENDPOINT lid_open|lid_closed SECONDS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH | --endpoint ENDPOINT] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | animation-profile ENDPOINT OPERATION | animation-asset ENDPOINT OPERATION | service-lid-duration ENDPOINT lid_open|lid_closed SECONDS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

@@ -339,6 +339,16 @@ fn service_updates_settings_and_device_from_one_request() {
     let endpoint = directory.join("s.sock");
     let settings_path = directory.join("settings.json");
     fs::write(&settings_path, r#"{"unknown":{"keep":true}}"#).unwrap();
+    let power_path = directory.join("power.json");
+    fs::write(
+        &power_path,
+        serde_json::to_vec(&sidepulse_core::PowerSnapshot {
+            lid_closed: Some(false),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
     let server = Server(
         Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
             .arg(&endpoint)
@@ -346,6 +356,8 @@ fn service_updates_settings_and_device_from_one_request() {
             .arg(&device)
             .arg("--settings")
             .arg(&settings_path)
+            .arg("--mock-power")
+            .arg(&power_path)
             .env("HOME", &directory)
             .env("XDG_STATE_HOME", &directory)
             .stdout(Stdio::null())
@@ -782,5 +794,109 @@ fn service_updates_sleep_policy_without_starting_power_control() {
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
     assert_eq!(saved["sleep_prevention_policy"], "never");
     assert_eq!(saved["unknown"], true);
+    drop(server);
+}
+
+#[test]
+fn disabling_receiver_rejects_later_messages_from_the_existing_stream() {
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let endpoint = directory.path().join("s.sock");
+    let relay_path = directory.path().join("relay.json");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut config = sidepulse_relay::RelayConfig::default_for_host("Test")
+        .with_receiver_channel()
+        .unwrap();
+    config.server = format!("http://{}", listener.local_addr().unwrap());
+    sidepulse_relay::save_config(&relay_path, &config).unwrap();
+    let server = Server(
+        Command::new(env!("CARGO_BIN_EXE_sidepulse-next-service"))
+            .arg(&endpoint)
+            .arg("--relay-config")
+            .arg(&relay_path)
+            .env("HOME", directory.path())
+            .env("XDG_STATE_HOME", directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let endpoint = endpoint.to_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "receiver did not connect");
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("listener failed: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" {
+            break;
+        }
+    }
+    reader
+        .get_mut()
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .unwrap();
+    let message = |session: &str| {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "v":1,"type":"agent_event","event_id":session,"source":{"name":"Laptop"},"provider":"claude",
+                "line":{"hook_event_name":"PreToolUse","session_id":session,"logged_at":chrono::Utc::now().to_rfc3339()}
+            })
+        )
+    };
+    reader
+        .get_mut()
+        .write_all(message("before").as_bytes())
+        .unwrap();
+    while !snapshot(endpoint).is_some_and(|state| {
+        state
+            .statuses
+            .iter()
+            .any(|status| status.session_id.as_deref() == Some("before"))
+    }) {
+        assert!(Instant::now() < deadline, "first event was not received");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind: RequestKind::SetRelaySettings {
+            patch: sidepulse_core::RelaySettingsPatch {
+                receiver_enabled: Some(false),
+                ..Default::default()
+            },
+        },
+    };
+    let reply: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)).unwrap();
+    let ServerPayload::RelaySettings { settings } = reply.payload else {
+        panic!("missing relay settings");
+    };
+    assert!(settings.receiver_code.is_empty());
+    let _ = reader.get_mut().write_all(message("after").as_bytes());
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        !snapshot(endpoint)
+            .unwrap()
+            .statuses
+            .iter()
+            .any(|status| status.session_id.as_deref() == Some("after"))
+    );
+    drop(reader);
     drop(server);
 }

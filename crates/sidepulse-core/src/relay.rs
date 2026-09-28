@@ -110,3 +110,50 @@ mod tests {
         assert!(parse_relay_message(&message.to_string().replace("\"v\":1", "\"v\":2")).is_none());
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RelaySettings {
+    pub configured: bool,
+    pub server: String,
+    pub machine_name: String,
+    pub receiver_code: String,
+    pub outbound_code: String,
+    pub last_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub receive_error: Option<String>,
+    pub send_error: Option<String>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RelaySettingsPatch {
+    pub server: Option<String>,
+    pub machine_name: Option<String>,
+    pub outbound_code: Option<String>,
+    pub receiver_enabled: Option<bool>,
+    #[serde(default)]
+    pub rotate_receiver: bool,
+}
+impl RelaySettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.len() > 4096)
+            || self
+                .machine_name
+                .as_ref()
+                .is_some_and(|name| name.len() > 512 || name.contains('\0'))
+        {
+            return Err("invalid relay settings");
+        }
+        if self.outbound_code.as_ref().is_some_and(|code| {
+            let code = code.trim();
+            (!code.is_empty() && !(11..=128).contains(&code.len()))
+                || !code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        }) {
+            return Err("invalid relay code");
+        }
+        Ok(())
+    }
+}

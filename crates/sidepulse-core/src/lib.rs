@@ -48,3 +48,5 @@ mod lid;
 pub use lid::{LidOutputAction, LidOutputPolicy};
 
 pub use sleep::AwakeActivity;
+
+pub use relay::{RelaySettings, RelaySettingsPatch};

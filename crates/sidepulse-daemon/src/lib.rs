@@ -2,6 +2,7 @@
 
 mod history;
 mod power;
+mod relay_service;
 mod settings;
 mod virtual_display;
 
@@ -27,7 +28,7 @@ use sidepulse_device::battery_preview::BatteryPreview;
 use sidepulse_device::led_count_for_target;
 use sidepulse_device::{DeviceOutput, default_mount_roots, discover_devices};
 use sidepulse_ipc::{read_message, write_message};
-use sidepulse_relay::{load_config, publish_event, receive_once};
+use sidepulse_relay::{publish_event, receive_once_while};
 use sidepulse_sources::{SourceSpec, SourceTailer, load_recent_events, sources_from_environment};
 use tempfile::NamedTempFile;
 
@@ -60,6 +61,9 @@ pub struct Service {
     power_observation: Arc<Mutex<Option<sidepulse_core::PowerSnapshot>>>,
     lid_output: Arc<Mutex<sidepulse_core::LidOutputPolicy>>,
     output_started: Arc<OutputClock>,
+    relay_config_store: Arc<Mutex<Option<sidepulse_relay::RelayConfigStore>>>,
+    relay_health: Arc<Mutex<relay_service::RelayHealth>>,
+    relay_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct OutputClock(Instant);
@@ -973,6 +977,36 @@ impl Service {
                     payload: self.history_snapshot()?,
                 },
             ),
+            RequestKind::RelaySettings
+            | RequestKind::SetRelaySettings { .. }
+            | RequestKind::ReloadRelaySettings => {
+                let result = match request.kind {
+                    RequestKind::RelaySettings => Ok(()),
+                    RequestKind::SetRelaySettings { patch } => self.set_relay_settings(&patch),
+                    RequestKind::ReloadRelaySettings => self.reload_relay_settings(),
+                    _ => unreachable!(),
+                };
+                let payload = result.and_then(|_| self.relay_settings()).map_or_else(
+                    |error| ServerPayload::Error {
+                        code: if error.kind() == io::ErrorKind::AlreadyExists {
+                            "relay_settings_conflict"
+                        } else {
+                            "relay_settings_failed"
+                        }
+                        .into(),
+                        message: error.to_string(),
+                    },
+                    |settings| ServerPayload::RelaySettings { settings },
+                );
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::AnimationLibrary | RequestKind::ExportAnimationProfile { .. } => {
                 let result = match request.kind {
                     RequestKind::AnimationLibrary => self
@@ -1059,7 +1093,13 @@ impl Service {
                 )
             }
             RequestKind::Power => {
-                let payload = match power::observe() {
+                let observation = self
+                    .power_observation
+                    .lock()
+                    .map_err(poisoned)?
+                    .clone()
+                    .map_or_else(power::observe, Ok);
+                let payload = match observation {
                     Ok(snapshot) => ServerPayload::Power { snapshot },
                     Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                         ServerPayload::Error {
@@ -1455,9 +1495,23 @@ pub fn run_with_logs_and_device(
             auto_device: false,
             relay_config_path: None,
             power_control: false,
+            power_observation_path: None,
             history_path: None,
         },
     )
+}
+
+fn read_mock_power(path: &Path) -> io::Result<sidepulse_core::PowerSnapshot> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    File::open(path)?.take(65537).read_to_end(&mut bytes)?;
+    if bytes.len() > 65536 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "power observation is too large",
+        ));
+    }
+    serde_json::from_slice(&bytes).map_err(io::Error::other)
 }
 
 pub struct RunOptions<'a> {
@@ -1468,6 +1522,7 @@ pub struct RunOptions<'a> {
     pub auto_device: bool,
     pub relay_config_path: Option<&'a Path>,
     pub power_control: bool,
+    pub power_observation_path: Option<&'a Path>,
     pub history_path: Option<&'a Path>,
 }
 
@@ -1499,8 +1554,15 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         auto_device,
         relay_config_path,
         power_control,
+        power_observation_path,
         history_path,
     } = options;
+    if power_control && power_observation_path.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "power simulation cannot be combined with system power control",
+        ));
+    }
     #[cfg(not(target_os = "macos"))]
     if power_control {
         return Err(io::Error::new(
@@ -1520,6 +1582,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
     });
     if let Some(path) = settings_path {
         service.configure_settings(path)?;
+    }
+    if let Some(path) = power_observation_path {
+        service.observe_power(&read_mock_power(path)?)?;
     }
     let history_path = history_path.map(Path::to_path_buf).or_else(|| {
         latest_state_path
@@ -1600,41 +1665,84 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         });
     }
     if let Some(path) = relay_config_path {
-        let path = path.to_path_buf();
-        let host = std::env::var("HOSTNAME")
-            .or_else(|_| std::env::var("COMPUTERNAME"))
-            .unwrap_or_else(|_| "Remote computer".into());
+        use std::sync::atomic::Ordering;
+        service.configure_relay(path)?;
         let (sender, receiver) = mpsc::sync_channel(128);
         *service.relay_publisher.lock().map_err(poisoned)? = Some(sender);
-        let publish_path = path.clone();
-        let publish_host = host.clone();
+        let publish_service = service.clone();
         std::thread::spawn(move || {
             for (provider, line) in receiver {
-                match load_config(&publish_path, &publish_host) {
-                    Ok(config) if !config.outbound_channel.is_empty() => {
-                        if let Err(error) = publish_event(&config, &provider, &line) {
-                            eprintln!("sidepulse-next-service: relay send failed: {error}");
-                        }
+                let result = publish_service.relay_config().and_then(|config| {
+                    if let Some(config) = config
+                        && !config.outbound_channel.is_empty()
+                    {
+                        publish_event(&config, &provider, &line)?;
+                        let mut health = publish_service.relay_health.lock().map_err(poisoned)?;
+                        health.last_sent_at = Some(Utc::now());
+                        health.send_error = None;
                     }
-                    Ok(_) => {}
-                    Err(error) => eprintln!("sidepulse-next-service: relay config: {error}"),
+                    Ok(())
+                });
+                if let Err(error) = result {
+                    if let Ok(mut health) = publish_service.relay_health.lock() {
+                        health.send_error = Some(error.to_string());
+                    }
+                    eprintln!("sidepulse-next-service: relay send failed: {error}");
                 }
             }
         });
         let receiver_service = service.clone();
         std::thread::spawn(move || {
+            let mut last_error = None;
             loop {
-                match load_config(&path, &host) {
-                    Ok(config) if !config.receiver_channel.is_empty() => {
-                        if let Err(error) = receive_once(&config, |message| {
-                            receiver_service.ingest_relay_message(&message)?;
-                            Ok(())
-                        }) {
-                            eprintln!("sidepulse-next-service: relay receive failed: {error}");
-                        }
+                let generation = receiver_service.relay_generation.load(Ordering::Acquire);
+                let result = receiver_service.relay_config().and_then(|config| {
+                    if let Some(config) = config
+                        && !config.receiver_channel.is_empty()
+                    {
+                        receive_once_while(
+                            &config,
+                            || {
+                                generation
+                                    == receiver_service.relay_generation.load(Ordering::Acquire)
+                            },
+                            |message| {
+                                let _configuration = receiver_service
+                                    .relay_config_store
+                                    .lock()
+                                    .map_err(poisoned)?;
+                                if generation
+                                    != receiver_service.relay_generation.load(Ordering::Acquire)
+                                {
+                                    return Ok(());
+                                }
+                                if receiver_service.ingest_relay_message(&message)? {
+                                    let mut health =
+                                        receiver_service.relay_health.lock().map_err(poisoned)?;
+                                    health.last_received_at = Some(Utc::now());
+                                    health.receive_error = None;
+                                }
+                                Ok(())
+                            },
+                        )?;
                     }
-                    Ok(_) => {}
-                    Err(error) => eprintln!("sidepulse-next-service: relay config: {error}"),
+                    Ok(())
+                });
+                if generation != receiver_service.relay_generation.load(Ordering::Acquire) {
+                    last_error = None;
+                    continue;
+                }
+                if let Err(error) = result {
+                    let message = error.to_string();
+                    if let Ok(mut health) = receiver_service.relay_health.lock() {
+                        health.receive_error = Some(message.clone());
+                    }
+                    if last_error.as_deref() != Some(message.as_str()) {
+                        eprintln!("sidepulse-next-service: relay receive failed: {message}");
+                    }
+                    last_error = Some(message);
+                } else {
+                    last_error = None;
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
@@ -1765,19 +1873,25 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             }
         });
     }
-    if history_path.is_some()
+    if power_observation_path.is_some()
+        || history_path.is_some()
         || device.is_some()
         || auto_device
         || settings_path.is_some()
         || power_control
     {
         let record_history = history_path.is_some();
+        let power_observation_path = power_observation_path.map(Path::to_path_buf);
         let history_service = service.clone();
         std::thread::spawn(move || {
             let mut last_error = None;
             loop {
-                let observation = power::observe().ok();
                 let result = (|| -> io::Result<()> {
+                    let observation = if let Some(path) = &power_observation_path {
+                        Some(read_mock_power(path)?)
+                    } else {
+                        power::observe().ok()
+                    };
                     if let Some(observation) = &observation {
                         history_service.observe_power(observation)?;
                     }
