@@ -745,3 +745,16 @@ remain quoted data. Captured title and matching cases, quoting, and optional
 protocol compatibility pass automated tests. Actual terminal focus and reuse
 remain part of macOS visual QA; no real activation script was executed during
 this implementation.
+
+
+## Maintained native examples
+
+`sidepulse-examples` ports the audio meter and original score demonstration.
+CPAL capture is an optional feature; the application service and GUI clients
+have no audio dependency. The examples keep pure level/score program generation
+separate from capture, network polling, presentation, and device output.
+57 captured Python programs match exactly. Offline CLI checks and mock-device
+tests pass without microphone capture, an external scoreboard request, or real
+LED writes. Live capture is compiled in CI on all three platforms; actual audio
+hardware and permission behavior remain unverified. The classifier benchmark
+was already ported in `sidepulse-reply`.

@@ -1,0 +1,401 @@
+[
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#002900 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0,
+    "peak": 1,
+    "program": "0:#001400 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.25,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.25,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#005E00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.25,
+    "peak": 1,
+    "program": "0:#004F00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.5,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.5,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#009400 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.5,
+    "peak": 1,
+    "program": "0:#008A00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.8,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.8,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00D400 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 0.8,
+    "peak": 1,
+    "program": "0:#00D000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 1,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 1,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 1,
+    "level": 1,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#002900 90ms cosine; 1:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0,
+    "peak": 1,
+    "program": "0:#001400 90ms cosine; 1:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.25,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.25,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#009400 90ms cosine; 1:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.25,
+    "peak": 1,
+    "program": "0:#008A00 90ms cosine; 1:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.5,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.5,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.5,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.8,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.8,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#A90000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 0.8,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#A10000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 1,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 1,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 2,
+    "level": 1,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#002900 90ms cosine; 1:#0C2900 90ms cosine; 2:#172900 90ms cosine; 3:#232900 90ms cosine; 4:#292300 90ms cosine; 5:#291700 90ms cosine; 6:#290C00 90ms cosine; 7:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0,
+    "peak": 1,
+    "program": "0:#001400 90ms cosine; 1:#061400 90ms cosine; 2:#0C1400 90ms cosine; 3:#121400 90ms cosine; 4:#141200 90ms cosine; 5:#140C00 90ms cosine; 6:#140600 90ms cosine; 7:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.25,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.25,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#172900 90ms cosine; 3:#232900 90ms cosine; 4:#292300 90ms cosine; 5:#291700 90ms cosine; 6:#290C00 90ms cosine; 7:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.25,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#0C1400 90ms cosine; 3:#121400 90ms cosine; 4:#141200 90ms cosine; 5:#140C00 90ms cosine; 6:#140600 90ms cosine; 7:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.5,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.5,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#292300 90ms cosine; 5:#291700 90ms cosine; 6:#290C00 90ms cosine; 7:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.5,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#141200 90ms cosine; 5:#140C00 90ms cosine; 6:#140600 90ms cosine; 7:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.8,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.8,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#7E2400 90ms cosine; 7:#290000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 0.8,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#722100 90ms cosine; 7:#140000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 1,
+    "peak": 0,
+    "program": "brightness 20\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 1,
+    "peak": 0.5,
+    "program": "brightness 128\n0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "audio",
+    "count": 8,
+    "level": 1,
+    "peak": 1,
+    "program": "0:#00FF00 90ms cosine; 1:#49FF00 90ms cosine; 2:#92FF00 90ms cosine; 3:#DBFF00 90ms cosine; 4:#FFDB00 90ms cosine; 5:#FF9200 90ms cosine; 6:#FF4900 90ms cosine; 7:#FF0000 90ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 2,
+    "left": 0,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#000003 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 2,
+    "left": 2,
+    "right": 1,
+    "program": "0:#FF0000 250ms cosine; 1:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 2,
+    "left": 8,
+    "right": 6,
+    "program": "0:#FF0000 250ms cosine; 1:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 2,
+    "left": -1,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#000003 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 5,
+    "left": 0,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#030000 250ms cosine; 2:#000003 250ms cosine; 3:#000003 250ms cosine; 4:#000003 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 5,
+    "left": 2,
+    "right": 1,
+    "program": "0:#FF0000 250ms cosine; 1:#FF0000 250ms cosine; 2:#000003 250ms cosine; 3:#000003 250ms cosine; 4:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 5,
+    "left": 8,
+    "right": 6,
+    "program": "0:#FF0000 250ms cosine; 1:#FF0000 250ms cosine; 2:#0000FF 250ms cosine; 3:#0000FF 250ms cosine; 4:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 5,
+    "left": -1,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#030000 250ms cosine; 2:#000003 250ms cosine; 3:#000003 250ms cosine; 4:#000003 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 8,
+    "left": 0,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#030000 250ms cosine; 2:#030000 250ms cosine; 3:#030000 250ms cosine; 4:#000003 250ms cosine; 5:#000003 250ms cosine; 6:#000003 250ms cosine; 7:#000003 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 8,
+    "left": 2,
+    "right": 1,
+    "program": "0:#FF0000 250ms cosine; 1:#FF0000 250ms cosine; 2:#030000 250ms cosine; 3:#030000 250ms cosine; 4:#000003 250ms cosine; 5:#000003 250ms cosine; 6:#000003 250ms cosine; 7:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 8,
+    "left": 8,
+    "right": 6,
+    "program": "0:#FF0000 250ms cosine; 1:#FF0000 250ms cosine; 2:#FF0000 250ms cosine; 3:#FF0000 250ms cosine; 4:#0000FF 250ms cosine; 5:#0000FF 250ms cosine; 6:#0000FF 250ms cosine; 7:#0000FF 250ms cosine"
+  },
+  {
+    "kind": "score",
+    "count": 8,
+    "left": -1,
+    "right": 0,
+    "program": "0:#030000 250ms cosine; 1:#030000 250ms cosine; 2:#030000 250ms cosine; 3:#030000 250ms cosine; 4:#000003 250ms cosine; 5:#000003 250ms cosine; 6:#000003 250ms cosine; 7:#000003 250ms cosine"
+  }
+]
