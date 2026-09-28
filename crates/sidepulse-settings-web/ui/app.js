@@ -338,7 +338,7 @@ function history() {
   const top=[...header('Activity history','Agent status, battery level, charger power, and sleep activity over time.'),
     field('Timeframe',select('history-timeframe',String(s.history_timeframe),[3600,21600,43200,86400,172800].map(seconds=>[String(seconds),`Last ${seconds/3600} ${seconds===3600?'hour':'hours'}`]),seconds=>request('set_history_timeframe',{seconds:Number(seconds)})))];
   if(!points.length)return [...top,p('No history yet. New observations appear while the service is running.','empty')];
-  const width=532,height=375,left=0,right=532,first=Date.parse(points[0].recorded_at),last=Date.parse(points.at(-1).recorded_at);
+  const width=532,height=375,left=0,right=532,first=Date.parse(points[0].recorded_at),last=Date.parse(points[points.length-1].recorded_at);
   const span=Math.max(1,last-first),x=point=>left+(Date.parse(point.recorded_at)-first)/span*(right-left);
   const chart=svg('svg',{class:'history',viewBox:`0 0 ${width} ${height}`,preserveAspectRatio:'none',role:'img','aria-label':'Battery, charger, agent status, awake, sleep and lid history',tabindex:'0'});
   const maxWatts=Math.max(10,...points.map(p=>p.charger_power_watts??0));
@@ -372,7 +372,7 @@ function history() {
   chart.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();show(event.key==='Home'?0:event.key==='End'?points.length-1:hovered+(event.key==='ArrowLeft'?-1:1));}});
   show(hovered);
   return [...top,s.history_sampled?note('Showing a summary of the recorded observations.'):null,card('Recorded observations',el('div',{class:'history-grid'},labels,chart),
-    el('div',{class:'row spread'},el('small',{},timestamp(points[0].recorded_at)),el('small',{},timestamp(points.at(-1).recorded_at))),tip,
+    el('div',{class:'row spread'},el('small',{},timestamp(points[0].recorded_at)),el('small',{},timestamp(points[points.length-1].recorded_at))),tip,
     note('Status: cyan = working · amber = needs attention · green = completed'),
     note('Awake: cyan = active · amber = requested. Sleep: amber = prevented · blue = allowed. Lid: amber = closed · green = open. Dim bands indicate unknown observations.'))];
 }

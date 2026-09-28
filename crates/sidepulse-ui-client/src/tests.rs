@@ -43,7 +43,14 @@ fn fixture(kind: RequestKind) -> ServerPayload {
             display_mode: None,
         },
         RequestKind::Snapshot => ServerPayload::Snapshot {
-            state: Monitor::new(MonitoringPolicy::default()).snapshot(chrono::Utc::now()),
+            state: {
+                let mut monitor = Monitor::new(MonitoringPolicy::default());
+                monitor.ingest(&sidepulse_core::parse_log_line("codex", &serde_json::json!({
+                    "hook_event_name":"Stop", "session_id":"recent", "cwd":"/fixture/project",
+                    "agent_origin":"Codex CLI", "logged_at":(chrono::Utc::now()-chrono::Duration::hours(2)).to_rfc3339(),
+                }).to_string()).unwrap());
+                monitor.snapshot(chrono::Utc::now())
+            },
         },
         RequestKind::Devices => ServerPayload::Devices {
             devices: vec![],
@@ -139,7 +146,11 @@ fn shared_settings_view_loads_without_a_renderer() {
     assert!(state.history_sampled);
     assert_eq!(state.lid_durations, [3.0, 4.0]);
     assert_eq!(state.diagnostics.audit_bytes, 42);
-    assert!(state.agents.is_empty() && state.devices.is_empty());
+    assert!(state.devices.is_empty());
+    assert_eq!(state.agents.len(), 1);
+    assert_eq!(state.agents[0].agent_id, "codex:session:recent");
+    assert!(state.agents[0].stale);
+    assert_eq!(state.activity.stale_rows.len(), 1);
     assert!(!state.setup.configured && !state.phones_configured);
     server.join().unwrap();
 }

@@ -188,7 +188,11 @@ pub fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
         settings,
         relay,
         activity,
-        agents: snapshot.statuses,
+        agents: snapshot
+            .statuses
+            .into_iter()
+            .chain(snapshot.stale_statuses)
+            .collect(),
         devices,
         active_device,
         animation_choices: choices,

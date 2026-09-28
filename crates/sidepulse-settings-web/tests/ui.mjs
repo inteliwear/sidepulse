@@ -77,6 +77,9 @@ try {
         if(artifactDir)await page.screenshot({path:join(artifactDir,`${engine}-${label.replaceAll(' ','-')}.png`),fullPage:true});
       }
       await nav('Activity');await click('Open session');assert.equal((await last('session_targets')).agent_id,'codex:session:fixture');
+      await page.locator('#recent-sessions summary').click();await page.locator('#recent-sessions').getByRole('button',{name:'Open session',exact:true}).click();
+      await waitFor(page,()=>page.locator('main fieldset').first().evaluate(node=>!node.disabled),'recent session remained busy');
+      assert.equal((await last('session_targets')).agent_id,'codex:session:recent');
       await nav('Devices');await page.locator('#brightness').evaluate(node=>{node.value='192';node.dispatchEvent(new Event('change',{bubbles:true}));});await page.waitForTimeout(600);assert.equal((await last('set_brightness')).brightness,192);
       await page.locator('#device-display').selectOption('battery');await page.waitForTimeout(600);assert.equal((await last('set_display_mode')).mode,'battery');
       await page.locator('#virtual-enabled').check();await page.waitForTimeout(600);assert.equal((await last('set_virtual_display')).patch.enabled,true);

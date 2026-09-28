@@ -108,7 +108,16 @@
         "can_open": true
       }
     ],
-    "stale_rows": []
+    "stale_rows": [
+      {
+        "id": "codex:session:recent",
+        "title": "Recent fixture session",
+        "subtitle": "Completed \u00b7 Codex CLI",
+        "icon": "completed",
+        "stale": true,
+        "can_open": true
+      }
+    ]
   },
   "agents": [
     {
@@ -124,6 +133,20 @@
       "message": null,
       "origin": "Codex CLI",
       "stale": false
+    },
+    {
+      "provider": "codex",
+      "agent_id": "codex:session:recent",
+      "display_name": "Recent fixture session",
+      "mode": "completed",
+      "updated_at": "2026-09-28T10:00:00Z",
+      "event_name": "Stop",
+      "session_id": "recent",
+      "cwd": "/fixture/project",
+      "tool_name": null,
+      "message": null,
+      "origin": "Codex CLI",
+      "stale": true
     }
   ],
   "devices": [
@@ -871,6 +894,12 @@
   },
   "session_actions": {
     "codex:session:fixture": [
+      {
+        "action": "terminal",
+        "label": "Terminal"
+      }
+    ],
+    "codex:session:recent": [
       {
         "action": "terminal",
         "label": "Terminal"

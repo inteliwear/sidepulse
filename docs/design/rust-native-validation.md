@@ -6,7 +6,7 @@ cutover is a separate delivery gate.
 
 ## Automated and isolated checks
 
-- Formatting, workspace lint with all features, 228 tests, and release builds pass
+- Formatting, workspace lint with all features, 229 tests, and release builds pass
   locally. CI builds, tests, packages, archives, stages, and smoke-checks macOS,
   Windows, and Linux.
 - Captured Python comparisons cover 75 origin cases, 20 transcript cases,
@@ -26,6 +26,8 @@ cutover is a separate delivery gate.
   requests, six-row history with keyboard selection, and narrow/dark layouts.
   The chart keeps 12-pixel labels at minimum width. These are fixture browser
   checks; they do not verify actual system-webview integration or desktop trays.
+- Completed sessions retain their opener targets after becoming inactive; both
+  the service and shared Settings client include them in recent-session actions.
 - A real CLI process retains pending permissions beyond its initial replay
   limit, applies appended completion events, writes plain redirected output,
   and exits cleanly on Unix termination signals. Live monitoring keeps one

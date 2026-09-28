@@ -10,6 +10,14 @@
   {
     "type": "request",
     "request": {
+      "command": "session_targets",
+      "agent_id": "codex:session:recent",
+      "action": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
       "command": "set_brightness",
       "brightness": 192
     }
@@ -297,6 +305,14 @@
     "request": {
       "command": "session_targets",
       "agent_id": "codex:session:fixture",
+      "action": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "session_targets",
+      "agent_id": "codex:session:recent",
       "action": null
     }
   },

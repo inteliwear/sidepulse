@@ -391,6 +391,7 @@ impl Service {
         let status = snapshot
             .statuses
             .iter()
+            .chain(snapshot.stale_statuses.iter())
             .find(|status| status.agent_id == agent_id)
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "session is no longer available")
@@ -2442,6 +2443,41 @@ mod tests {
         assert_eq!(state.statuses.len() + state.stale_statuses.len(), 1);
         server.join().unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn recent_completed_sessions_keep_their_open_targets() {
+        let service = Service::new();
+        let event = sidepulse_core::parse_log_line("codex", &serde_json::json!({
+            "hook_event_name":"Stop", "session_id":"recent", "cwd":"/fixture/project",
+            "agent_origin":"Codex CLI", "logged_at":(chrono::Utc::now()-chrono::Duration::hours(2)).to_rfc3339(),
+        }).to_string()).unwrap();
+        service.ingest_record(&event).unwrap();
+        let snapshot = service.snapshot().unwrap();
+        assert!(snapshot.statuses.is_empty());
+        assert_eq!(snapshot.stale_statuses.len(), 1);
+        let ServerPayload::SessionTargets {
+            options, selected, ..
+        } = service
+            .session_targets(
+                "codex:session:recent",
+                Some(sidepulse_core::SessionAction::Terminal),
+            )
+            .unwrap()
+        else {
+            panic!("expected session targets")
+        };
+        assert_eq!(selected, Some(sidepulse_core::SessionAction::Terminal));
+        assert!(
+            options
+                .iter()
+                .any(|option| option.action == sidepulse_core::SessionAction::Terminal)
+        );
+        assert!(
+            service
+                .session_targets("codex:session:missing", None)
+                .is_err()
+        );
     }
 
     #[test]
