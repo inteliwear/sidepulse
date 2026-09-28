@@ -1,12 +1,13 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
 mod history;
+mod phones;
 mod power;
 mod relay_service;
 mod settings;
 mod virtual_display;
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,9 @@ pub struct Service {
     relay_config_store: Arc<Mutex<Option<sidepulse_relay::RelayConfigStore>>>,
     relay_health: Arc<Mutex<relay_service::RelayHealth>>,
     relay_generation: Arc<std::sync::atomic::AtomicU64>,
+    phone_links: Arc<Mutex<Option<sidepulse_links::PhoneStore>>>,
+    phone_pairing: Arc<Mutex<Option<phones::PairingRuntime>>>,
+    delivery_jobs: Arc<Mutex<BTreeMap<String, sidepulse_core::DeliveryJobView>>>,
 }
 
 struct OutputClock(Instant);
@@ -977,6 +981,74 @@ impl Service {
                     payload: self.history_snapshot()?,
                 },
             ),
+            RequestKind::PhoneLinks
+            | RequestKind::RegisterPhone { .. }
+            | RequestKind::RemovePhone { .. }
+            | RequestKind::BeginPhonePairing { .. }
+            | RequestKind::CancelPhonePairing
+            | RequestKind::ReloadPhoneLinks => {
+                let result = match request.kind {
+                    RequestKind::PhoneLinks => Ok(()),
+                    RequestKind::RegisterPhone {
+                        token,
+                        name,
+                        server,
+                    } => self.register_phone(&token, &name, server.as_deref()),
+                    RequestKind::RemovePhone { id } => self.remove_phone(&id),
+                    RequestKind::BeginPhonePairing { server } => {
+                        self.begin_phone_pairing(server.as_deref())
+                    }
+                    RequestKind::CancelPhonePairing => self.cancel_phone_pairing(),
+                    RequestKind::ReloadPhoneLinks => self.reload_phone_links(),
+                    _ => unreachable!(),
+                };
+                let payload = result
+                    .and_then(|_| self.phone_links_snapshot())
+                    .unwrap_or_else(|error| ServerPayload::Error {
+                        code: "phone_links_failed".into(),
+                        message: error.to_string(),
+                    });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::Deliver { request: delivery } => {
+                let payload =
+                    self.start_delivery(&delivery)
+                        .unwrap_or_else(|error| ServerPayload::Error {
+                            code: "delivery_failed".into(),
+                            message: error.to_string(),
+                        });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
+            RequestKind::DeliveryStatus { id } => {
+                let payload =
+                    self.delivery_status(&id)
+                        .unwrap_or_else(|error| ServerPayload::Error {
+                            code: "delivery_failed".into(),
+                            message: error.to_string(),
+                        });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::RelaySettings
             | RequestKind::SetRelaySettings { .. }
             | RequestKind::ReloadRelaySettings => {
@@ -1494,6 +1566,7 @@ pub fn run_with_logs_and_device(
             settings_path: None,
             auto_device: false,
             relay_config_path: None,
+            phone_links_path: None,
             power_control: false,
             power_observation_path: None,
             history_path: None,
@@ -1521,6 +1594,7 @@ pub struct RunOptions<'a> {
     pub settings_path: Option<&'a Path>,
     pub auto_device: bool,
     pub relay_config_path: Option<&'a Path>,
+    pub phone_links_path: Option<&'a Path>,
     pub power_control: bool,
     pub power_observation_path: Option<&'a Path>,
     pub history_path: Option<&'a Path>,
@@ -1553,6 +1627,7 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         settings_path,
         auto_device,
         relay_config_path,
+        phone_links_path,
         power_control,
         power_observation_path,
         history_path,
@@ -1663,6 +1738,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                 std::thread::sleep(Duration::from_secs(1));
             }
         });
+    }
+    if let Some(path) = phone_links_path {
+        service.configure_phone_links(path)?;
     }
     if let Some(path) = relay_config_path {
         use std::sync::atomic::Ordering;

@@ -298,8 +298,13 @@ pub struct DeviceOutput {
 
 impl DeviceOutput {
     pub fn new(path: &Path, brightness: u8) -> Self {
+        Self::with_target(&target_from_device_path(path), brightness)
+    }
+
+    /// An already resolved output file, including an explicit custom file name.
+    pub fn with_target(target: &Path, brightness: u8) -> Self {
         Self {
-            target: target_from_device_path(path),
+            target: target.to_owned(),
             brightness,
             last_program: None,
             last_keepalive: None,

@@ -10,6 +10,8 @@ name = "sidepulse-next-service"
 path = "src/main.rs"
 
 [dependencies]
+uuid = { version = "1", features = ["v4"] }
+sidepulse-links = { path = "../sidepulse-links" }
 chrono.workspace = true
 interprocess.workspace = true
 serde_json.workspace = true

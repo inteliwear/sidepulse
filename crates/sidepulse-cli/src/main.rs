@@ -42,6 +42,8 @@ fn main() -> ExitCode {
         Some("status") => sidepulse_cli::run_status(args),
         Some("watch" | "live") => sidepulse_cli::run_watch(args),
         Some("doctor") => sidepulse_cli::run_doctor(args),
+        Some(command @ ("write" | "push")) => sidepulse_cli::run_delivery(command, args),
+        Some("phone-link") => sidepulse_cli::run_phone_link(args),
         Some("link") => sidepulse_cli::run_link(args),
         Some("battery") => sidepulse_cli::run_battery(args),
         Some(command @ ("settings" | "virtual-display")) => {

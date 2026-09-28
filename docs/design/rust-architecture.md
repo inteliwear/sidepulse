@@ -458,3 +458,38 @@ reload, unknown fields, permissions, and SSE cancellation. Local HTTP process
 tests exercise publishing, receiving, and rejecting stale events after a receiver
 is disabled. A `--mock-power` JSON input supports deterministic device/lid process
 checks on every platform and cannot be combined with system power control.
+
+## Phone pairing and manual delivery (Rust preview)
+
+`sidepulse-core` selects destinations without I/O: `write` prefers a mounted
+local device, `push` prefers a saved phone, notifications require a phone, and
+ambiguous names require an explicit ID. `--all` fans LED programs out to both
+kinds of destination. `--dry-run` returns the same plan without writing or sending.
+
+`sidepulse-links` owns the legacy version-1 `links.json` schema, private atomic
+credential saves, pairing URLs and QR matrices, bounded registration SSE, and
+HTTP notification transport. Unknown saved fields survive edits; conflicting
+external saves require a reload. Public snapshots expose the legacy short phone
+ID, name and server, without a push token. Transport errors redact tokens.
+
+The service owns five-minute pairing sessions, cancellation, saved phone
+mutations, and bounded asynchronous delivery jobs. A replaced or cancelled
+pairing cannot save a late registration. Manual local writes switch the device
+to its saved custom display mode while holding the output lock, preserving its
+brightness setting. Explicit filenames are resolved once and written as given.
+Delivery errors are reported for each destination.
+
+The settings client's Link phones page renders the service's QR matrix and
+saved phone summaries. The CLI exposes `phone-link pair|list|cancel|reload|register|remove`
+and `write` / `push`, with `--endpoint` or `SIDEPULSE_NEXT_ENDPOINT`. CLI pairing
+starts a service-owned session; `phone-link list` reads its subsequent state.
+Preview staging supplies an isolated empty `links.json` and an explicit service
+path. It never imports the installed phone credentials.
+
+Portable tests cover legacy documents, unknown fields, stale saves, Unix file
+permissions, actual local HTTP pairing and notification delivery, invalid
+registrations, cancellation before connecting, destination routing, actual
+CLI/IPC registration/removal, dry runs, manual output, and custom filenames.
+Automatic linked-phone agent output and saved phone display controls are the
+next implementation step. Real-device pairing and native visual QA remain
+pending while the Mac is locked.

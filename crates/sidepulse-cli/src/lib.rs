@@ -1,4 +1,5 @@
 mod battery;
+mod delivery;
 mod doctor;
 mod hook_config;
 mod hook_impl;
@@ -12,3 +13,5 @@ pub use hook_impl::run_hook;
 pub use relay_link::run_link;
 pub use status::run_status;
 pub use status::run_watch;
+
+pub use delivery::{run_delivery, run_phone_link};

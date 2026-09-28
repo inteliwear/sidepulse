@@ -42,6 +42,26 @@ pub enum RequestKind {
     VirtualDisplay,
     History,
     RelaySettings,
+    PhoneLinks,
+    RegisterPhone {
+        token: String,
+        name: String,
+        server: Option<String>,
+    },
+    RemovePhone {
+        id: String,
+    },
+    BeginPhonePairing {
+        server: Option<String>,
+    },
+    CancelPhonePairing,
+    ReloadPhoneLinks,
+    DeliveryStatus {
+        id: String,
+    },
+    Deliver {
+        request: crate::DeliveryRequest,
+    },
     SetRelaySettings {
         patch: crate::RelaySettingsPatch,
     },
@@ -117,6 +137,17 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    DeliveryJob {
+        job: crate::DeliveryJobView,
+    },
+    PhoneLinks {
+        configured: bool,
+        links: Vec<crate::PhoneLinkSummary>,
+        pairing: Option<crate::PhonePairingView>,
+    },
+    Delivery {
+        outcomes: Vec<crate::DeliveryOutcome>,
+    },
     RelaySettings {
         settings: crate::RelaySettings,
     },
@@ -339,6 +370,36 @@ impl ClientRequest {
             && !matches!(mode.as_str(), "agent" | "battery" | "custom")
         {
             return Err("invalid display mode");
+        }
+        if let RequestKind::Deliver { request } = &self.kind {
+            request.validate()?;
+        }
+        if let RequestKind::RegisterPhone {
+            token,
+            name,
+            server,
+        } = &self.kind
+            && (token.len() > 512
+                || name.trim().is_empty()
+                || name.len() > 512
+                || server.as_ref().is_some_and(|server| server.len() > 4096))
+        {
+            return Err("invalid phone registration");
+        }
+        if let RequestKind::DeliveryStatus { id } = &self.kind
+            && (id.is_empty() || id.len() > 128)
+        {
+            return Err("invalid delivery identifier");
+        }
+        if let RequestKind::RemovePhone { id } = &self.kind
+            && (id.is_empty() || id.len() > 128)
+        {
+            return Err("invalid phone identifier");
+        }
+        if let RequestKind::BeginPhonePairing { server } = &self.kind
+            && server.as_ref().is_some_and(|server| server.len() > 4096)
+        {
+            return Err("invalid pairing server");
         }
         if let RequestKind::SetRelaySettings { patch } = &self.kind {
             patch.validate()?;

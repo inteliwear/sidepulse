@@ -25,6 +25,9 @@ struct ServiceState {
     history_sampled: bool,
     lid_durations: [f64; 2],
     relay: sidepulse_core::RelaySettings,
+    phones_configured: bool,
+    phones: Vec<sidepulse_core::PhoneLinkSummary>,
+    phone_pairing: Option<sidepulse_core::PhonePairingView>,
 }
 
 enum Update {
@@ -49,6 +52,7 @@ enum DraftKind {
     LidTiming,
     Relay,
     RelayControl,
+    Phone,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -113,7 +117,18 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return relay settings.".into());
     };
+    let ServerPayload::PhoneLinks {
+        configured: phones_configured,
+        links: phones,
+        pairing: phone_pairing,
+    } = request(endpoint, RequestKind::PhoneLinks)?
+    else {
+        return Err("The service did not return phone links.".into());
+    };
     Ok(ServiceState {
+        phones_configured,
+        phones,
+        phone_pairing,
         settings,
         relay,
         activity,
@@ -199,6 +214,11 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         continue;
                     }
                     let draft = match kind {
+                        RequestKind::RegisterPhone { .. }
+                        | RequestKind::RemovePhone { .. }
+                        | RequestKind::BeginPhonePairing { .. }
+                        | RequestKind::CancelPhonePairing
+                        | RequestKind::ReloadPhoneLinks => DraftKind::Phone,
                         RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
                         RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
                         RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
@@ -229,7 +249,8 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
                         ServerPayload::Settings { .. }
                         | ServerPayload::Devices { .. }
-                        | ServerPayload::RelaySettings { .. } => Ok(()),
+                        | ServerPayload::RelaySettings { .. }
+                        | ServerPayload::PhoneLinks { .. } => Ok(()),
                         _ => Err("The service did not confirm the change.".into()),
                     });
                     if updates.send(Update::Saved { result, draft }).is_err() {
@@ -255,6 +276,7 @@ enum Page {
     History,
     Sessions,
     Relay,
+    Phones,
 }
 
 struct SettingsApp {
@@ -306,6 +328,9 @@ struct SettingsApp {
     relay_server: String,
     relay_name: String,
     relay_outbound: String,
+    phone_saving: bool,
+    phone_token: String,
+    phone_name: String,
 }
 
 impl SettingsApp {
@@ -360,6 +385,9 @@ impl SettingsApp {
             relay_server: String::new(),
             relay_name: String::new(),
             relay_outbound: String::new(),
+            phone_saving: false,
+            phone_token: String::new(),
+            phone_name: "iPhone".into(),
         }
     }
 
@@ -519,6 +547,12 @@ impl SettingsApp {
                         }
                         DraftKind::RelayControl => {
                             self.relay_saving = false;
+                        }
+                        DraftKind::Phone => {
+                            self.phone_saving = false;
+                            if success {
+                                self.phone_token.clear();
+                            }
                         }
                         DraftKind::None => {}
                         DraftKind::Library => {
@@ -1238,6 +1272,115 @@ impl SettingsApp {
         }
     }
 
+    fn phones(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Link phones");
+        ui.label("Send LED programs and notifications to a phone running SidePulse.");
+        let Some(state) = &self.state else {
+            return;
+        };
+        if !state.phones_configured {
+            ui.weak("Phone linking is unavailable in this session.");
+            return;
+        }
+        let phones = state.phones.clone();
+        let pairing = state.phone_pairing.clone();
+        ui.add_space(16.0);
+        ui.add_enabled_ui(!self.phone_saving, |ui| {
+            if let Some(pairing) = pairing {
+                if pairing.state == "awaiting" {
+                    ui.label("Scan this code with SidePulse on your phone.");
+                    let cells = pairing.qr.len();
+                    if cells > 0 && pairing.qr.iter().all(|row| row.len() == cells) {
+                        let size = (240.0 / cells as f32).floor().max(1.0) * cells as f32;
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+                        let cell = size / cells as f32;
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::WHITE);
+                        for (y, row) in pairing.qr.iter().enumerate() {
+                            for (x, dark) in row.iter().enumerate() {
+                                if *dark {
+                                    let origin =
+                                        rect.min + egui::vec2(x as f32 * cell, y as f32 * cell);
+                                    ui.painter().rect_filled(
+                                        egui::Rect::from_min_size(origin, egui::vec2(cell, cell)),
+                                        0.0,
+                                        egui::Color32::BLACK,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy pairing link").clicked() {
+                            ui.ctx().copy_text(pairing.url.clone());
+                        }
+                        if ui.button("Cancel pairing").clicked() {
+                            self.send(RequestKind::CancelPhonePairing);
+                            self.phone_saving = true;
+                        }
+                    });
+                    ui.weak(format!(
+                        "Expires at {} UTC",
+                        pairing.expires_at.format("%H:%M:%S")
+                    ));
+                } else {
+                    ui.label(match pairing.state.as_str() {
+                        "linked" => "Phone linked.",
+                        "cancelled" => "Pairing cancelled.",
+                        "expired" => "Pairing expired. Start again to get a new code.",
+                        _ => "Pairing could not finish.",
+                    });
+                }
+                if let Some(message) = pairing.message {
+                    ui.weak(message);
+                }
+            }
+            if ui.button("Start new pairing").clicked() {
+                self.send(RequestKind::BeginPhonePairing { server: None });
+                self.phone_saving = true;
+            }
+            ui.separator();
+            ui.heading("Saved phones");
+            if phones.is_empty() {
+                ui.weak("No phones linked yet.");
+            }
+            for phone in phones {
+                ui.horizontal(|ui| {
+                    ui.label(&phone.name);
+                    ui.weak(&phone.id);
+                    if ui.button("Remove").clicked() {
+                        self.send(RequestKind::RemovePhone { id: phone.id });
+                        self.phone_saving = true;
+                    }
+                });
+            }
+            ui.collapsing("Link with a push token", |ui| {
+                ui.label("Phone name");
+                ui.text_edit_singleline(&mut self.phone_name);
+                ui.label("Push token");
+                ui.add(egui::TextEdit::singleline(&mut self.phone_token).password(true));
+                if ui
+                    .add_enabled(
+                        !self.phone_token.trim().is_empty(),
+                        egui::Button::new("Save phone"),
+                    )
+                    .clicked()
+                {
+                    self.send(RequestKind::RegisterPhone {
+                        token: self.phone_token.clone(),
+                        name: self.phone_name.clone(),
+                        server: None,
+                    });
+                    self.phone_saving = true;
+                }
+            });
+            if ui.button("Reload saved phones").clicked() {
+                self.send(RequestKind::ReloadPhoneLinks);
+                self.phone_saving = true;
+            }
+        });
+    }
+
     fn relay(&mut self, ui: &mut egui::Ui) {
         use sidepulse_core::RelaySettingsPatch;
         ui.heading("Link computers");
@@ -1693,6 +1836,7 @@ impl eframe::App for SettingsApp {
                     (Page::History, "History"),
                     (Page::Sessions, "Sessions"),
                     (Page::Relay, "Link computers"),
+                    (Page::Phones, "Link phones"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -1719,6 +1863,7 @@ impl eframe::App for SettingsApp {
                     Page::History => self.history(ui),
                     Page::Sessions => self.sessions(ui),
                     Page::Relay => self.relay(ui),
+                    Page::Phones => self.phones(ui),
                 });
             });
         });
