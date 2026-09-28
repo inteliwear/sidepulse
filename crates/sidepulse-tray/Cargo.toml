@@ -10,6 +10,7 @@ name = "sidepulse-next-tray"
 path = "src/main.rs"
 
 [dependencies]
+sidepulse-platform = { path = "../sidepulse-platform" }
 sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-ui-model = { path = "../sidepulse-ui-model" }

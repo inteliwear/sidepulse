@@ -3428,6 +3428,7 @@ dependencies = [
  "sidepulse-device",
  "sidepulse-hook-config",
  "sidepulse-ipc",
+ "sidepulse-platform",
  "sidepulse-relay",
  "sidepulse-sources",
  "tempfile",
@@ -3506,6 +3507,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sidepulse-platform"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "sidepulse-core",
+ "tempfile",
+]
+
+[[package]]
 name = "sidepulse-relay"
 version = "0.1.0"
 dependencies = [
@@ -3530,6 +3540,7 @@ dependencies = [
  "serde_json",
  "sidepulse-core",
  "sidepulse-ipc",
+ "sidepulse-platform",
  "sidepulse-ui-model",
 ]
 
@@ -3550,6 +3561,7 @@ version = "0.1.0"
 dependencies = [
  "sidepulse-core",
  "sidepulse-ipc",
+ "sidepulse-platform",
  "sidepulse-ui-model",
  "tao",
  "tray-icon",

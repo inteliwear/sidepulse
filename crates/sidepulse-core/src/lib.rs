@@ -11,6 +11,7 @@ mod origin;
 mod protocol;
 mod provider;
 mod relay;
+mod session;
 mod sleep;
 
 pub use audit::status_audit_record;
@@ -31,6 +32,10 @@ pub use provider::{
     parse_log_line,
 };
 pub use relay::{RelayEvent, parse_relay_message};
+pub use session::{
+    SessionAction, SessionOpenOption, SessionTarget, normalized_session_origin,
+    preferred_session_action, saved_session_action, session_open_options,
+};
 pub use sleep::{
     AwakePolicy, BatteryPower, MacSleepSnapshot, PowerSnapshot, SleepInputs, SleepPlan,
     battery_safeguard_active, parse_ioreg_bool, parse_pmset_assertions, plan_sleep,

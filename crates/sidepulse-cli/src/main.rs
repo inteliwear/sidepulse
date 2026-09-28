@@ -185,6 +185,54 @@ fn main() -> ExitCode {
             };
             service_settings_request(&endpoint, RequestKind::Settings)
         }
+        Some("open-session") => run_open_session(args),
+        Some("service-session-preference") => {
+            let (Some(endpoint), Some(provider), Some(action)) =
+                (args.next(), args.next(), args.next())
+            else {
+                eprintln!(
+                    "usage: sidepulse-next service-session-preference ENDPOINT PROVIDER app|terminal|vscode [ORIGIN]"
+                );
+                return ExitCode::from(2);
+            };
+            let Some(action) = session_action(&action) else {
+                eprintln!("sidepulse-next: action must be app, terminal, or vscode");
+                return ExitCode::from(2);
+            };
+            let origin = args.next();
+            if args.next().is_some() {
+                eprintln!("sidepulse-next: too many arguments");
+                return ExitCode::from(2);
+            }
+            service_settings_request(
+                &endpoint,
+                RequestKind::SetSessionOpenPreference {
+                    provider,
+                    origin,
+                    action,
+                },
+            )
+        }
+        Some("service-session-terminal") => {
+            let (Some(endpoint), Some(terminal)) = (args.next(), args.next()) else {
+                eprintln!(
+                    "usage: sidepulse-next service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH]"
+                );
+                return ExitCode::from(2);
+            };
+            let custom_path = args.next();
+            if args.next().is_some() {
+                eprintln!("sidepulse-next: too many arguments");
+                return ExitCode::from(2);
+            }
+            service_settings_request(
+                &endpoint,
+                RequestKind::SetSessionTerminal {
+                    terminal,
+                    custom_path,
+                },
+            )
+        }
         Some("service-power") => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next service-power ENDPOINT");
@@ -425,7 +473,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }
@@ -438,6 +486,10 @@ fn service_settings_request(endpoint: &str, kind: RequestKind) -> ExitCode {
         request_id: 1,
         kind,
     };
+    if let Err(message) = request.validate() {
+        eprintln!("sidepulse-next: {message}");
+        return ExitCode::from(2);
+    }
     let reply: ServerMessage =
         match sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2)) {
             Ok(reply) => reply,
@@ -464,6 +516,89 @@ fn service_settings_request(endpoint: &str, kind: RequestKind) -> ExitCode {
         }
         _ => {
             eprintln!("sidepulse-next: unexpected service reply");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn session_action(value: &str) -> Option<sidepulse_core::SessionAction> {
+    sidepulse_core::SessionAction::ALL
+        .into_iter()
+        .find(|action| action.key() == value)
+}
+
+fn run_open_session(mut args: impl Iterator<Item = String>) -> ExitCode {
+    let (Some(endpoint), Some(agent_id)) = (args.next(), args.next()) else {
+        eprintln!(
+            "usage: sidepulse-next open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run]"
+        );
+        return ExitCode::from(2);
+    };
+    let mut action = None;
+    let mut dry_run = false;
+    for argument in args {
+        if argument == "--dry-run" && !dry_run {
+            dry_run = true;
+        } else if action.is_none()
+            && let Some(selected) = session_action(&argument)
+        {
+            action = Some(selected);
+        } else {
+            eprintln!("sidepulse-next: invalid session action or extra argument: {argument}");
+            return ExitCode::from(2);
+        }
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind: RequestKind::SessionTargets { agent_id, action },
+    };
+    let result = (|| -> Result<(), String> {
+        request.validate().map_err(str::to_owned)?;
+        let reply: ServerMessage =
+            sidepulse_ipc::request(&endpoint, &request, Duration::from_secs(2))
+                .map_err(|error| format!("service unavailable: {error}"))?;
+        if reply.version != PROTOCOL_VERSION || reply.request_id != Some(1) {
+            return Err("invalid service response".into());
+        }
+        match reply.payload {
+            ServerPayload::SessionTargets {
+                options,
+                selected,
+                terminal,
+                custom_terminal_path,
+            } => {
+                let option = options
+                    .iter()
+                    .find(|option| Some(option.action) == selected)
+                    .ok_or("this session has no available opener")?;
+                if dry_run {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "action": option.action, "target": option.target,
+                            "terminal": terminal, "custom_terminal_path": custom_terminal_path
+                        }))
+                        .expect("session target serializes")
+                    );
+                } else {
+                    sidepulse_platform::open_session(
+                        &option.target,
+                        &terminal,
+                        &custom_terminal_path,
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            }
+            ServerPayload::Error { message, .. } => Err(message),
+            _ => Err("unexpected service response".into()),
+        }
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("sidepulse-next: {error}");
             ExitCode::FAILURE
         }
     }

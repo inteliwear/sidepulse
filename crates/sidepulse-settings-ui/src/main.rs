@@ -14,6 +14,7 @@ use sidepulse_ui_model::{DISPLAY_CHOICES, SettingsView, TrayState, device_displa
 struct ServiceState {
     settings: SettingsView,
     activity: TrayState,
+    agents: Vec<sidepulse_core::AgentStatus>,
     devices: Vec<DeviceInfo>,
     active_device: Option<String>,
     animation_choices: Vec<AnimationChoice>,
@@ -25,6 +26,7 @@ struct ServiceState {
 
 enum Update {
     State(Result<Box<ServiceState>, String>),
+    Opened(Result<(), String>),
     Saved {
         result: Result<(), String>,
         draft: DraftKind,
@@ -38,6 +40,7 @@ enum DraftKind {
     Monitoring,
     Sleep,
     Animation,
+    Terminal,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -95,6 +98,7 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     Ok(ServiceState {
         settings,
         activity,
+        agents: snapshot.statuses,
         devices,
         active_device,
         animation_choices: choices,
@@ -118,11 +122,39 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
             }
             match pending.recv_timeout(Duration::from_secs(1)) {
                 Ok(kind) => {
+                    if matches!(kind, RequestKind::SessionTargets { .. }) {
+                        let result = request(&endpoint, kind).and_then(|payload| {
+                            let ServerPayload::SessionTargets {
+                                options,
+                                selected,
+                                terminal,
+                                custom_terminal_path,
+                            } = payload
+                            else {
+                                return Err("The service did not return session actions.".into());
+                            };
+                            let option = options
+                                .iter()
+                                .find(|option| Some(option.action) == selected)
+                                .ok_or("No opener is available for this session.")?;
+                            sidepulse_platform::open_session(
+                                &option.target,
+                                &terminal,
+                                &custom_terminal_path,
+                            )
+                            .map_err(|error| error.to_string())
+                        });
+                        if updates.send(Update::Opened(result)).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     let draft = match kind {
                         RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
                         RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
                         RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
                         RequestKind::SetAgentAnimation { .. } => DraftKind::Animation,
+                        RequestKind::SetSessionTerminal { .. } => DraftKind::Terminal,
                         _ => DraftKind::None,
                     };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
@@ -150,6 +182,7 @@ enum Page {
     Sleep,
     Animations,
     History,
+    Sessions,
 }
 
 struct SettingsApp {
@@ -184,6 +217,10 @@ struct SettingsApp {
     virtual_launch_attempted: bool,
     virtual_brightness: u8,
     virtual_brightness_dragging: bool,
+    terminal_dirty: bool,
+    terminal_saving: bool,
+    session_terminal: String,
+    custom_terminal_path: String,
 }
 
 impl SettingsApp {
@@ -221,6 +258,10 @@ impl SettingsApp {
             virtual_launch_attempted: false,
             virtual_brightness: 255,
             virtual_brightness_dragging: false,
+            terminal_dirty: false,
+            terminal_saving: false,
+            session_terminal: "terminal".into(),
+            custom_terminal_path: String::new(),
         }
     }
 
@@ -275,6 +316,10 @@ impl SettingsApp {
             match update {
                 Update::State(Ok(state)) => {
                     self.connected = true;
+                    if !self.terminal_dirty {
+                        self.session_terminal = state.settings.session_terminal.clone();
+                        self.custom_terminal_path = state.settings.custom_terminal_path.clone();
+                    }
                     if !self.battery_dirty {
                         self.baseline_auto = state.settings.full_charge_watts.is_none();
                         self.baseline_watts = state.settings.full_charge_watts.unwrap_or(100.0);
@@ -318,6 +363,12 @@ impl SettingsApp {
                     }
                 }
                 Update::State(Err(_)) => self.connected = false,
+                Update::Opened(result) => {
+                    self.message = Some(match result {
+                        Ok(()) => ("Opening session…".into(), false),
+                        Err(error) => (format!("Could not open session: {error}"), true),
+                    });
+                }
                 Update::Saved { result, draft } => {
                     let success = result.is_ok();
                     match draft {
@@ -339,6 +390,12 @@ impl SettingsApp {
                                 self.sleep_dirty = false;
                             }
                         }
+                        DraftKind::Terminal => {
+                            self.terminal_saving = false;
+                            if success {
+                                self.terminal_dirty = false;
+                            }
+                        }
                         DraftKind::None => {}
                         DraftKind::Animation => {
                             self.animation_saving = false;
@@ -356,31 +413,182 @@ impl SettingsApp {
         }
     }
 
-    fn activity(&self, ui: &mut egui::Ui) {
+    fn activity(&mut self, ui: &mut egui::Ui) {
         let Some(state) = &self.state else {
             ui.label("Waiting for activity…");
             return;
         };
-        ui.heading(&state.activity.tooltip);
+        let activity = state.activity.clone();
+        let agents = state.agents.clone();
+        ui.heading(&activity.tooltip);
         ui.add_space(12.0);
-        if state.activity.rows.is_empty() {
+        if activity.rows.is_empty() {
             ui.label("No active agents.");
         }
-        for row in &state.activity.rows {
+        for row in &activity.rows {
             ui.group(|ui| {
                 ui.strong(&row.title);
                 ui.label(&row.subtitle);
-            });
-        }
-        if !state.activity.stale_rows.is_empty() {
-            ui.add_space(16.0);
-            ui.collapsing("Recent sessions", |ui| {
-                for row in &state.activity.stale_rows {
-                    ui.label(&row.title);
-                    ui.weak(&row.subtitle);
+                if let Some(agent) = agents.iter().find(|agent| agent.agent_id == row.id) {
+                    self.session_buttons(ui, agent);
                 }
             });
         }
+        if !activity.stale_rows.is_empty() {
+            ui.add_space(16.0);
+            ui.collapsing("Recent sessions", |ui| {
+                for row in &activity.stale_rows {
+                    ui.label(&row.title);
+                    ui.weak(&row.subtitle);
+                    if let Some(agent) = agents.iter().find(|agent| agent.agent_id == row.id) {
+                        self.session_buttons(ui, agent);
+                    }
+                }
+            });
+        }
+    }
+
+    fn session_buttons(&mut self, ui: &mut egui::Ui, agent: &sidepulse_core::AgentStatus) {
+        let options = sidepulse_core::session_open_options(agent, "");
+        if options.is_empty() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Open session").clicked() {
+                self.send(RequestKind::SessionTargets {
+                    agent_id: agent.agent_id.clone(),
+                    action: None,
+                });
+                self.message = Some(("Opening session…".into(), false));
+            }
+            ui.menu_button("Open with…", |ui| {
+                for option in options {
+                    if ui.button(option.label).clicked() {
+                        self.send(RequestKind::SessionTargets {
+                            agent_id: agent.agent_id.clone(),
+                            action: Some(option.action),
+                        });
+                        self.message = Some(("Opening session…".into(), false));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+
+    fn sessions(&mut self, ui: &mut egui::Ui) {
+        use sidepulse_core::SessionAction;
+        ui.heading("Session opening");
+        ui.label("Choose where agent sessions open when you select them.");
+        let Some(state) = &self.state else {
+            return;
+        };
+        let preferences = state.settings.session_open_preferences.clone();
+        ui.add_space(16.0);
+        for (provider, mut action) in preferences {
+            ui.horizontal(|ui| {
+                ui.label(match provider.as_str() {
+                    "codex" => "Codex",
+                    "claude" => "Claude",
+                    _ => "Grok",
+                });
+                let choices = match provider.as_str() {
+                    "claude" => vec![
+                        (SessionAction::Vscode, "VS Code"),
+                        (SessionAction::App, "Claude App"),
+                        (SessionAction::Terminal, "Terminal"),
+                    ],
+                    "codex" => vec![
+                        (SessionAction::App, "Codex App"),
+                        (SessionAction::Terminal, "Terminal"),
+                    ],
+                    _ => vec![(SessionAction::Terminal, "Terminal")],
+                };
+                let selected = choices
+                    .iter()
+                    .find(|choice| choice.0 == action)
+                    .map_or("Terminal", |choice| choice.1);
+                egui::ComboBox::from_id_salt(format!("session-opener-{provider}"))
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for (choice, label) in choices {
+                            if ui.selectable_value(&mut action, choice, label).changed() {
+                                self.send(RequestKind::SetSessionOpenPreference {
+                                    provider: provider.clone(),
+                                    origin: None,
+                                    action,
+                                });
+                            }
+                        }
+                    });
+            });
+        }
+        ui.add_space(20.0);
+        ui.strong("Terminal app");
+        ui.add_enabled_ui(!self.terminal_saving, |ui| {
+            let choices = if cfg!(target_os = "macos") {
+                vec![
+                    ("terminal", "Terminal"),
+                    ("iterm", "iTerm"),
+                    ("ghostty", "Ghostty"),
+                    ("warp", "Warp"),
+                    ("kitty", "Kitty"),
+                    ("wezterm", "WezTerm"),
+                    ("alacritty", "Alacritty"),
+                    ("custom", "Custom"),
+                ]
+            } else if cfg!(windows) {
+                vec![("terminal", "Windows Terminal / PowerShell")]
+            } else {
+                vec![
+                    ("terminal", "System terminal"),
+                    ("ghostty", "Ghostty"),
+                    ("kitty", "Kitty"),
+                    ("wezterm", "WezTerm"),
+                    ("alacritty", "Alacritty"),
+                    ("custom", "Custom"),
+                ]
+            };
+            let selected = choices
+                .iter()
+                .find(|choice| choice.0 == self.session_terminal)
+                .map_or(self.session_terminal.as_str(), |choice| choice.1)
+                .to_owned();
+            egui::ComboBox::from_id_salt("session-terminal")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (id, label) in choices {
+                        self.terminal_dirty |= ui
+                            .selectable_value(&mut self.session_terminal, id.into(), label)
+                            .changed();
+                    }
+                });
+            if self.session_terminal == "custom" {
+                ui.label(if cfg!(target_os = "macos") {
+                    "Application path"
+                } else {
+                    "Terminal executable path"
+                });
+                self.terminal_dirty |= ui
+                    .text_edit_singleline(&mut self.custom_terminal_path)
+                    .changed();
+            }
+            if ui
+                .add_enabled(
+                    self.terminal_dirty,
+                    egui::Button::new("Save terminal preference"),
+                )
+                .clicked()
+            {
+                self.send(RequestKind::SetSessionTerminal {
+                    terminal: self.session_terminal.clone(),
+                    custom_path: Some(self.custom_terminal_path.clone()),
+                });
+                self.terminal_saving = true;
+            }
+        });
+        ui.add_space(12.0);
+        ui.weak("Choose an installed terminal. Session opening is available from Activity and the tray.");
     }
 
     fn devices(&mut self, ui: &mut egui::Ui) {
@@ -1017,6 +1225,7 @@ impl eframe::App for SettingsApp {
                     (Page::Sleep, "Sleep"),
                     (Page::Animations, "Animations"),
                     (Page::History, "History"),
+                    (Page::Sessions, "Sessions"),
                 ] {
                     ui.selectable_value(&mut self.page, page, label);
                 }
@@ -1041,6 +1250,7 @@ impl eframe::App for SettingsApp {
                     Page::Sleep => self.sleep(ui),
                     Page::Animations => self.animations(ui),
                     Page::History => self.history(ui),
+                    Page::Sessions => self.sessions(ui),
                 });
             });
         });

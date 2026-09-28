@@ -449,7 +449,7 @@ fn render_plist(label: &str, command: &[String], working_directory: &Path) -> St
 
 fn render_app_info(name: &str, identifier: &str, executable: &str, tray: bool) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n<key>CFBundleName</key><string>{}</string>\n<key>CFBundleDisplayName</key><string>{}</string>\n<key>CFBundleIdentifier</key><string>{}</string>\n<key>CFBundleExecutable</key><string>{}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleVersion</key><string>1</string>\n<key>CFBundleShortVersionString</key><string>{}</string>\n<key>LSUIElement</key><{}/>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n<key>CFBundleName</key><string>{}</string>\n<key>CFBundleDisplayName</key><string>{}</string>\n<key>CFBundleIdentifier</key><string>{}</string>\n<key>CFBundleExecutable</key><string>{}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleVersion</key><string>1</string>\n<key>CFBundleShortVersionString</key><string>{}</string>\n<key>LSUIElement</key><{}/>\n<key>NSHighResolutionCapable</key><true/>\n<key>NSAppleEventsUsageDescription</key><string>SidePulse opens agent sessions in your chosen terminal.</string>\n</dict></plist>\n",
         xml_escape(name),
         xml_escape(name),
         xml_escape(identifier),

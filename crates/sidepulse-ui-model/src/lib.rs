@@ -48,6 +48,7 @@ pub struct AgentRow {
     pub subtitle: String,
     pub icon: StatusIcon,
     pub stale: bool,
+    pub can_open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +132,9 @@ pub struct SettingsView {
     pub virtual_display_enabled: bool,
     pub virtual_display_brightness: u8,
     pub virtual_display_mode: String,
+    pub session_terminal: String,
+    pub custom_terminal_path: String,
+    pub session_open_preferences: Vec<(String, sidepulse_core::SessionAction)>,
 }
 
 impl SettingsView {
@@ -151,6 +155,31 @@ impl SettingsView {
                 })
             });
         Some(Self {
+            session_terminal: settings
+                .get("session_terminal_app")
+                .and_then(|value| value.as_str())
+                .unwrap_or("terminal")
+                .into(),
+            custom_terminal_path: settings
+                .get("custom_terminal_path")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .into(),
+            session_open_preferences: ["codex", "claude", "grok"]
+                .into_iter()
+                .map(|provider| {
+                    (
+                        provider.into(),
+                        sidepulse_core::saved_session_action(settings, provider, None).unwrap_or(
+                            match provider {
+                                "claude" => sidepulse_core::SessionAction::Vscode,
+                                "codex" => sidepulse_core::SessionAction::App,
+                                _ => sidepulse_core::SessionAction::Terminal,
+                            },
+                        ),
+                    )
+                })
+                .collect(),
             virtual_display_enabled: settings
                 .get("virtual_status_device_enabled")
                 .and_then(|value| value.as_bool())
@@ -372,6 +401,7 @@ fn agent_row(status: &AgentStatus) -> AgentRow {
         subtitle: parts.join(" · "),
         icon: status.mode.into(),
         stale: status.stale,
+        can_open: !sidepulse_core::session_open_options(status, "").is_empty(),
     }
 }
 

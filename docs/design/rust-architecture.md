@@ -359,3 +359,30 @@ remains authoritative for users until the delivery gates above pass.
    installable, signed packages, and implement platform startup registration.
 6. Verify upgrades and rollback against an existing Python setup, then switch
    hook and state-file ownership only after the delivery gates pass.
+
+## Session opening (Rust preview)
+
+Session targets, URL escaping, provider resume arguments, and preference precedence
+live in `sidepulse-core`. The service returns available targets and owns atomic
+preference writes. The tray, settings window, and `open-session` CLI call the
+`sidepulse-platform` activation adapter. `open-session --dry-run` retrieves the
+chosen target without opening an application. An explicitly unsupported action
+returns an error instead of launching a different destination.
+
+The Sessions page saves provider defaults and terminal selection. Provider-wide
+changes discard that provider's origin overrides, as in the Python settings
+model. Custom `.command` files on macOS are unique, private, and remove themselves
+when run. Windows resume commands use encoded PowerShell literals, avoiding
+Windows Terminal's semicolon parsing. macOS app bundles declare their terminal
+automation usage. Ghostty scripting requires its current AppleScript support;
+see the [Ghostty documentation](https://ghostty.org/docs/features/applescript) and
+[Windows Terminal arguments](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments).
+
+Portable integration tests exercise the actual CLI and local IPC, preference
+persistence, unknown-field retention, missing sessions, explicit-action failures,
+and hostile characters in session arguments. Native activation and existing
+terminal focus/reuse still require validation. The current activation adapter
+opens a new terminal session. Native window checks for the latest history and
+virtual clients are pending because the Mac was locked. Automated Rust checks,
+tests, release builds, staging, and service smoke checks passed on all three
+platforms at `4052e40`.

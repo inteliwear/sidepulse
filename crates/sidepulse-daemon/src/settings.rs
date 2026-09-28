@@ -51,6 +51,69 @@ impl SettingsStore {
         Value::Object(self.document.clone())
     }
 
+    pub fn set_session_open_preference(
+        &mut self,
+        provider: &str,
+        origin: Option<&str>,
+        action: sidepulse_core::SessionAction,
+    ) -> io::Result<()> {
+        let mut updated = self.document.clone();
+        let preferences = updated
+            .entry("session_open_preferences")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "session_open_preferences must be an object",
+                )
+            })?;
+        let origin = origin.filter(|origin| !origin.is_empty());
+        if let Some(origin) = origin {
+            preferences.insert(
+                format!(
+                    "origin:{provider}:{}",
+                    sidepulse_core::normalized_session_origin(origin)
+                ),
+                json!(action),
+            );
+        } else {
+            let prefix = format!("origin:{provider}:");
+            preferences.retain(|key, _| key != provider && !key.starts_with(&prefix));
+            if provider == "grok" {
+                updated.insert("grok_session_open_action".into(), json!(action));
+            } else {
+                preferences.insert(provider.into(), json!(action));
+            }
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
+    pub fn set_session_terminal(
+        &mut self,
+        terminal: &str,
+        custom_path: Option<&str>,
+    ) -> io::Result<()> {
+        let mut updated = self.document.clone();
+        updated.insert("session_terminal_app".into(), json!(terminal));
+        if let Some(path) = custom_path {
+            updated.insert("custom_terminal_path".into(), json!(path));
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn history_timeframe(&self) -> u32 {
         self.document
             .get("history_timeframe_seconds")

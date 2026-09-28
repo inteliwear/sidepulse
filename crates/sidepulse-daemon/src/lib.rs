@@ -290,6 +290,84 @@ impl Service {
         Ok(())
     }
 
+    pub fn session_targets(
+        &self,
+        agent_id: &str,
+        requested: Option<sidepulse_core::SessionAction>,
+    ) -> io::Result<ServerPayload> {
+        let snapshot = self.snapshot()?;
+        let status = snapshot
+            .statuses
+            .iter()
+            .find(|status| status.agent_id == agent_id)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "session is no longer available")
+            })?;
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".into());
+        let options = sidepulse_core::session_open_options(status, &home);
+        let settings = self
+            .settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .map_or_else(|| serde_json::json!({}), SettingsStore::snapshot);
+        if requested.is_some_and(|action| !options.iter().any(|option| option.action == action)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this session cannot be opened with the selected action",
+            ));
+        }
+        let selected = requested
+            .or_else(|| sidepulse_core::preferred_session_action(status, &settings, &options));
+        Ok(ServerPayload::SessionTargets {
+            options,
+            selected,
+            terminal: settings
+                .get("session_terminal_app")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("terminal")
+                .into(),
+            custom_terminal_path: settings
+                .get("custom_terminal_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .into(),
+        })
+    }
+
+    pub fn set_session_open_preference(
+        &self,
+        provider: &str,
+        origin: Option<&str>,
+        action: sidepulse_core::SessionAction,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_session_open_preference(provider, origin, action)
+    }
+
+    pub fn set_session_terminal(
+        &self,
+        terminal: &str,
+        custom_path: Option<&str>,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_session_terminal(terminal, custom_path)
+    }
+
     pub fn set_history_timeframe(&self, seconds: u32) -> io::Result<()> {
         self.settings
             .lock()
@@ -745,6 +823,22 @@ impl Service {
                     payload: self.history_snapshot()?,
                 },
             ),
+            RequestKind::SessionTargets { agent_id, action } => {
+                let payload = self
+                    .session_targets(&agent_id, action)
+                    .unwrap_or_else(|error| ServerPayload::Error {
+                        code: "session_unavailable".into(),
+                        message: error.to_string(),
+                    });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::SelectDevice { root } => {
                 let payload = match self.select_device(&root) {
                     Ok(()) => {
@@ -920,12 +1014,23 @@ impl Service {
                 )
             }
             kind @ (RequestKind::SetAgentAnimation { .. }
+            | RequestKind::SetSessionOpenPreference { .. }
+            | RequestKind::SetSessionTerminal { .. }
             | RequestKind::SetHistoryTimeframe { .. }
             | RequestKind::SetVirtualDisplay { .. }
             | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::SetSessionOpenPreference {
+                        provider,
+                        origin,
+                        action,
+                    } => self.set_session_open_preference(&provider, origin.as_deref(), action),
+                    RequestKind::SetSessionTerminal {
+                        terminal,
+                        custom_path,
+                    } => self.set_session_terminal(&terminal, custom_path.as_deref()),
                     RequestKind::SetHistoryTimeframe { seconds } => {
                         self.set_history_timeframe(seconds)
                     }

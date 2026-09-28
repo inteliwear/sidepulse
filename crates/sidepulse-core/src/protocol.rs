@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AgentMode, MonitorSnapshot, PowerSnapshot};
+use crate::{AgentMode, MonitorSnapshot, PowerSnapshot, SessionAction, SessionOpenOption};
 
 /// IPC data model shared by the service, CLI, and platform UI adapters.
 /// Each JSON message occupies one line and is limited to 1 MiB on the wire.
@@ -25,6 +25,19 @@ pub enum RequestKind {
     Animations,
     VirtualDisplay,
     History,
+    SessionTargets {
+        agent_id: String,
+        action: Option<SessionAction>,
+    },
+    SetSessionOpenPreference {
+        provider: String,
+        origin: Option<String>,
+        action: SessionAction,
+    },
+    SetSessionTerminal {
+        terminal: String,
+        custom_path: Option<String>,
+    },
     SetHistoryTimeframe {
         seconds: u32,
     },
@@ -110,6 +123,12 @@ pub enum ServerPayload {
         points: Vec<HistoryPoint>,
         timeframe_seconds: u32,
         sampled: bool,
+    },
+    SessionTargets {
+        options: Vec<SessionOpenOption>,
+        selected: Option<SessionAction>,
+        terminal: String,
+        custom_terminal_path: String,
     },
     StateChanged {
         state: MonitorSnapshot,
@@ -301,6 +320,41 @@ impl ClientRequest {
             && !HISTORY_TIMEFRAMES.contains(seconds)
         {
             return Err("invalid history timeframe");
+        }
+        if let RequestKind::SessionTargets { agent_id, .. } = &self.kind
+            && (agent_id.is_empty() || agent_id.len() > 4096)
+        {
+            return Err("invalid agent ID");
+        }
+        if let RequestKind::SetSessionOpenPreference {
+            provider, origin, ..
+        } = &self.kind
+            && (!matches!(
+                provider.as_str(),
+                "codex" | "claude" | "grok" | "junie" | "cursor"
+            ) || origin.as_ref().is_some_and(|origin| origin.len() > 512))
+        {
+            return Err("invalid session preference");
+        }
+        if let RequestKind::SetSessionTerminal {
+            terminal,
+            custom_path,
+        } = &self.kind
+            && (!matches!(
+                terminal.as_str(),
+                "terminal"
+                    | "iterm"
+                    | "ghostty"
+                    | "warp"
+                    | "kitty"
+                    | "wezterm"
+                    | "alacritty"
+                    | "custom"
+            ) || custom_path
+                .as_ref()
+                .is_some_and(|path| path.len() > 4096 || path.contains('\0')))
+        {
+            return Err("invalid terminal preference");
         }
         if let RequestKind::SetAgentListSettings { patch } = &self.kind {
             patch.validate()?;

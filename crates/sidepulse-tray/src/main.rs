@@ -42,6 +42,7 @@ struct TrayView {
     sleep_items: Vec<(MenuItem, &'static str)>,
     quit: MenuItem,
     visible_rows: usize,
+    agent_items: Vec<(MenuItem, String)>,
 }
 
 impl TrayView {
@@ -123,6 +124,7 @@ impl TrayView {
             sleep_items: sleep_items.into(),
             quit,
             visible_rows: 0,
+            agent_items: Vec::new(),
         })
     }
 
@@ -135,6 +137,7 @@ impl TrayView {
             self.menu.remove_at(1);
         }
         self.visible_rows = 0;
+        self.agent_items.clear();
         for row in state.rows.iter().chain(&state.stale_rows).take(12) {
             let item = MenuItem::new(
                 format!(
@@ -143,10 +146,11 @@ impl TrayView {
                     row.title,
                     row.subtitle
                 ),
-                false,
+                row.can_open,
                 None,
             );
             self.menu.insert(&item, 1 + self.visible_rows)?;
+            self.agent_items.push((item, row.id.clone()));
             self.visible_rows += 1;
         }
         Ok(())
@@ -162,6 +166,7 @@ impl TrayView {
             self.menu.remove_at(1);
         }
         self.visible_rows = 0;
+        self.agent_items.clear();
         self.show_brightness(None);
         self.show_display_mode(None);
         self.show_transcript_monitoring(None);
@@ -330,6 +335,13 @@ impl TrayView {
                 .spawn()?,
         );
         Ok(())
+    }
+
+    fn agent_for_menu_event(&self, event: &MenuEvent) -> Option<String> {
+        self.agent_items
+            .iter()
+            .find(|(item, _)| event.id == *item.id())
+            .map(|(_, id)| id.clone())
     }
 
     fn open_settings(&mut self, endpoint: &str) -> Result<(), Box<dyn Error>> {
@@ -606,6 +618,38 @@ fn send_device_selection(endpoint: &str, root: &str) -> Result<(), Box<dyn Error
     }
 }
 
+fn open_agent_session(endpoint: &str, agent_id: String) -> Result<(), String> {
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind: RequestKind::SessionTargets {
+            agent_id,
+            action: None,
+        },
+    };
+    let response: ServerMessage =
+        sidepulse_ipc::request(endpoint, &request, Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+    let ServerPayload::SessionTargets {
+        options,
+        selected,
+        terminal,
+        custom_terminal_path,
+    } = response.payload
+    else {
+        return Err(match response.payload {
+            ServerPayload::Error { message, .. } => message,
+            _ => "The service did not return session actions.".into(),
+        });
+    };
+    let option = options
+        .iter()
+        .find(|option| Some(option.action) == selected)
+        .ok_or("No opener is available for this session.")?;
+    sidepulse_platform::open_session(&option.target, &terminal, &custom_terminal_path)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     use tao::event::{Event, StartCause};
@@ -618,8 +662,10 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             Option<(Vec<DeviceInfo>, Option<String>)>,
         ),
         Menu(MenuEvent),
+        Opened(Result<(), String>),
     }
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let session_proxy = event_loop.create_proxy();
     let proxy = event_loop.create_proxy();
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = proxy.send_event(UserEvent::Menu(event));
@@ -726,7 +772,26 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 view.take();
                 *flow = ControlFlow::Exit;
             }
+            Event::UserEvent(UserEvent::Opened(result)) => {
+                if let Err(error) = result
+                    && let Some(view) = &mut view
+                {
+                    view.status
+                        .set_text(format!("Could not open session: {error}"));
+                }
+            }
             Event::UserEvent(UserEvent::Menu(event)) => {
+                if let Some(agent_id) = view
+                    .as_ref()
+                    .and_then(|view| view.agent_for_menu_event(&event))
+                {
+                    let endpoint = control_endpoint.clone();
+                    let proxy = session_proxy.clone();
+                    std::thread::spawn(move || {
+                        let _ = proxy
+                            .send_event(UserEvent::Opened(open_agent_session(&endpoint, agent_id)));
+                    });
+                }
                 if let Some(view) = &mut view
                     && event.id == *view.settings_item.id()
                     && let Err(error) = view.open_settings(&control_endpoint)
@@ -797,10 +862,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
 #[cfg(target_os = "linux")]
 fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
     let mut view = TrayView::new()?;
+    let (session_sent, session_results) = std::sync::mpsc::channel::<Result<(), String>>();
     let mut last_state: Option<TrayState> = None;
     let mut connected = true;
     let mut last_devices: Option<(Vec<DeviceInfo>, Option<String>)> = None;
     loop {
+        while let Ok(result) = session_results.try_recv() {
+            if let Err(error) = result {
+                view.status
+                    .set_text(format!("Could not open session: {error}"));
+            }
+        }
         match fetch_snapshot(&endpoint) {
             Ok(snapshot) => {
                 let controls = fetch_controls(&endpoint).ok();
@@ -850,6 +922,14 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             Err(_) => {}
         }
         if let Ok(event) = MenuEvent::receiver().try_recv() {
+            if let Some(agent_id) = view.agent_for_menu_event(&event) {
+                let endpoint = endpoint.clone();
+                let sent = session_sent.clone();
+                std::thread::spawn(move || {
+                    let _ = sent.send(open_agent_session(&endpoint, agent_id));
+                });
+                continue;
+            }
             if event.id == *view.quit.id() {
                 break;
             }
