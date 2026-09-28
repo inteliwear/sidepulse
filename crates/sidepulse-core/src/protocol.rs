@@ -18,6 +18,7 @@ pub struct ClientRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum RequestKind {
+    Shutdown,
     Snapshot,
     Settings,
     Power,

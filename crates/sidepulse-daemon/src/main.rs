@@ -119,7 +119,15 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     }
-    if let Err(error) = sidepulse_daemon::run_with_options(
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal = shutdown.clone();
+    if let Err(error) =
+        ctrlc::set_handler(move || signal.store(true, std::sync::atomic::Ordering::Release))
+    {
+        eprintln!("sidepulse-next-service: signal handling: {error}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(error) = sidepulse_daemon::run_with_shutdown(
         &endpoint,
         sidepulse_daemon::RunOptions {
             logs: &logs,
@@ -134,6 +142,7 @@ fn main() -> ExitCode {
             power_observation_path: power_observation.as_deref(),
             history_path: history.as_deref(),
         },
+        shutdown,
     ) {
         eprintln!("sidepulse-next-service: {error}");
         return ExitCode::FAILURE;

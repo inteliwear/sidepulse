@@ -50,6 +50,11 @@ fn main() -> ExitCode {
         Some("doctor") => sidepulse_cli::run_doctor(args),
         Some(command @ ("write" | "push")) => sidepulse_cli::run_delivery(command, args),
         Some("phone-link") => sidepulse_cli::run_phone_link(args),
+        Some("reply") => sidepulse_cli::run_reply(args),
+        Some("setup") => sidepulse_cli::run_setup(args),
+        Some("service") => {
+            sidepulse_cli::run_lifecycle(sidepulse_installer::startup::Job::Service, args)
+        }
         Some("link") => sidepulse_cli::run_link(args),
         Some("sdejectguard") => sidepulse_cli::run_sd_guard(args),
         Some("status-bar") => sidepulse_cli::run_status_bar(args),

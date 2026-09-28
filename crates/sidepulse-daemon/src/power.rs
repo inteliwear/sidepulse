@@ -102,12 +102,10 @@ impl MacPowerController {
         }
 
         if plan.request_display_sleep && self.system_disabled && !self.display_sleep_requested {
-            let status = Command::new("/usr/bin/pmset")
-                .arg("displaysleepnow")
-                .status()?;
-            if !status.success() {
-                return Err(io::Error::other("pmset displaysleepnow failed"));
-            }
+            sidepulse_device::battery_diagnostics::bounded_command_output(
+                Command::new("/usr/bin/pmset").arg("displaysleepnow"),
+                std::time::Duration::from_secs(3),
+            )?;
             self.display_sleep_requested = true;
         } else if !plan.request_display_sleep {
             self.display_sleep_requested = false;
@@ -124,28 +122,30 @@ impl Drop for MacPowerController {
             let _ = child.wait();
         }
         #[cfg(not(test))]
-        if self.system_disabled {
-            let _ = run_pmset_disablesleep(false);
+        if self.system_disabled
+            && let Err(error) = run_pmset_disablesleep(false)
+        {
+            eprintln!(
+                "sidepulse-next-service: could not restore system sleep during shutdown: {error}"
+            );
         }
     }
 }
 
 #[cfg(target_os = "macos")]
 fn run_pmset_disablesleep(enabled: bool) -> io::Result<()> {
-    let status = std::process::Command::new("/usr/bin/sudo")
-        .args([
+    sidepulse_device::battery_diagnostics::bounded_command_output(
+        std::process::Command::new("/usr/bin/sudo").args([
             "-n",
             "/usr/bin/pmset",
             "-a",
             "disablesleep",
             if enabled { "1" } else { "0" },
-        ])
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other("closed-lid awake helper is unavailable"))
-    }
+        ]),
+        std::time::Duration::from_secs(3),
+    )
+    .map(|_| ())
+    .map_err(|error| io::Error::new(error.kind(), format!("closed-lid awake helper: {error}")))
 }
 
 #[cfg(target_os = "macos")]
@@ -156,11 +156,12 @@ pub fn observe() -> io::Result<PowerSnapshot> {
     use sidepulse_core::{MacSleepSnapshot, parse_ioreg_bool, parse_pmset_assertions};
 
     fn command_output(program: &str, args: &[&str]) -> Option<String> {
-        let output = Command::new(program).args(args).output().ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        let output = sidepulse_device::battery_diagnostics::bounded_command_output(
+            Command::new(program).args(args),
+            std::time::Duration::from_secs(2),
+        )
+        .ok()?;
+        Some(String::from_utf8_lossy(&output).into_owned())
     }
 
     let lid_closed = command_output(

@@ -10,6 +10,15 @@ fn fail(error: impl std::fmt::Display) -> ExitCode {
 }
 pub fn run_sd_guard(mut args: impl Iterator<Item = String>) -> ExitCode {
     let operation = args.next().unwrap_or_else(|| "check".into());
+    if matches!(
+        operation.as_str(),
+        "install" | "start" | "stop" | "uninstall" | "status"
+    ) {
+        return crate::run_lifecycle(
+            sidepulse_installer::startup::Job::SdGuard,
+            std::iter::once(operation).chain(args),
+        );
+    }
     match operation.as_str() {
         "check" if args.next().is_none() => match sidepulse_helpers::check_sd_guard() {
             Ok(()) => {
@@ -47,8 +56,22 @@ pub fn run_sd_guard(mut args: impl Iterator<Item = String>) -> ExitCode {
         _ => fail("usage: sidepulse-next sdejectguard check|run [--no-mount]"),
     }
 }
-pub fn run_status_bar(mut args: impl Iterator<Item = String>) -> ExitCode {
+pub fn run_status_bar(args: impl Iterator<Item = String>) -> ExitCode {
+    let args = args.collect::<Vec<_>>();
+    let mut args = args.into_iter();
     let operation = args.next().unwrap_or_else(|| "start".into());
+    let remaining = args.collect::<Vec<_>>();
+    if matches!(
+        operation.as_str(),
+        "install" | "stop" | "uninstall" | "status"
+    ) || remaining.iter().any(|arg| arg == "--stage-dir")
+    {
+        return crate::run_lifecycle(
+            sidepulse_installer::startup::Job::Tray,
+            std::iter::once(operation).chain(remaining),
+        );
+    }
+    let mut args = remaining.into_iter();
     if matches!(operation.as_str(), "start" | "run") {
         let endpoint = match (args.next(), args.next(), args.next()) {
             (Some(flag), Some(endpoint), None) if flag == "--endpoint" => Some(endpoint),

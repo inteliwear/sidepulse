@@ -18,6 +18,7 @@ fn stage_cli_plans_then_creates_one_isolated_bundle() {
         "sidepulse-next-settings",
         "sidepulse-next-virtual",
         "sidepulse-next-sd-guard",
+        "sidepulse-next-reply",
     ] {
         fs::write(
             source.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),

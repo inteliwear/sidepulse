@@ -273,7 +273,9 @@ power-change-preview toggle through the shared model and service requests.
 through the service, preserving unknown settings. Its process test exercises
 the actual CLI and service on each target platform. Global display defaults
 remain separate from saved per-device choices, matching the Python settings.
-The battery LED CLI route remains pending.
+The battery LED CLI renders through the service and supports one-shot and
+continuous output, destination previews, explicit filenames, charger baselines,
+duplicate suppression, and interruption.
 All bundled LED animation programs are now copied into the Rust device crate.
 The service resolves saved per-mode agent styles, including custom programs
 from the legacy settings `animations` directory, then validates and writes the
@@ -350,14 +352,28 @@ remains authoritative for users until the delivery gates above pass.
    for all five providers, preserving unrelated config and backups.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
-3. Port phone linking, manual delivery and push notifications, native helper
-   recovery, and the remaining settings controls into service modules.
+3. Finish native helper lifecycle management and remaining settings controls.
+   Phone pairing, automatic output, manual delivery, notifications, and power
+   helper recovery are implemented in service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
 5. Cover the remaining CLI entry points, turn the staged native binaries into
    installable, signed packages, and implement platform startup registration.
 6. Verify upgrades and rollback against an existing Python setup, then switch
    hook and state-file ownership only after the delivery gates pass.
+
+## Portable local reply classifier
+
+`sidepulse-reply` contains local CPU inference, pinned model downloads, the
+captured prompt, and the existing label parser. `sidepulse-next-reply` is the
+ninth staged executable, available through `sidepulse-next reply`. Model
+downloads are explicit; inference runs offline. The Rust benchmark example
+loads once and reports canonical predictions and warm timing. This optional
+component stays outside the monitor and UI.
+
+The [evaluation](reply-classifier-evaluation.md) records the measured prediction
+differences between the MLX and portable GGUF formats. The native backend is
+implemented; classification parity and GPU performance are not claimed.
 
 ## Session opening (Rust preview)
 
@@ -562,3 +578,46 @@ a battery program written to an explicit custom filename. The shared service
 continues to own the monitor, battery snapshot and device write. The optional
 per-provider log flags on a detached LED loop still need compatibility work;
 the Rust route currently selects the service through its explicit endpoint.
+
+## Native preview startup and shutdown
+
+`sidepulse-next setup --stage-dir DIR` assembles the isolated native bundle;
+`--dry-run` produces its manifest without writing it. Service and tray lifecycle
+commands accept that explicit bundle:
+
+```sh
+sidepulse-next service install --stage-dir DIR --dry-run
+sidepulse-next service install --stage-dir DIR --no-start
+sidepulse-next service start --stage-dir DIR
+sidepulse-next service status --stage-dir DIR
+sidepulse-next service stop --stage-dir DIR
+sidepulse-next service uninstall --stage-dir DIR
+sidepulse-next status-bar install --stage-dir DIR --dry-run
+```
+
+Startup registration lives in `sidepulse-installer`, separately from UI and
+monitor policy. Each preview has a unique label derived from its path. macOS
+uses user LaunchAgents, Linux uses user systemd units, and Windows uses a
+Task Scheduler logon trigger with the current user's interactive token and
+least privilege. Windows definitions follow Microsoft's
+[logon task schema](https://learn.microsoft.com/en-us/windows/win32/taskschd/logon-trigger-example--xml-).
+Existing files and task commands must match their expected owner. Plans detect
+external edits, refuse symlinks or unrelated entries, and retain a verified
+startup file if the manager fails so installation can be retried explicitly.
+Windows task inspection checks its action, working directory, user, logon type,
+and privileges. Manager queries distinguish registration from running state;
+Windows running state is reported as unknown rather than inferred from a task's
+presence. No startup registration was applied to the development machine.
+
+`sidepulse-next sdejectguard install|start|stop|uninstall|status --stage-dir DIR`
+manages the macOS guard in the user scope. System scope deployment still needs a
+root-owned immutable helper package and hardware validation.
+
+The service handles termination signals and explicit IPC shutdown. It cancels
+background recovery, relay, discovery, output, history, battery, and power loops,
+joins runtime workers, and flushes its final state. The power controller drops
+before process exit and restores any override it applied; failed restoration is
+logged. Native power queries and mutations have deadlines. Windows service stops
+request a graceful IPC shutdown before removing the scheduled task. Real binary
+checks verify both IPC and termination shutdown with isolated logs and files;
+these checks do not activate power control.

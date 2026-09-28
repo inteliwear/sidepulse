@@ -10,6 +10,7 @@ name = "sidepulse-next-service"
 path = "src/main.rs"
 
 [dependencies]
+ctrlc = { version = "3.5", features = ["termination"] }
 uuid = { version = "1", features = ["v4"] }
 sidepulse-links = { path = "../sidepulse-links" }
 chrono.workspace = true

@@ -1,6 +1,8 @@
 //! Side-by-side Rust preview bundle. It never registers startup jobs or changes
 //! the installed Python application's hooks, settings, or device ownership.
 
+pub mod startup;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
 
-const BINARIES: [&str; 8] = [
+const BINARIES: [&str; 9] = [
     "sidepulse-next",
     "sidepulse-next-hook",
     "sidepulse-next-service",
@@ -20,6 +22,7 @@ const BINARIES: [&str; 8] = [
     "sidepulse-next-settings",
     "sidepulse-next-virtual",
     "sidepulse-next-sd-guard",
+    "sidepulse-next-reply",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,7 +240,7 @@ impl StagePlan {
 
 /// Start the isolated service from a staged bundle and verify IPC, then stop it.
 /// This never installs hooks, registers startup jobs, or configures a device.
-pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
+pub fn read_stage(stage_dir: &Path) -> io::Result<StageManifest> {
     let stage_dir = fs::canonicalize(stage_dir)?;
     let manifest: StageManifest =
         serde_json::from_slice(&fs::read(stage_dir.join("manifest.json"))?)?;
@@ -272,6 +275,33 @@ pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
             ));
         }
     }
+    let tray_executable = if platform == Platform::Macos {
+        stage_dir.join("applications/SidePulse Tray.app/Contents/MacOS/sidepulse-next-tray")
+    } else {
+        expected_binaries[3].clone()
+    };
+    if manifest.schema_version != 1
+        || manifest.enabled
+        || manifest.tray_command
+            != vec![
+                tray_executable.to_string_lossy().into_owned(),
+                expected_endpoint,
+            ]
+    {
+        return Err(io::Error::other(
+            "bundle manifest contains an unexpected tray command or schema",
+        ));
+    }
+    if !fs::symlink_metadata(&tray_executable).is_ok_and(|m| m.is_file()) {
+        return Err(io::Error::other(
+            "tray executable is missing or is not a regular file",
+        ));
+    }
+    Ok(manifest)
+}
+
+pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
+    let manifest = read_stage(stage_dir)?;
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
         request_id: 1,
@@ -539,7 +569,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
-            assert_eq!(manifest.binaries.len(), 8);
+            assert_eq!(manifest.binaries.len(), 9);
             assert_eq!(manifest.launch_files.len(), 2);
             assert_eq!(manifest.service_command.len(), 25);
             assert!(manifest.service_command.contains(&"cursor".to_owned()));

@@ -140,6 +140,9 @@ impl Service {
         Ok(())
     }
     fn phone_is_current(&self, link: &PhoneLink) -> io::Result<bool> {
+        if !self.running() {
+            return Ok(false);
+        }
         Ok(self
             .phone_links
             .lock()
@@ -381,14 +384,19 @@ impl Service {
         let service = self.clone();
         std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(300);
-            while Instant::now() < deadline && !cancel.load(Ordering::Acquire) {
+            while service.running() && Instant::now() < deadline && !cancel.load(Ordering::Acquire)
+            {
                 let result = sidepulse_links::receive_registration_once(
                     &server,
                     &channel,
                     deadline.saturating_duration_since(Instant::now()),
-                    || !cancel.load(Ordering::Acquire) && Instant::now() < deadline,
+                    || {
+                        service.running()
+                            && !cancel.load(Ordering::Acquire)
+                            && Instant::now() < deadline
+                    },
                 );
-                if cancel.load(Ordering::Acquire) {
+                if !service.running() || cancel.load(Ordering::Acquire) {
                     return;
                 }
                 let Ok(mut pairing_guard) = service.phone_pairing.lock() else {
@@ -574,6 +582,17 @@ impl Service {
             let event_id = uuid::Uuid::new_v4().to_string();
             let data = service.phone_data();
             for (index, destination) in selected.iter().enumerate() {
+                if !service.running() {
+                    if let Ok(mut jobs) = service.delivery_jobs.lock()
+                        && let Some(job) = jobs.get_mut(&id)
+                    {
+                        for outcome in &mut job.outcomes[index..] {
+                            outcome.status = "failed".into();
+                            outcome.error = Some("service is stopping".into());
+                        }
+                    }
+                    break;
+                }
                 let result = match destination.kind {
                     DestinationKind::Local => {
                         service.deliver_local(destination, request.program.as_deref().unwrap())

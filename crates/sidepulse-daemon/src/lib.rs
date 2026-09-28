@@ -47,6 +47,7 @@ type RelayPublisher = mpsc::SyncSender<RelayPublication>;
 
 #[derive(Clone, Default)]
 pub struct Service {
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
     monitor: Arc<Mutex<Monitor>>,
     subscribers: Arc<Mutex<Vec<mpsc::SyncSender<()>>>>,
     device: Arc<Mutex<Option<DeviceOutput>>>,
@@ -917,6 +918,19 @@ impl Service {
             );
         }
         match request.kind {
+            RequestKind::Shutdown => {
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload: ServerPayload::Ack,
+                    },
+                )?;
+                self.shutdown
+                    .store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            }
             RequestKind::RenderLedProgram {
                 source,
                 led_count,
@@ -1582,7 +1596,12 @@ impl Service {
                         },
                     },
                 )?;
-                while receiver.recv().is_ok() {
+                while self.running() {
+                    match receiver.recv_timeout(Duration::from_millis(100)) {
+                        Ok(()) => {}
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
                     write_message(
                         &mut stream,
                         &ServerMessage {
@@ -1717,6 +1736,19 @@ fn source_overrides_with_settings(
 }
 
 pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<()> {
+    run_with_shutdown(endpoint, options, Arc::default())
+}
+
+/// The executable's signal handler and the IPC shutdown request share this flag.
+pub fn run_with_shutdown(
+    endpoint: &str,
+    options: RunOptions<'_>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+) -> io::Result<()> {
+    let mut workers = RuntimeWorkers {
+        shutdown: shutdown.clone(),
+        threads: Vec::new(),
+    };
     let RunOptions {
         logs,
         device,
@@ -1756,9 +1788,10 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         ));
     }
     let listener = sidepulse_ipc::bind(endpoint)?;
-    let service = latest_state_path.map_or_else(Service::new, |path| {
+    let mut service = latest_state_path.map_or_else(Service::new, |path| {
         Service::with_state_path(path.to_path_buf())
     });
+    service.shutdown = shutdown;
     if let Some(path) = settings_path {
         service.configure_settings(path)?;
     }
@@ -1784,7 +1817,7 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             .map_err(poisoned)?
             .enabled = true;
         let power_service = service.clone();
-        std::thread::spawn(move || {
+        workers.threads.push(std::thread::spawn(move || {
             let mut controller = power::MacPowerController::new();
             let mut retry_generation = power_service
                 .power_retry_generation
@@ -1792,7 +1825,7 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             let mut activity = sidepulse_core::AwakeActivity::default();
             let started = Instant::now();
             let mut last_error = None;
-            loop {
+            while power_service.running() {
                 let generation = power_service
                     .power_retry_generation
                     .load(std::sync::atomic::Ordering::Acquire);
@@ -1864,23 +1897,23 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         last_error = Some(message);
                     }
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                power_service.sleep_while_running(Duration::from_secs(1));
             }
-        });
+        }));
     }
     if let Some(path) = phone_links_path {
         service.configure_phone_links(path)?;
         if phone_output {
             service.enable_phone_output()?;
             let phone_service = service.clone();
-            std::thread::spawn(move || {
-                loop {
+            workers.threads.push(std::thread::spawn(move || {
+                while phone_service.running() {
                     if let Err(error) = phone_service.sync_phone_outputs() {
                         eprintln!("sidepulse-next-service: phone output: {error}");
                     }
-                    std::thread::sleep(Duration::from_secs(1));
+                    phone_service.sleep_while_running(Duration::from_secs(1));
                 }
-            });
+            }));
         }
     }
     if let Some(path) = relay_config_path {
@@ -1889,8 +1922,13 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         let (sender, receiver) = mpsc::sync_channel(128);
         *service.relay_publisher.lock().map_err(poisoned)? = Some(sender);
         let publish_service = service.clone();
-        std::thread::spawn(move || {
-            for (provider, line) in receiver {
+        workers.threads.push(std::thread::spawn(move || {
+            while publish_service.running() {
+                let (provider, line) = match receiver.recv_timeout(Duration::from_millis(100)) {
+                    Ok(event) => event,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
                 let result = publish_service.relay_config().and_then(|config| {
                     if let Some(config) = config
                         && !config.outbound_channel.is_empty()
@@ -1909,11 +1947,11 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                     eprintln!("sidepulse-next-service: relay send failed: {error}");
                 }
             }
-        });
+        }));
         let receiver_service = service.clone();
-        std::thread::spawn(move || {
+        workers.threads.push(std::thread::spawn(move || {
             let mut last_error = None;
-            loop {
+            while receiver_service.running() {
                 let generation = receiver_service.relay_generation.load(Ordering::Acquire);
                 let result = receiver_service.relay_config().and_then(|config| {
                     if let Some(config) = config
@@ -1922,16 +1960,18 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         receive_once_while(
                             &config,
                             || {
-                                generation
-                                    == receiver_service.relay_generation.load(Ordering::Acquire)
+                                receiver_service.running()
+                                    && generation
+                                        == receiver_service.relay_generation.load(Ordering::Acquire)
                             },
                             |message| {
                                 let _configuration = receiver_service
                                     .relay_config_store
                                     .lock()
                                     .map_err(poisoned)?;
-                                if generation
-                                    != receiver_service.relay_generation.load(Ordering::Acquire)
+                                if !receiver_service.running()
+                                    || generation
+                                        != receiver_service.relay_generation.load(Ordering::Acquire)
                                 {
                                     return Ok(());
                                 }
@@ -1963,9 +2003,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                 } else {
                     last_error = None;
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                receiver_service.sleep_while_running(Duration::from_secs(1));
             }
-        });
+        }));
     }
     service.load_latest_state()?;
     let home = std::env::var_os("HOME")
@@ -1978,9 +2018,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
     service.replay_sources(&sources, 5000)?;
     let recovery_service = service.clone();
     let explicit_sources = logs.to_vec();
-    std::thread::spawn(move || {
+    workers.threads.push(std::thread::spawn(move || {
         let mut last_error = None;
-        loop {
+        while recovery_service.running() {
             let result = (|| -> io::Result<()> {
                 let overrides =
                     source_overrides_with_settings(&recovery_service, &explicit_sources, &home)?;
@@ -2005,9 +2045,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                     last_error = Some(message);
                 }
             }
-            std::thread::sleep(Duration::from_secs(1));
+            recovery_service.sleep_while_running(Duration::from_secs(1));
         }
-    });
+    }));
     if let Some((path, brightness)) = device {
         let brightness = match brightness {
             Some(brightness) => brightness,
@@ -2024,20 +2064,20 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         let roots = default_mount_roots();
         service.auto_select_device(&roots)?;
         let selection_service = service.clone();
-        std::thread::spawn(move || {
-            loop {
+        workers.threads.push(std::thread::spawn(move || {
+            while selection_service.running() {
                 if let Err(error) = selection_service.auto_select_device(&roots) {
                     eprintln!("sidepulse-next-service: device discovery: {error}");
                 }
-                std::thread::sleep(Duration::from_secs(5));
+                selection_service.sleep_while_running(Duration::from_secs(5));
             }
-        });
+        }));
     }
     if device.is_some() || auto_device {
         let output_service = service.clone();
-        std::thread::spawn(move || {
+        workers.threads.push(std::thread::spawn(move || {
             let mut last_error = None;
-            loop {
+            while output_service.running() {
                 if let Some(output) = output_service.device.lock().ok().and_then(|mut device| {
                     device
                         .as_mut()
@@ -2056,9 +2096,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         last_error = Some(message);
                     }
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                output_service.sleep_while_running(Duration::from_secs(1));
             }
-        });
+        }));
     }
     if device.is_some()
         || auto_device
@@ -2067,9 +2107,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         || history_path.is_some()
     {
         let battery_service = service.clone();
-        std::thread::spawn(move || {
+        workers.threads.push(std::thread::spawn(move || {
             let mut last_error = None;
-            loop {
+            while battery_service.running() {
                 let result = read_battery_snapshot(None)
                     .and_then(|battery| battery_service.update_battery_snapshot(battery));
                 match result {
@@ -2082,9 +2122,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         last_error = Some(message);
                     }
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                battery_service.sleep_while_running(Duration::from_secs(1));
             }
-        });
+        }));
     }
     if power_observation_path.is_some()
         || history_path.is_some()
@@ -2096,9 +2136,9 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         let record_history = history_path.is_some();
         let power_observation_path = power_observation_path.map(Path::to_path_buf);
         let history_service = service.clone();
-        std::thread::spawn(move || {
+        workers.threads.push(std::thread::spawn(move || {
             let mut last_error = None;
-            loop {
+            while history_service.running() {
                 let result = (|| -> io::Result<()> {
                     let observation = if let Some(path) = &power_observation_path {
                         Some(read_mock_power(path)?)
@@ -2123,12 +2163,20 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                         last_error = Some(message);
                     }
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                history_service.sleep_while_running(Duration::from_secs(2));
             }
-        });
+        }));
     }
-    for connection in listener.incoming() {
-        let stream = connection?;
+    listener.set_nonblocking(interprocess::local_socket::ListenerNonblockingMode::Accept)?;
+    while service.running() {
+        let stream = match listener.accept() {
+            Ok(stream) => stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                service.sleep_while_running(Duration::from_millis(50));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let service = service.clone();
         std::thread::spawn(move || {
             if let Err(error) = service.serve_connection(stream) {
@@ -2136,7 +2184,38 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
             }
         });
     }
+    drop(workers);
+    service.persist_latest_state()?;
     Ok(())
+}
+
+struct RuntimeWorkers {
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+impl Drop for RuntimeWorkers {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Release);
+        for worker in self.threads.drain(..) {
+            if worker.join().is_err() {
+                eprintln!("sidepulse-next-service: a worker failed during shutdown");
+            }
+        }
+    }
+}
+impl Service {
+    fn running(&self) -> bool {
+        !self.shutdown.load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn sleep_while_running(&self, duration: Duration) {
+        let deadline = Instant::now() + duration;
+        while self.running() && Instant::now() < deadline {
+            std::thread::sleep(
+                Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

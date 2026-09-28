@@ -168,7 +168,7 @@ pub fn read_battery_snapshot(full_charge_watts: Option<f64>) -> io::Result<Batte
 }
 
 #[cfg(target_os = "macos")]
-fn bounded_command_output(
+pub fn bounded_command_output(
     command: &mut std::process::Command,
     timeout: std::time::Duration,
 ) -> io::Result<Vec<u8>> {
@@ -195,7 +195,7 @@ fn bounded_command_output(
             Ok(None) if Instant::now() >= deadline => {
                 break Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "battery query timed out",
+                    "system query timed out",
                 ));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
@@ -207,14 +207,14 @@ fn bounded_command_output(
     }
     let output = reader
         .join()
-        .map_err(|_| io::Error::other("battery query reader failed"))??;
+        .map_err(|_| io::Error::other("system query reader failed"))??;
     if !status?.success() {
-        return Err(io::Error::other("ioreg could not read battery status"));
+        return Err(io::Error::other("system command failed"));
     }
     if output.len() as u64 > LIMIT {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "battery query output exceeds limit",
+            "system query output exceeds limit",
         ));
     }
     Ok(output)
@@ -265,20 +265,25 @@ fn model_baseline(model: &str, chip: &str) -> Option<f64> {
 #[cfg(target_os = "macos")]
 fn default_full_charge_watts() -> f64 {
     static BASELINE: LazyLock<f64> = LazyLock::new(|| {
-        if let Ok(output) = std::process::Command::new("ioreg")
-            .args(["-p", "IODeviceTree", "-r", "-d", "1", "-n", "product"])
-            .output()
-            && output.status.success()
-            && let Some(watts) =
-                baseline_from_product_tree(&String::from_utf8_lossy(&output.stdout))
+        if let Ok(output) = bounded_command_output(
+            std::process::Command::new("ioreg").args([
+                "-p",
+                "IODeviceTree",
+                "-r",
+                "-d",
+                "1",
+                "-n",
+                "product",
+            ]),
+            std::time::Duration::from_secs(2),
+        ) && let Some(watts) = baseline_from_product_tree(&String::from_utf8_lossy(&output))
         {
             return watts;
         }
-        if let Ok(output) = std::process::Command::new("system_profiler")
-            .args(["SPHardwareDataType", "-json"])
-            .output()
-            && output.status.success()
-            && let Ok(data) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        if let Ok(output) = bounded_command_output(
+            std::process::Command::new("system_profiler").args(["SPHardwareDataType", "-json"]),
+            std::time::Duration::from_secs(3),
+        ) && let Ok(data) = serde_json::from_slice::<serde_json::Value>(&output)
             && let Some(hardware) = data
                 .get("SPHardwareDataType")
                 .and_then(|value| value.get(0))
