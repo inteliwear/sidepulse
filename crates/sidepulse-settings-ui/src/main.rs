@@ -439,7 +439,7 @@ fn start_worker(endpoint: String) -> (Sender<WorkerCommand>, Receiver<Update>) {
     (commands, received)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
     Activity,
     Devices,
@@ -515,6 +515,14 @@ struct SettingsApp {
 impl SettingsApp {
     fn new(endpoint: String) -> Self {
         let (commands, updates) = start_worker(endpoint.clone());
+        Self::with_channels(endpoint, commands, updates)
+    }
+
+    fn with_channels(
+        endpoint: String,
+        commands: Sender<WorkerCommand>,
+        updates: Receiver<Update>,
+    ) -> Self {
         Self {
             commands,
             updates,
@@ -2423,3 +2431,6 @@ fn main() -> eframe::Result {
         Box::new(move |_context| Ok(Box::new(SettingsApp::new(endpoint)))),
     )
 }
+
+#[cfg(test)]
+mod headless_tests;

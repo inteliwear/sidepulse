@@ -182,8 +182,8 @@ while its socket is unavailable can still reach the monitor. Optional Codex
 and Claude transcript sources can now be supplied to one-shot status with
 `--codex-transcripts DIR` or `--claude-transcripts DIR`, and to the service
 with `--transcript codex|claude DIR`. They replay recent files and detect later
-file changes; they remain opt-in as in the Python defaults. The Rust reader
-needs comparison against a larger set of captured transcript cases. Provider
+file changes; they remain opt-in as in the Python defaults. Twenty captured
+transcript cases now match the Python reader. Provider
 JSONL replay now seeks backward for the last requested lines instead of
 scanning entire historical logs.
 When an explicit settings document enables Codex or Claude transcript
@@ -225,8 +225,8 @@ The core now resolves explicit, environment, and process-based agent origins
 and reads legacy structured origin labels from hook payloads. The hook reads
 Unix ancestry through `ps` and Windows ancestry from a native process
 snapshot. The Junie hook uses that ancestry to match terminal events to the
-right recent session on both platforms. Captured cross-platform process trees
-still need parity checks, especially Windows app versus CLI identification.
+right recent session on both platforms. Seventy-five captured origin cases cover
+process trees and Windows app versus CLI identification and match Python.
 
 The `sidepulse-device::virtual_led` module now holds the portable virtual LED
 pixel rules: status and battery colors, spatial blending, tone mapping, and
@@ -323,9 +323,12 @@ relocates SidePulse backup JSON files out of Grok's live hooks directory into
 the legacy backup folder. A relocation error rolls back provider config writes.
 The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
 reports of hook events and log paths for all five providers.
-`agent-monitor live` and `watch` now refresh the same Rust monitor view using
-the bounded log reader. Their terminal presentation is simpler than the
-Python dashboard and still needs a final CLI output comparison.
+`agent-monitor live` and `watch` retain a single Rust monitor and tail appended
+events after bounded initial replay. Pending permissions survive events beyond
+the replay limit. Redirected output has no terminal cursor commands, and
+termination signals stop the loop cleanly. Their terminal presentation uses the
+one-shot status view instead of Python's wider colored table; source paths,
+aggregate/reason text, and agent details remain available.
 Codex requires a user trust review for new or changed non-managed hooks. The
 Rust installer reports this step and does not write trust hashes itself. The
 Python installer still has its legacy automatic trust refresh, so cutover
@@ -386,7 +389,7 @@ see the [Ghostty documentation](https://ghostty.org/docs/features/applescript) a
 Portable integration tests exercise the actual CLI and local IPC, preference
 persistence, unknown-field retention, missing sessions, explicit-action failures,
 and hostile characters in session arguments. Native activation and existing
-terminal focus/reuse still require validation. Terminal reuse is implemented as described below. Native history and virtual-display checks passed in the isolated preview. The final Setup and Diagnostics screens still need visual checks; the desktop became locked during their verification. Automated checks, release builds, packaging, staging, and service smoke checks passed on all three platforms at `dd4a757`.
+terminal focus/reuse still require validation. Terminal reuse is implemented as described below. Native history and virtual-display checks passed in the isolated preview. The final Setup and Diagnostics screens still need visual checks; the desktop became locked during their verification. Automated checks, release builds, packaging, staging, and service smoke checks pass on all three platforms. See rust-native-validation.md for the current checks and remaining gates.
 
 
 ## Profiles and named animation assets
@@ -559,9 +562,9 @@ Agent CLI output retains the legacy default animation palette.
 
 Portable real CLI/IPC tests verify a two-LED agent preview without writing and
 a battery program written to an explicit custom filename. The shared service
-continues to own the monitor, battery snapshot and device write. The optional
-per-provider log flags on a detached LED loop still need compatibility work;
-the Rust route currently selects the service through its explicit endpoint.
+continues to own its monitor, battery snapshot and device write. Optional
+per-provider log flags select standalone monitoring through the same shared
+source readers and monitor, as described in Native CLI compatibility below.
 
 ## Native preview startup and shutdown
 
@@ -594,8 +597,9 @@ Windows running state is reported as unknown rather than inferred from a task's
 presence. No startup registration was applied to the development machine.
 
 `sidepulse-next sdejectguard install|start|stop|uninstall|status --stage-dir DIR`
-manages the macOS guard in the user scope. System scope deployment still needs a
-root-owned immutable helper package and hardware validation.
+manages the macOS guard in the user scope. System scope uses the root-owned
+immutable native PKG payload, as described below. Hardware validation remains
+open.
 
 The service handles termination signals and explicit IPC shutdown. It cancels
 background recovery, relay, discovery, output, history, battery, and power loops,

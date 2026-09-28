@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -87,17 +91,25 @@ fn sources_for_options(options: &Options) -> Vec<SourceSpec> {
 pub(crate) struct DetachedMonitor {
     monitor: Monitor,
     tailer: sidepulse_sources::SourceTailer,
+    sources: Vec<SourceSpec>,
 }
 impl DetachedMonitor {
     pub(crate) fn new(args: Vec<String>) -> io::Result<Self> {
         let options = parse_args(args.into_iter()).map_err(io::Error::other)?;
-        let sources = sources_for_options(&options);
+        Self::from_options(&options)
+    }
+    fn from_options(options: &Options) -> io::Result<Self> {
+        let sources = sources_for_options(options);
         let tailer = sidepulse_sources::SourceTailer::new(&sources)?;
         let mut monitor = Monitor::new(options.policy);
         for event in load_recent_events(&sources, options.max_lines)? {
             monitor.ingest(&event);
         }
-        Ok(Self { monitor, tailer })
+        Ok(Self {
+            monitor,
+            tailer,
+            sources,
+        })
     }
     pub(crate) fn snapshot(&mut self) -> io::Result<MonitorSnapshot> {
         for event in self.tailer.poll()? {
@@ -149,22 +161,47 @@ pub fn run_watch(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    loop {
-        match collect_snapshot(&options) {
-            Ok((snapshot, sources)) => {
-                print!("\x1b[2J\x1b[H");
+    let mut monitor = match DetachedMonitor::from_options(&options) {
+        Ok(monitor) => monitor,
+        Err(error) => {
+            eprintln!("sidepulse-next watch: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = stop.clone();
+    if let Err(error) = ctrlc::set_handler(move || signal.store(true, Ordering::Release)) {
+        eprintln!("sidepulse-next watch: {error}");
+        return ExitCode::FAILURE;
+    }
+    let interactive = io::stdout().is_terminal();
+    while !stop.load(Ordering::Acquire) {
+        match monitor.snapshot() {
+            Ok(snapshot) => {
+                if interactive {
+                    print!("\x1b[2J\x1b[H");
+                }
                 print_snapshot(
                     &snapshot,
-                    &sources,
+                    &monitor.sources,
                     options.include_stale,
                     Some(recent_seconds),
                 );
-                let _ = io::stdout().flush();
+                if io::stdout().flush().is_err() {
+                    return ExitCode::SUCCESS;
+                }
             }
             Err(error) => eprintln!("sidepulse-next watch: {error}"),
         }
-        std::thread::sleep(Duration::from_secs_f64(interval));
+        let next = Instant::now() + Duration::from_secs_f64(interval);
+        while !stop.load(Ordering::Acquire) && Instant::now() < next {
+            std::thread::sleep(
+                next.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(50)),
+            );
+        }
     }
+    ExitCode::SUCCESS
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {

@@ -6,7 +6,7 @@ cutover is a separate delivery gate.
 
 ## Automated and isolated checks
 
-- Formatting, workspace lint with all features, 216 tests, and release builds pass
+- Formatting, workspace lint with all features, 221 tests, and release builds pass
   locally. CI builds, tests, packages, archives, stages, and smoke-checks macOS,
   Windows, and Linux.
 - Captured Python comparisons cover 75 origin cases, 20 transcript cases,
@@ -18,6 +18,16 @@ cutover is a separate delivery gate.
   duplicated legacy Grok handlers, and moves backups outside active hooks.
 - Startup recovery resolves a verified staged manifest without a running service;
   tests inspect plans without registering jobs or starting helpers.
+- Headless interaction tests exercise the actual Settings presentation: provider
+  installation, offline startup recovery, CSV export, export completion, and the
+  status bar visibility preference send their expected commands. All twelve
+  pages fit horizontally at the default and minimum window sizes; the six
+  history labels remain distinct at minimum width. These checks do not verify
+  native window integration, the GPU, or desktop tray behavior.
+- A real CLI process retains pending permissions beyond its initial replay
+  limit, applies appended completion events, writes plain redirected output,
+  and exits cleanly on Unix termination signals. Live monitoring keeps one
+  monitor instance across refreshes, matching the Python state lifetime.
 - CSV/HTML export tests cover the legacy columns, Unicode and quoting, HTML
   escaping, malformed rows, size limits, atomic publication, multiple audit
   sources, and retained source bytes.
@@ -26,6 +36,16 @@ cutover is a separate delivery gate.
   preserve later runtime edits.
 - Local package QA passed archive extraction, ad hoc signing, signature retention
   after staging, and unsigned Mac PKG creation and inspection.
+- A fresh rehearsal while the desktop was locked extracted and verified the
+  latest archive, imported all five provider logs plus audit/history/latest,
+  preserved raw source bytes, and retained later settings, links, relay,
+  custom assets, and runtime edits through update, rollback, and redo. The
+  staged service passed startup checks before and after replacement. The latest
+  unsigned PKG was inspected without installation and has no install scripts.
+- Actual one-shot CLI output matches Python for eight isolated event fixtures
+  (SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
+  Stop, Notification, SessionEnd), ignoring only elapsed age. Live output uses
+  that compact status view; Python's colored table is a presentation difference.
 
 ## Native macOS checks completed
 
