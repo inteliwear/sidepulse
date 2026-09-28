@@ -63,6 +63,7 @@ pub struct TrayState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrayControls {
+    pub visible: bool,
     pub brightness: Option<u8>,
     pub display_mode: Option<String>,
     pub codex_transcripts: bool,
@@ -86,6 +87,10 @@ impl TrayControls {
         };
         let monitoring = settings.get("transcript_monitoring");
         Some(Self {
+            visible: settings
+                .get("show_menu_bar_icon")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true),
             virtual_display_enabled: settings
                 .get("virtual_status_device_enabled")
                 .and_then(|value| value.as_bool())
@@ -451,6 +456,7 @@ mod tests {
             display_mode: Some("battery".into()),
         };
         let controls = TrayControls::from_service_payload(&payload).unwrap();
+        assert!(controls.visible);
         assert_eq!(controls.brightness, Some(128));
         assert_eq!(controls.display_mode.as_deref(), Some("battery"));
         assert!(controls.codex_transcripts);
@@ -459,6 +465,7 @@ mod tests {
 
         let disconnected_device = ServerPayload::Settings {
             settings: json!({
+                "show_menu_bar_icon": false,
                 "transcript_monitoring": {"codex": true},
             }),
             active_device: None,
@@ -466,6 +473,7 @@ mod tests {
             display_mode: Some("battery".into()),
         };
         let controls = TrayControls::from_service_payload(&disconnected_device).unwrap();
+        assert!(!controls.visible);
         assert_eq!(controls.brightness, None);
         assert_eq!(controls.display_mode, None);
     }

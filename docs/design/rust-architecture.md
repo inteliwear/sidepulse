@@ -796,3 +796,10 @@ so large history responses survive partial reads and writes.
 
 Detailed validation and outstanding delivery gates are tracked in
 [rust-native-validation.md](rust-native-validation.md).
+
+
+The saved `show_menu_bar_icon` preference is service-owned and preserved from
+legacy settings. Settings and the `tray-visibility ENDPOINT show|hide` CLI can
+change it; all tray adapters apply it without stopping monitoring. The Settings
+window remains available to restore a hidden icon. Linux's tray host decides
+whether to hide or move a passive icon into its overflow area.

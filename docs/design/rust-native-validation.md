@@ -13,7 +13,7 @@ cutover is a separate delivery gate.
   35 transition sequences with 150 snapshots, five provider configurations,
   and 57 maintained example LED programs.
 - Actual CLI/service tests cover hook setup, settings, phone and relay controls,
-  history, profiles, delivery, recovery, shutdown, and diagnostic exports.
+  history, profiles, delivery, recovery, shutdown, tray visibility, and diagnostic exports.
 - Hook installation preserves unrelated configuration, backs up changes, cleans
   duplicated legacy Grok handlers, and moves backups outside active hooks.
 - Startup recovery resolves a verified staged manifest without a running service;
@@ -28,6 +28,10 @@ cutover is a separate delivery gate.
   after staging, and unsigned Mac PKG creation and inspection.
 
 ## Native macOS checks completed
+
+All five providers also passed staged binary dry-run, install/status/remove, backup,
+unknown-field retention, and Grok legacy cleanup checks. Its hook wrote an isolated
+audit; CSV/HTML exports preserved their source and escaped hostile event text.
 
 An isolated staged service used private state and a mock LED file. It had no
 physical device discovery/output, phone output, or power-control activation.

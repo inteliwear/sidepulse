@@ -310,6 +310,18 @@ impl SettingsStore {
         (enabled, seconds)
     }
 
+    pub fn set_tray_visibility(&mut self, visible: bool) -> io::Result<()> {
+        let mut updated = self.document.clone();
+        updated.insert("show_menu_bar_icon".into(), json!(visible));
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn set_battery_settings(&mut self, patch: &BatterySettingsPatch) -> io::Result<()> {
         patch
             .validate()

@@ -19,6 +19,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 struct TrayView {
     tray: TrayIcon,
+    icon_visible: bool,
     menu: Menu,
     status: MenuItem,
     device_status: MenuItem,
@@ -101,6 +102,7 @@ impl TrayView {
             .build()?;
         Ok(Self {
             tray,
+            icon_visible: true,
             menu,
             status,
             device_status,
@@ -126,6 +128,14 @@ impl TrayView {
             visible_rows: 0,
             agent_items: Vec::new(),
         })
+    }
+
+    fn show_visibility(&mut self, visible: bool) -> Result<(), Box<dyn Error>> {
+        if self.icon_visible != visible {
+            self.tray.set_visible(visible)?;
+            self.icon_visible = visible;
+        }
+        Ok(())
     }
 
     fn show_snapshot(&mut self, state: &TrayState) -> Result<(), Box<dyn Error>> {
@@ -726,6 +736,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                     }
                     last_state = Some(state);
                     if let Some(view) = &mut view {
+                        if let Some(controls) = &controls {
+                            let _ = view.show_visibility(controls.visible);
+                        }
                         view.show_battery_preview(
                             controls.as_ref().map(|state| state.battery_power_preview),
                         );
@@ -888,6 +901,9 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 let state = TrayState::from_snapshot_with_retention(&snapshot, retention);
                 if last_state.as_ref() != Some(&state) {
                     view.show_snapshot(&state)?;
+                }
+                if let Some(controls) = &controls {
+                    view.show_visibility(controls.visible)?;
                 }
                 view.show_battery_preview(
                     controls.as_ref().map(|state| state.battery_power_preview),

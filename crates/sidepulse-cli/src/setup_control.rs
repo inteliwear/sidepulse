@@ -9,6 +9,14 @@ pub fn run(command: &str, args: impl Iterator<Item = String>) -> ExitCode {
     let values = args.iter().map(String::as_str).collect::<Vec<_>>();
     let parsed = match (command, values.as_slice()) {
         ("setup-status", [endpoint]) => Some((*endpoint, RequestKind::HookSetup)),
+        ("tray-visibility", [endpoint, visibility]) if matches!(*visibility, "show" | "hide") => {
+            Some((
+                *endpoint,
+                RequestKind::SetTrayVisibility {
+                    visible: *visibility == "show",
+                },
+            ))
+        }
         ("diagnostics", [endpoint]) => Some((*endpoint, RequestKind::Diagnostics)),
         ("diagnostics-export", [endpoint, format]) => match *format {
             "csv" => Some((
@@ -42,7 +50,7 @@ pub fn run(command: &str, args: impl Iterator<Item = String>) -> ExitCode {
     };
     let Some((endpoint, kind)) = parsed else {
         eprintln!(
-            "Usage: sidepulse setup-status ENDPOINT\n       sidepulse configure-hooks ENDPOINT PROVIDER install|remove [--dry-run]\n       sidepulse diagnostics ENDPOINT\n       sidepulse diagnostics-export ENDPOINT csv|html"
+            "Usage: sidepulse setup-status ENDPOINT\n       sidepulse configure-hooks ENDPOINT PROVIDER install|remove [--dry-run]\n       sidepulse tray-visibility ENDPOINT show|hide\n       sidepulse diagnostics ENDPOINT\n       sidepulse diagnostics-export ENDPOINT csv|html"
         );
         return ExitCode::from(2);
     };

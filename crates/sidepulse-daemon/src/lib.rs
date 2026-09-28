@@ -284,6 +284,14 @@ impl Service {
         store.set_transcript_enabled(provider, enabled)
     }
 
+    pub fn set_tray_visibility(&self, visible: bool) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_tray_visibility(visible)
+    }
+
     pub fn set_battery_settings(&self, patch: &BatterySettingsPatch) -> io::Result<()> {
         let mut settings = self.settings.lock().map_err(poisoned)?;
         let store = settings.as_mut().ok_or_else(|| {
@@ -1469,6 +1477,7 @@ impl Service {
             | RequestKind::SetSessionTerminal { .. }
             | RequestKind::SetHistoryTimeframe { .. }
             | RequestKind::SetVirtualDisplay { .. }
+            | RequestKind::SetTrayVisibility { .. }
             | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
@@ -1503,6 +1512,7 @@ impl Service {
                         style,
                         custom_program,
                     } => self.set_agent_animation(mode, &style, custom_program.as_deref()),
+                    RequestKind::SetTrayVisibility { visible } => self.set_tray_visibility(visible),
                     RequestKind::SetBatterySettings { patch } => self.set_battery_settings(&patch),
                     RequestKind::SetAgentListSettings { patch } => {
                         self.set_agent_list_settings(&patch)

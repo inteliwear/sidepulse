@@ -33,6 +33,9 @@ fn cli_and_service_share_hook_setup_and_atomic_diagnostic_exports() {
     )
     .unwrap();
     let service = sidepulse_daemon::Service::new();
+    let settings = temp.path().join("settings.json");
+    fs::write(&settings, br#"{"unknown_preference":42}"#).unwrap();
+    service.configure_settings(&settings).unwrap();
     service
         .configure_hook_setup(
             &home,
@@ -46,7 +49,7 @@ fn cli_and_service_share_hook_setup_and_atomic_diagnostic_exports() {
         .unwrap();
     let listener = sidepulse_ipc::bind(&endpoint).unwrap();
     let server = std::thread::spawn(move || {
-        for _ in 0..9 {
+        for _ in 0..11 {
             service
                 .serve_connection(listener.accept().unwrap())
                 .unwrap();
@@ -104,6 +107,18 @@ fn cli_and_service_share_hook_setup_and_atomic_diagnostic_exports() {
     assert_eq!(
         serde_json::from_slice::<Value>(&fs::read(&config).unwrap()).unwrap(),
         json!({"unrelated":42})
+    );
+    assert_eq!(
+        success("tray-visibility", &["hide"])["settings"]["show_menu_bar_icon"],
+        false
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&settings).unwrap()).unwrap()["unknown_preference"],
+        42
+    );
+    assert_eq!(
+        success("tray-visibility", &["show"])["settings"]["show_menu_bar_icon"],
+        true
     );
     let invalid = run("configure-hooks", &["../escape", "install"]);
     assert!(!invalid.status.success());

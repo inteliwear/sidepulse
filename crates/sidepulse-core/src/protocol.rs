@@ -122,6 +122,9 @@ pub enum RequestKind {
     SetDisplayMode {
         mode: String,
     },
+    SetTrayVisibility {
+        visible: bool,
+    },
     SetBatterySettings {
         patch: BatterySettingsPatch,
     },

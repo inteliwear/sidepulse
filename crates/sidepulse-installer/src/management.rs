@@ -274,20 +274,25 @@ mod tests {
         )
         .unwrap();
         assert!(start.start);
-        assert!(start.commands.iter().any(|command| {
-            command
-                .args
+        let start_action = match platform {
+            Platform::Macos => "bootstrap",
+            Platform::Linux => "restart",
+            Platform::Windows => "/Run",
+        };
+        assert!(
+            start
+                .commands
                 .iter()
-                .any(|arg| matches!(arg.as_str(), "bootstrap" | "--now" | "/Run"))
-        }));
+                .any(|command| { command.args.iter().any(|arg| arg == start_action) })
+        );
         assert!(!result.start);
         assert!(result.path.starts_with(startup_directory));
-        assert!(!result.commands.iter().any(|command| {
-            command
-                .args
+        assert!(
+            !result
+                .commands
                 .iter()
-                .any(|arg| matches!(arg.as_str(), "bootstrap" | "--now" | "/Run"))
-        }));
+                .any(|command| { command.args.iter().any(|arg| arg == start_action) })
+        );
         assert!(
             startup_plan(
                 &context,

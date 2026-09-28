@@ -1346,6 +1346,12 @@ impl SettingsApp {
                 });
             }
         }
+        ui.add_space(16.0);
+        let mut visible = controls.visible;
+        if ui.checkbox(&mut visible, "Show status bar icon").changed() {
+            self.send(RequestKind::SetTrayVisibility { visible });
+        }
+        ui.weak("Reopen Settings with sidepulse settings to restore a hidden icon.");
         ui.add_space(20.0);
         ui.add_enabled_ui(!self.monitoring_saving, |ui| {
             ui.strong("Agent list");
