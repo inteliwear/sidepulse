@@ -653,7 +653,9 @@ fn decode(bytes: Vec<u8>) -> String {
         let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(&bytes);
         String::from_utf16_lossy(
             &bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect::<Vec<_>>(),
         )
