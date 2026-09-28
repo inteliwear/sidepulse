@@ -1,5 +1,7 @@
 //! Desktop activation adapters. Session policy belongs to sidepulse-core.
 
+pub mod focus;
+
 use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -82,6 +84,7 @@ pub fn launch_plan(
             executable,
             args,
             cwd,
+            hints,
         } => {
             if !matches!(executable.as_str(), "codex" | "claude" | "grok" | "junie")
                 || args
@@ -168,6 +171,20 @@ pub fn launch_plan(
                 }
                 DesktopPlatform::Macos => {
                     let command = resume_command(executable, args, cwd);
+                    let command = if let Some(hints) = hints {
+                        let title: String = hints
+                            .window_title()
+                            .chars()
+                            .filter(|character| !character.is_control())
+                            .take(512)
+                            .collect();
+                        format!(
+                            "printf '\\033]0;%s\\007' {}; {command}",
+                            shell_quote(&title)
+                        )
+                    } else {
+                        command
+                    };
                     if matches!(terminal, "warp" | "custom") {
                         let app = if terminal == "warp" {
                             "Warp"
@@ -258,6 +275,11 @@ pub fn open_session(target: &SessionTarget, terminal: &str, custom_path: &str) -
         DesktopPlatform::Linux
     };
     let plan = launch_plan(platform, target, terminal, custom_path)?;
+    if let Some(focus) = focus::plan(platform, target, terminal, custom_path)
+        && focus::run(&focus).unwrap_or(false)
+    {
+        return Ok(());
+    }
     let command_file = if let Some(contents) = &plan.command_file {
         use std::io::Write;
         let mut file = tempfile::Builder::new()
@@ -350,6 +372,7 @@ mod tests {
             executable: "codex".into(),
             args: vec!["resume".into(), "a'; Write-Host oops; &'雪".into()],
             cwd: "/tmp/project's folder".into(),
+            hints: None,
         }
     }
 

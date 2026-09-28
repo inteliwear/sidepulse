@@ -24,6 +24,83 @@ impl SessionAction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSessionHints {
+    pub session_id: String,
+    pub cwd: String,
+    pub title: String,
+    pub match_title: String,
+}
+impl TerminalSessionHints {
+    pub fn window_title(&self) -> String {
+        let short: String = self.session_id.chars().take(8).collect();
+        match (self.title.is_empty(), short.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => format!("SidePulse {}", self.title),
+            (true, false) => format!("SidePulse ({short})"),
+            (false, false) => format!("SidePulse {} ({short})", self.title),
+        }
+    }
+    pub fn match_terms(&self, markers_only: bool) -> Vec<String> {
+        let mut terms = vec![
+            self.session_id.clone(),
+            self.title.clone(),
+            self.window_title(),
+        ];
+        if markers_only {
+            terms.push(self.session_id.chars().take(8).collect());
+        } else {
+            terms.push(self.cwd.clone());
+        }
+        terms.retain(|term| !term.trim().is_empty());
+        let mut unique = Vec::new();
+        for term in terms {
+            if !unique.contains(&term) {
+                unique.push(term);
+            }
+        }
+        unique
+    }
+}
+fn terminal_hints(status: &AgentStatus) -> TerminalSessionHints {
+    let session_id = status.session_id.clone().unwrap_or_default();
+    let short: String = session_id.chars().take(8).collect();
+    let display = status
+        .display_name
+        .trim()
+        .strip_suffix(&format!(" ({short})"))
+        .unwrap_or(status.display_name.trim());
+    let cwd = status.cwd.clone().unwrap_or_default();
+    let project = cwd
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("");
+    let (match_title, project) = match display.split_once(": ") {
+        Some((prefix, title)) => (title, prefix),
+        None if display == project => (display, ""),
+        None => (display, project),
+    };
+    let provider = match status.provider.as_str() {
+        "codex" => "Codex",
+        "claude" => "Claude",
+        "grok" => "Grok",
+        "junie" => "Junie",
+        other => other,
+    };
+    let title = [provider, match_title, project]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    TerminalSessionHints {
+        session_id,
+        cwd,
+        title,
+        match_title: match_title.into(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionTarget {
@@ -34,6 +111,8 @@ pub enum SessionTarget {
         executable: String,
         args: Vec<String>,
         cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hints: Option<TerminalSessionHints>,
     },
 }
 
@@ -95,6 +174,7 @@ pub fn session_open_options(status: &AgentStatus, home: &str) -> Vec<SessionOpen
                 action: SessionAction::Terminal,
                 label: "Resume in Terminal".into(),
                 target: SessionTarget::Terminal {
+                    hints: Some(terminal_hints(status)),
                     executable: provider.clone(),
                     args,
                     cwd: status
@@ -270,6 +350,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn captured_terminal_titles_keep_session_markers_and_old_targets_still_decode() {
+        let mut monitor = Monitor::default();
+        let event = parse_log_line("grok", &json!({"hook_event_name":"PreToolUse", "session_id":"grok-session", "cwd":"/Users/pero/pgit/sdstatus_bitbang"}).to_string()).unwrap();
+        let mut status = monitor.ingest(&event).unwrap().clone();
+        status.display_name = "sdstatus_bitbang: all good (grok-ses)".into();
+        let hints = terminal_hints(&status);
+        assert_eq!(
+            hints.window_title(),
+            "SidePulse Grok all good sdstatus_bitbang (grok-ses)"
+        );
+        assert_eq!(hints.match_title, "all good");
+        assert!(!hints.match_terms(true).contains(&hints.cwd));
+        let old: SessionTarget = serde_json::from_value(json!({"kind":"terminal", "executable":"grok", "args":["--resume","grok-session"], "cwd":"/tmp"})).unwrap();
+        assert!(matches!(old, SessionTarget::Terminal { hints: None, .. }));
+    }
     #[test]
     fn origin_preferences_precede_provider_settings_and_unavailable_choices_fall_back() {
         let mut monitor = Monitor::default();

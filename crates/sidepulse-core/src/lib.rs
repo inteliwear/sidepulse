@@ -33,8 +33,9 @@ pub use provider::{
 };
 pub use relay::{RelayEvent, parse_relay_message};
 pub use session::{
-    SessionAction, SessionOpenOption, SessionTarget, normalized_session_origin,
-    preferred_session_action, saved_session_action, session_open_options,
+    SessionAction, SessionOpenOption, SessionTarget, TerminalSessionHints,
+    normalized_session_origin, preferred_session_action, saved_session_action,
+    session_open_options,
 };
 pub use sleep::{
     AwakePolicy, BatteryPower, MacSleepSnapshot, PowerControlStatus, PowerSnapshot, SleepInputs,

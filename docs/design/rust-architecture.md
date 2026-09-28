@@ -350,7 +350,7 @@ below. Runtime UI and physical device validation remain outstanding.
    Junie cases, and Python-to-Rust transition comparisons.
 2. Verify native hook installation and removal against captured real configs
    for all five providers, preserving unrelated configuration and backups.
-3. Finish existing-terminal focus/reuse and native visual checks for tray,
+3. Finish native visual checks for tray,
    settings, session opening, virtual display, and window placement.
 4. Verify portable packages, platform signatures, and root-owned helper
    installation. Preview startup and native update/rollback are implemented.
@@ -710,3 +710,38 @@ and [Microsoft's SignTool documentation](https://learn.microsoft.com/en-us/windo
 Notarization and native installer wrapping are described in
 `packaging/NATIVE.md`; genuine distribution signing and OS trust verification
 remain external release gates until credentials are available.
+
+
+The native Mac PKG builder uses fixed, non-relocatable application components
+and recommended system ownership under
+`/Library/Application Support/SidePulse/NativePreview`. It includes no
+postinstall activation. `sdejectguard install --scope system --dry-run` plans a
+distinct system job from that payload. Mutation requires root, verifies payload
+checksums and root ownership throughout the path, and refuses writable parents,
+symlinks, or different existing jobs. Stop/removal remain available after payload
+loss. Tests use fake launch managers; no system startup entry or live veto was
+installed.
+
+Local release QA passed package creation, ad hoc code signatures, archive
+extraction, verification after staging, service smoke checks, and unsigned PKG
+creation/inspection. Genuine Developer ID/Authenticode signing, notarization,
+installer application, and OS trust prompts remain unverified.
+
+
+## Existing terminal session reuse
+
+Session targets now carry optional service-derived matching hints. Older targets
+without hints still decode. On macOS the platform adapter checks existing
+Terminal and iTerm tabs before creating a new session. Ghostty uses session
+markers first, then accepts a bare prompt title only when one surface matches;
+a common working directory never selects a Ghostty surface. Its command names
+and objects were checked against the installed Ghostty scripting dictionary.
+Custom application paths recognize these three supported terminals too.
+
+If no match is found, scripting fails, or the bounded three-second lookup times
+out, normal session launch runs with a recognizable SidePulse/session title.
+Title controls are filtered before terminal output, and shell/script values
+remain quoted data. Captured title and matching cases, quoting, and optional
+protocol compatibility pass automated tests. Actual terminal focus and reuse
+remain part of macOS visual QA; no real activation script was executed during
+this implementation.
