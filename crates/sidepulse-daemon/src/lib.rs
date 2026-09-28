@@ -70,6 +70,8 @@ pub struct Service {
     delivery_jobs: Arc<Mutex<BTreeMap<String, sidepulse_core::DeliveryJobView>>>,
     phone_output: Arc<Mutex<phones::PhoneOutputState>>,
     phone_send_gate: Arc<Mutex<()>>,
+    power_control_status: Arc<Mutex<sidepulse_core::PowerControlStatus>>,
+    power_retry_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct OutputClock(Instant);
@@ -1170,6 +1172,31 @@ impl Service {
                     },
                 )
             }
+            RequestKind::PowerControl | RequestKind::RetryPowerControl => {
+                let mut status = self.power_control_status.lock().map_err(poisoned)?.clone();
+                status.supported = cfg!(target_os = "macos");
+                let payload =
+                    if matches!(request.kind, RequestKind::RetryPowerControl) && !status.enabled {
+                        ServerPayload::Error {
+                            code: "power_control_disabled".into(),
+                            message: "Power control is paused in this session.".into(),
+                        }
+                    } else {
+                        if matches!(request.kind, RequestKind::RetryPowerControl) {
+                            self.power_retry_generation
+                                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        }
+                        ServerPayload::PowerControl { status }
+                    };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::Power => {
                 let observation = self
                     .power_observation
@@ -1689,13 +1716,28 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
     if power_control {
         use sidepulse_core::{BatteryPower, SleepInputs, battery_safeguard_active, plan_sleep};
 
+        service
+            .power_control_status
+            .lock()
+            .map_err(poisoned)?
+            .enabled = true;
         let power_service = service.clone();
         std::thread::spawn(move || {
             let mut controller = power::MacPowerController::new();
+            let mut retry_generation = power_service
+                .power_retry_generation
+                .load(std::sync::atomic::Ordering::Acquire);
             let mut activity = sidepulse_core::AwakeActivity::default();
             let started = Instant::now();
             let mut last_error = None;
             loop {
+                let generation = power_service
+                    .power_retry_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
+                if generation != retry_generation {
+                    controller.retry_helper();
+                    retry_generation = generation;
+                }
                 let result = (|| -> io::Result<()> {
                     let (policy, threshold, allow_override) = {
                         let settings = power_service.settings.lock().map_err(poisoned)?;
@@ -1731,15 +1773,25 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
                             lid_closed: observation.lid_closed,
                             external_display_active: observation.external_display_active,
                         });
-                    controller.sync(plan, allow_override)?;
+                    let result = controller.sync(plan, allow_override);
                     *power_service.history_power.lock().map_err(poisoned)? = HistoryPowerState {
                         requested: plan.hold_caffeinate,
                         active: controller.active(),
                         closed_lid_requested: allow_override && plan.disable_system_sleep,
                         closed_lid_active: controller.system_sleep_disabled(),
                     };
-                    Ok(())
+                    if let Ok(mut health) = power_service.power_control_status.lock() {
+                        health.requested = plan.hold_caffeinate;
+                        health.active = controller.active();
+                        health.closed_lid_requested = allow_override && plan.disable_system_sleep;
+                        health.closed_lid_active = controller.system_sleep_disabled();
+                    }
+                    result
                 })();
+                if let Ok(mut health) = power_service.power_control_status.lock() {
+                    health.checked_at = Some(Utc::now());
+                    health.error = result.as_ref().err().map(ToString::to_string);
+                }
                 match result {
                     Ok(()) => last_error = None,
                     Err(error) => {

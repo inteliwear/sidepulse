@@ -21,6 +21,8 @@ pub enum RequestKind {
     Snapshot,
     Settings,
     Power,
+    PowerControl,
+    RetryPowerControl,
     Devices,
     Animations,
     AnimationLibrary,
@@ -141,6 +143,9 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    PowerControl {
+        status: crate::PowerControlStatus,
+    },
     DeliveryJob {
         job: crate::DeliveryJobView,
     },

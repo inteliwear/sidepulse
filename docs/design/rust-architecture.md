@@ -514,3 +514,35 @@ intact. Network operations do not hold the settings or UI snapshot locks.
 Local HTTP tests verify agent-to-manual-to-agent transitions, duplicate
 suppression, battery output, saved unknown fields, link removal, error redaction
 and retry backoff. Real phone receipt remains a separate device validation gate.
+
+## Native helpers and power recovery (Rust preview)
+
+`sidepulse-helpers` replaces the packaged C SD eject guard with a Rust binary
+using the installed macOS DiskArbitration/CoreFoundation APIs. Hardware matching
+preserves the legacy Secure Digital protocol / SDXC model rule. It dissents
+software ejects, deduplicates five-second mount retries, releases retries when a
+disk mounts or disappears, caps retained disks, bounds redirected logs, and
+unregisters callbacks on termination. `sdejectguard check` opens and closes a
+session without registering a veto. `sdejectguard run [--no-mount]` is the explicit
+runtime route. Windows and Linux report the unavailable capability.
+
+The preview now stages eight binaries, including the guard, without registering
+or running it. Actual eject/wake behavior and the guard's startup manager remain
+separate validation and installer work.
+
+`status-bar install-sleep-helper`, `uninstall-sleep-helper`, and
+`sleep-helper-status` are Rust CLI routes. Install/remove support an inspectable
+`--dry-run`; applying on macOS requires root. Installation publishes only the
+legacy two-command pmset sudoers rule, validates it with visudo, sets root
+ownership and mode 0440, and checks for an external edit before publishing.
+Symlinks and unrelated existing sudoers rules are refused. Tests use temporary
+files and never install a system rule.
+
+The service exposes power-control health, accurate requested/active state even
+when the helper fails, a thirty-second retry delay, and an explicit retry
+request. The Sleep page shows runtime errors and retry control; CLI routes are
+`service-power-control` and `service-power-retry`. Mocked controller tests cover
+missing helpers, delay, explicit retry, failed restoration and recovery without
+invoking power commands. A real read-only SD session check passed locally.
+System helper installation, actual sleep changes and eject protection remain
+inactive in the preview.

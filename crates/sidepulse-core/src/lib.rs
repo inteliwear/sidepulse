@@ -37,8 +37,8 @@ pub use session::{
     preferred_session_action, saved_session_action, session_open_options,
 };
 pub use sleep::{
-    AwakePolicy, BatteryPower, MacSleepSnapshot, PowerSnapshot, SleepInputs, SleepPlan,
-    battery_safeguard_active, parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
+    AwakePolicy, BatteryPower, MacSleepSnapshot, PowerControlStatus, PowerSnapshot, SleepInputs,
+    SleepPlan, battery_safeguard_active, parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
 };
 
 mod animation;

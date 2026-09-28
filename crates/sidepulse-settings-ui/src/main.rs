@@ -27,6 +27,7 @@ struct ServiceState {
     relay: sidepulse_core::RelaySettings,
     phones_configured: bool,
     phone_output_enabled: bool,
+    power_control: sidepulse_core::PowerControlStatus,
     phones: Vec<sidepulse_core::PhoneLinkSummary>,
     phone_pairing: Option<sidepulse_core::PhonePairingView>,
 }
@@ -127,7 +128,14 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return phone links.".into());
     };
+    let ServerPayload::PowerControl {
+        status: power_control,
+    } = request(endpoint, RequestKind::PowerControl)?
+    else {
+        return Err("The service did not return power control status.".into());
+    };
     Ok(ServiceState {
+        power_control,
         phones_configured,
         phone_output_enabled,
         phones,
@@ -254,7 +262,8 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         ServerPayload::Settings { .. }
                         | ServerPayload::Devices { .. }
                         | ServerPayload::RelaySettings { .. }
-                        | ServerPayload::PhoneLinks { .. } => Ok(()),
+                        | ServerPayload::PhoneLinks { .. }
+                        | ServerPayload::PowerControl { .. } => Ok(()),
                         _ => Err("The service did not confirm the change.".into()),
                     });
                     if updates.send(Update::Saved { result, draft }).is_err() {
@@ -1020,9 +1029,36 @@ impl SettingsApp {
 
     fn sleep(&mut self, ui: &mut egui::Ui) {
         ui.heading("Sleep prevention");
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| !state.power_control.supported)
+        {
+            ui.label("Sleep prevention is currently available on macOS.");
+            return;
+        }
         #[cfg(target_os = "macos")]
         {
             ui.label("Choose when SidePulse keeps your Mac awake.");
+            if let Some(state) = &self.state {
+                let control = state.power_control.clone();
+                if !control.enabled {
+                    ui.weak("Sleep prevention is paused in this session.");
+                } else {
+                    ui.weak(if control.active {
+                        "SidePulse is keeping your Mac awake."
+                    } else {
+                        "SidePulse is allowing your Mac to sleep."
+                    });
+                    if let Some(error) = control.error {
+                        ui.colored_label(egui::Color32::from_rgb(210, 80, 65), error);
+                        if ui.button("Retry keeping awake").clicked() {
+                            self.send(RequestKind::RetryPowerControl);
+                        }
+                    }
+                }
+            }
+
             ui.add_space(16.0);
             let policy = self
                 .state

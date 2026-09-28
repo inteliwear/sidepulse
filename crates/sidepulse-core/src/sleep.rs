@@ -307,3 +307,15 @@ mod activity_tests {
         assert!(activity.requested(AgentMode::IdleReady, 300014));
     }
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PowerControlStatus {
+    pub supported: bool,
+    pub enabled: bool,
+    pub requested: bool,
+    pub active: bool,
+    pub closed_lid_requested: bool,
+    pub closed_lid_active: bool,
+    pub error: Option<String>,
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+}

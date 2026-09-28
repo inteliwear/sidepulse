@@ -14,6 +14,7 @@ name = "sidepulse-next-hook"
 path = "src/hook.rs"
 
 [dependencies]
+sidepulse-helpers = {path="../sidepulse-helpers"}
 sidepulse-links = { path = "../sidepulse-links" }
 sidepulse-platform = { path = "../sidepulse-platform" }
 sidepulse-core = { path = "../sidepulse-core" }

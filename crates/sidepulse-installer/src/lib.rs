@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
 
-const BINARIES: [&str; 7] = [
+const BINARIES: [&str; 8] = [
     "sidepulse-next",
     "sidepulse-next-hook",
     "sidepulse-next-service",
@@ -19,6 +19,7 @@ const BINARIES: [&str; 7] = [
     "sidepulse-next-stage",
     "sidepulse-next-settings",
     "sidepulse-next-virtual",
+    "sidepulse-next-sd-guard",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,7 +539,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
-            assert_eq!(manifest.binaries.len(), 7);
+            assert_eq!(manifest.binaries.len(), 8);
             assert_eq!(manifest.launch_files.len(), 2);
             assert_eq!(manifest.service_command.len(), 25);
             assert!(manifest.service_command.contains(&"cursor".to_owned()));

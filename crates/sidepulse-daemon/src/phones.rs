@@ -241,6 +241,7 @@ impl Service {
         }
         if request.program.is_some()
             && let Some(store) = self.settings.lock().map_err(poisoned)?.as_mut()
+            && store.display_for_phone(&link.summary().id) != "custom"
         {
             store.set_phone_display(&link.summary().id, &link.name, "custom")?;
         }
@@ -659,7 +660,9 @@ impl Service {
             .as_ref()
             .map_or(255, |store| store.brightness_for_device(root));
         if let Some(store) = settings.as_mut() {
-            store.set_display_for_device(root, "custom", brightness)?;
+            if store.display_for_device(root) != "custom" {
+                store.set_display_for_device(root, "custom", brightness)?;
+            }
         } else if device
             .as_ref()
             .is_some_and(|device| device.target() == path)

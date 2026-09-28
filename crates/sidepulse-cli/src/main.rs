@@ -45,6 +45,8 @@ fn main() -> ExitCode {
         Some(command @ ("write" | "push")) => sidepulse_cli::run_delivery(command, args),
         Some("phone-link") => sidepulse_cli::run_phone_link(args),
         Some("link") => sidepulse_cli::run_link(args),
+        Some("sdejectguard") => sidepulse_cli::run_sd_guard(args),
+        Some("status-bar") => sidepulse_cli::run_status_bar(args),
         Some("battery") => sidepulse_cli::run_battery(args),
         Some(command @ ("settings" | "virtual-display")) => {
             let endpoint = match (args.next(), args.next(), args.next()) {
@@ -128,7 +130,9 @@ fn main() -> ExitCode {
             command @ ("service-history"
             | "service-virtual-frame"
             | "service-relay-settings"
-            | "service-relay-reload"),
+            | "service-relay-reload"
+            | "service-power-control"
+            | "service-power-retry"),
         ) => {
             let (Some(endpoint), None) = (args.next(), args.next()) else {
                 eprintln!("usage: sidepulse-next {command} ENDPOINT");
@@ -138,6 +142,8 @@ fn main() -> ExitCode {
                 "service-history" => RequestKind::History,
                 "service-relay-settings" => RequestKind::RelaySettings,
                 "service-relay-reload" => RequestKind::ReloadRelaySettings,
+                "service-power-control" => RequestKind::PowerControl,
+                "service-power-retry" => RequestKind::RetryPowerControl,
                 _ => RequestKind::VirtualDisplay,
             };
             let request = ClientRequest {

@@ -1,6 +1,7 @@
 mod battery;
 mod delivery;
 mod doctor;
+mod helpers;
 mod hook_config;
 mod hook_impl;
 mod relay_link;
@@ -15,3 +16,5 @@ pub use status::run_status;
 pub use status::run_watch;
 
 pub use delivery::{run_delivery, run_phone_link};
+
+pub use helpers::{run_sd_guard, run_status_bar};

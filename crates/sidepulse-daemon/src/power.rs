@@ -6,7 +6,8 @@ use sidepulse_core::PowerSnapshot;
 pub struct MacPowerController {
     caffeinate: Option<std::process::Child>,
     system_disabled: bool,
-    disable_attempted: bool,
+    helper_error: Option<String>,
+    retry_after: Option<std::time::Instant>,
     display_sleep_requested: bool,
 }
 
@@ -16,7 +17,8 @@ impl MacPowerController {
         Self {
             caffeinate: None,
             system_disabled: false,
-            disable_attempted: false,
+            helper_error: None,
+            retry_after: None,
             display_sleep_requested: false,
         }
     }
@@ -31,6 +33,40 @@ impl MacPowerController {
         self.system_disabled
     }
 
+    pub fn retry_helper(&mut self) {
+        self.retry_after = None;
+    }
+    fn set_system_sleep(&mut self, enabled: bool) -> io::Result<()> {
+        self.set_system_sleep_with(enabled, std::time::Instant::now(), run_pmset_disablesleep)
+    }
+    fn set_system_sleep_with(
+        &mut self,
+        enabled: bool,
+        now: std::time::Instant,
+        runner: impl FnOnce(bool) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if self.retry_after.is_some_and(|at| now < at) {
+            return Err(io::Error::other(
+                self.helper_error
+                    .as_deref()
+                    .unwrap_or("closed-lid awake helper is unavailable"),
+            ));
+        }
+        match runner(enabled) {
+            Ok(()) => {
+                self.system_disabled = enabled;
+                self.helper_error = None;
+                self.retry_after = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.helper_error = Some(error.to_string());
+                self.retry_after =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(30));
+                Err(error)
+            }
+        }
+    }
     pub fn sync(
         &mut self,
         plan: sidepulse_core::SleepPlan,
@@ -58,17 +94,11 @@ impl MacPowerController {
         }
 
         let should_disable = allow_system_override && plan.disable_system_sleep;
-        if should_disable && !self.system_disabled && !self.disable_attempted {
-            self.disable_attempted = true;
-            run_pmset_disablesleep(true)?;
-            self.system_disabled = true;
-            self.disable_attempted = false;
-        } else if !should_disable && self.system_disabled {
-            run_pmset_disablesleep(false)?;
-            self.system_disabled = false;
-            self.disable_attempted = false;
-        } else if !should_disable {
-            self.disable_attempted = false;
+        if should_disable != self.system_disabled {
+            self.set_system_sleep(should_disable)?;
+        } else {
+            self.helper_error = None;
+            self.retry_after = None;
         }
 
         if plan.request_display_sleep && self.system_disabled && !self.display_sleep_requested {
@@ -93,6 +123,7 @@ impl Drop for MacPowerController {
             let _ = child.kill();
             let _ = child.wait();
         }
+        #[cfg(not(test))]
         if self.system_disabled {
             let _ = run_pmset_disablesleep(false);
         }
@@ -168,4 +199,52 @@ pub fn observe() -> io::Result<PowerSnapshot> {
         io::ErrorKind::Unsupported,
         "macOS power status is unavailable on this platform",
     ))
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn missing_helper_stays_visible_and_recovers_after_retry_without_power_commands() {
+        let mut controller = MacPowerController::new();
+        let now = std::time::Instant::now();
+        assert!(
+            controller
+                .set_system_sleep_with(true, now, |_| Err(io::Error::other("missing helper")))
+                .is_err()
+        );
+        assert!(
+            controller
+                .set_system_sleep_with(true, now + std::time::Duration::from_secs(1), |_| panic!(
+                    "must back off"
+                ))
+                .is_err()
+        );
+        assert!(!controller.system_sleep_disabled());
+        controller.retry_helper();
+        controller
+            .set_system_sleep_with(true, now + std::time::Duration::from_secs(2), |enabled| {
+                assert!(enabled);
+                Ok(())
+            })
+            .unwrap();
+        assert!(controller.system_sleep_disabled());
+        assert!(
+            controller
+                .set_system_sleep_with(false, now + std::time::Duration::from_secs(3), |_| Err(
+                    io::Error::other("restore failed")
+                ))
+                .is_err()
+        );
+        assert!(controller.system_sleep_disabled());
+        controller.retry_helper();
+        controller
+            .set_system_sleep_with(false, now + std::time::Duration::from_secs(4), |enabled| {
+                assert!(!enabled);
+                Ok(())
+            })
+            .unwrap();
+        assert!(!controller.system_sleep_disabled());
+        assert!(controller.helper_error.is_none());
+    }
 }

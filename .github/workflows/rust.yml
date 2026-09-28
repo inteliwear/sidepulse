@@ -40,6 +40,7 @@ jobs:
             target/release/sidepulse-next-stage
             target/release/sidepulse-next-settings
             target/release/sidepulse-next-virtual
+            target/release/sidepulse-next-sd-guard
             target/release/sidepulse-next.exe
             target/release/sidepulse-next-hook.exe
             target/release/sidepulse-next-service.exe
@@ -47,3 +48,4 @@ jobs:
             target/release/sidepulse-next-stage.exe
             target/release/sidepulse-next-settings.exe
             target/release/sidepulse-next-virtual.exe
+            target/release/sidepulse-next-sd-guard.exe
