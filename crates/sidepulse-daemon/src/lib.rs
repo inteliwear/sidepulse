@@ -901,8 +901,14 @@ impl Service {
     }
 
     pub fn serve_connection(&self, mut stream: Stream) -> io::Result<()> {
+        // Darwin can inherit O_NONBLOCK from the listening socket. Only accept
+        // is polled; each connection worker needs blocking framed I/O.
+        stream.set_nonblocking(false)?;
         #[cfg(unix)]
-        stream.set_recv_timeout(Some(Duration::from_secs(5)))?;
+        {
+            stream.set_recv_timeout(Some(Duration::from_secs(5)))?;
+            stream.set_send_timeout(Some(Duration::from_secs(5)))?;
+        }
         let request: ClientRequest = read_message(&mut BufReader::new(&mut stream))?;
         if let Err(message) = request.validate() {
             return write_message(
@@ -2602,6 +2608,85 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn accepted_nonblocking_stream_recovers_delayed_requests_and_large_history_replies() {
+        use interprocess::local_socket::ListenerNonblockingMode;
+        use std::sync::Barrier;
+        let directory = tempfile::tempdir().unwrap();
+        let endpoint = if cfg!(windows) {
+            format!("sidepulse-history-{}", uuid::Uuid::new_v4())
+        } else {
+            // Keep the Unix socket pathname below the platform limit.
+            format!("/tmp/sidepulse-history-{}.sock", uuid::Uuid::new_v4())
+        };
+        let history = directory.path().join("history.jsonl");
+        let start = Utc::now();
+        let rows = (0..2000)
+            .map(|index| {
+                serde_json::json!({
+                    "recorded_at": (start + chrono::Duration::seconds(index)).to_rfc3339(),
+                    "agent_status": "working", "display_status": "Working",
+                    "battery_level": 50.0, "charger_power_watts": 90.0,
+                    "lid_closed": false, "sidepulse_keep_awake_active": false,
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&history, rows).unwrap();
+        let service = Service::new();
+        service.configure_history(&history).unwrap();
+        let listener = sidepulse_ipc::bind(&endpoint).unwrap();
+        listener
+            .set_nonblocking(ListenerNonblockingMode::Accept)
+            .unwrap();
+        let accepted = Arc::new(Barrier::new(2));
+        let ready = accepted.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let stream = loop {
+                match listener.accept() {
+                    Ok(stream) => break stream,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            // Reproduce Darwin's inherited listener flag on every platform.
+            stream.set_nonblocking(true).unwrap();
+            ready.wait();
+            service.serve_connection(stream).unwrap();
+        });
+        let mut client = sidepulse_ipc::connect(&endpoint, Duration::from_secs(3)).unwrap();
+        accepted.wait();
+        std::thread::sleep(Duration::from_millis(50));
+        write_message(
+            &mut client,
+            &ClientRequest {
+                version: PROTOCOL_VERSION,
+                request_id: 8,
+                kind: RequestKind::History,
+            },
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let response: ServerMessage = read_message(&mut BufReader::new(client)).unwrap();
+        assert_eq!(response.request_id, Some(8));
+        let ServerPayload::History {
+            points, sampled, ..
+        } = response.payload
+        else {
+            panic!("missing history");
+        };
+        assert!(!sampled);
+        assert_eq!(points.len(), 2000);
+        server.join().unwrap();
     }
 
     #[test]
