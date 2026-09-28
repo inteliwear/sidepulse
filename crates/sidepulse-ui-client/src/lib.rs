@@ -29,6 +29,7 @@ pub enum WorkerCommand {
 }
 
 /// Shared presentation data collected from the service, with no renderer types.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceState {
     pub setup: sidepulse_core::HookSetupStatus,
     pub diagnostics: sidepulse_core::DiagnosticsStatus,
@@ -65,7 +66,8 @@ pub enum Update {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DraftKind {
     None,
     Battery,
@@ -217,7 +219,7 @@ pub fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
 /// when the host closes; the worker exits after its bounded pending operation.
 pub fn start_worker(endpoint: String) -> (Sender<WorkerCommand>, Receiver<Update>) {
     let (commands, pending) = mpsc::channel();
-    let (updates, received) = mpsc::channel();
+    let (updates, received) = mpsc::sync_channel(2);
     std::thread::spawn(move || {
         let mut setup = std::env::current_exe().ok().and_then(|executable| {
             sidepulse_installer::management::context_from_executable(&executable, &endpoint)

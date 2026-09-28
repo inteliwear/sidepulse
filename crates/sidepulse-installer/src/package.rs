@@ -222,7 +222,7 @@ pub fn build(source: &Path, destination: &Path, version: &str) -> io::Result<Pac
     }
     fs::write(
         temporary.path().join("README.txt"),
-        "SidePulse native preview\n\nExtract this complete package into a new directory.\nRun bin/sidepulse setup --source-dir . --stage-dir PREVIEW to stage it.\nUse service install --stage-dir PREVIEW --dry-run to inspect startup.\nStop this preview before update or rollback.\nThis preview does not replace the installed Python application.\nPackage checksums detect corruption; verify platform signatures before distribution.\n",
+        "SidePulse native preview\n\nExtract this complete package into a new directory.\nRun bin/sidepulse setup --source-dir . --stage-dir PREVIEW to stage it.\nUse service install --stage-dir PREVIEW --dry-run to inspect startup.\nStop this preview before update or rollback.\nThis preview does not replace the installed Python application.\nSettings uses the system webview: macOS 11+, Microsoft WebView2 on Windows, or WebKitGTK 4.1 on Linux.\nCheck availability with bin/sidepulse-next-settings --check-runtime.\nWindows runtime: https://developer.microsoft.com/microsoft-edge/webview2/\nUbuntu/Debian runtime: install libwebkit2gtk-4.1-0.\nPackage checksums detect corruption; verify platform signatures before distribution.\n",
     )?;
     let manifest = seal(temporary.path(), version)?;
     verify(temporary.path())?;

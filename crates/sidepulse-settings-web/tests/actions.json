@@ -1,0 +1,588 @@
+[
+  {
+    "type": "request",
+    "request": {
+      "command": "session_targets",
+      "agent_id": "codex:session:fixture",
+      "action": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_brightness",
+      "brightness": 192
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_display_mode",
+      "mode": "battery"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_virtual_display",
+      "patch": {
+        "enabled": true
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_battery_settings",
+      "patch": {
+        "full_charge_watts": {
+          "kind": "watts",
+          "watts": 85
+        },
+        "show_on_power_change": true,
+        "power_change_preview_seconds": 7
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_agent_list_settings",
+      "patch": {
+        "idle_timeout_seconds": 1800,
+        "recent_session_retention_seconds": 86400
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_transcript_monitoring",
+      "provider": "codex",
+      "enabled": true
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_tray_visibility",
+      "visible": false
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "retry_power_control"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_sleep_policy",
+      "policy": "never"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_sleep_settings",
+      "patch": {
+        "min_battery_percent": 25
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_session_open_preference",
+      "provider": "codex",
+      "origin": null,
+      "action": "terminal"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_session_terminal",
+      "terminal": "custom",
+      "custom_path": "/fixture/terminal"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_agent_animation",
+      "mode": "working",
+      "style": "custom",
+      "custom_program": "#00E5FF 500ms pulse\nrepeat"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_profile",
+        "id": null,
+        "name": "Portable profile"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "export_animation_profile",
+      "id": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "import_profile",
+        "document": {
+          "format": "sidepulse-animation-profile",
+          "version": 1,
+          "name": "Fixture profile",
+          "animations": {
+            "idle_ready": "cyan-roll",
+            "working": "cyan-roll",
+            "tool_running": "cyan-roll",
+            "waiting_for_input": "cyan-roll",
+            "long_task_progress": "cyan-roll",
+            "blocked_error": "cyan-roll",
+            "completed": "cyan-roll",
+            "unknown": "cyan-roll",
+            "lid_open": "cyan-roll",
+            "lid_closed": "amber-pulse"
+          },
+          "custom_animations": {}
+        }
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_animation",
+        "id": null,
+        "name": "Portable animation",
+        "program": "#00E5FF"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_animation_state",
+      "state": "lid_open",
+      "style": "amber-pulse",
+      "custom_program": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_lid_animation_timing",
+      "open_seconds": 2,
+      "close_seconds": 1.3
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_history_timeframe",
+      "seconds": 86400
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_relay_settings",
+      "patch": {
+        "server": "http://localhost/fixture",
+        "machine_name": "Portable computer",
+        "outbound_code": "Fixture_outbound_code"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_relay_settings",
+      "patch": {
+        "rotate_receiver": true
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "reload_relay_settings"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "cancel_phone_pairing"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "begin_phone_pairing",
+      "server": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_phone_display",
+      "id": "fixture-phone",
+      "display": "battery"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "register_phone",
+      "name": "iPhone",
+      "token": "Fixture_token_123",
+      "server": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "reload_phone_links"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "remove_phone",
+      "id": "fixture-phone"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "configure_hooks",
+      "provider": "codex",
+      "install": true,
+      "dry_run": true
+    }
+  },
+  {
+    "type": "startup",
+    "job": "service",
+    "operation": "status",
+    "dry_run": false
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "export_diagnostics",
+      "format": "html"
+    }
+  },
+  {
+    "type": "open_export"
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "session_targets",
+      "agent_id": "codex:session:fixture",
+      "action": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_brightness",
+      "brightness": 192
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_display_mode",
+      "mode": "battery"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_virtual_display",
+      "patch": {
+        "enabled": true
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_battery_settings",
+      "patch": {
+        "full_charge_watts": {
+          "kind": "watts",
+          "watts": 85
+        },
+        "show_on_power_change": true,
+        "power_change_preview_seconds": 7
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_agent_list_settings",
+      "patch": {
+        "idle_timeout_seconds": 1800,
+        "recent_session_retention_seconds": 86400
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_transcript_monitoring",
+      "provider": "codex",
+      "enabled": true
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_tray_visibility",
+      "visible": false
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "retry_power_control"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_sleep_policy",
+      "policy": "never"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_sleep_settings",
+      "patch": {
+        "min_battery_percent": 25
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_session_open_preference",
+      "provider": "codex",
+      "origin": null,
+      "action": "terminal"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_session_terminal",
+      "terminal": "custom",
+      "custom_path": "/fixture/terminal"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_agent_animation",
+      "mode": "working",
+      "style": "custom",
+      "custom_program": "#00E5FF 500ms pulse\nrepeat"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_profile",
+        "id": null,
+        "name": "Portable profile"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "export_animation_profile",
+      "id": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "import_profile",
+        "document": {
+          "format": "sidepulse-animation-profile",
+          "version": 1,
+          "name": "Fixture profile",
+          "animations": {
+            "idle_ready": "cyan-roll",
+            "working": "cyan-roll",
+            "tool_running": "cyan-roll",
+            "waiting_for_input": "cyan-roll",
+            "long_task_progress": "cyan-roll",
+            "blocked_error": "cyan-roll",
+            "completed": "cyan-roll",
+            "unknown": "cyan-roll",
+            "lid_open": "cyan-roll",
+            "lid_closed": "amber-pulse"
+          },
+          "custom_animations": {}
+        }
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_animation",
+        "id": null,
+        "name": "Portable animation",
+        "program": "#00E5FF"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_animation_state",
+      "state": "lid_open",
+      "style": "amber-pulse",
+      "custom_program": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_lid_animation_timing",
+      "open_seconds": 2,
+      "close_seconds": 1.3
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_history_timeframe",
+      "seconds": 86400
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_relay_settings",
+      "patch": {
+        "server": "http://localhost/fixture",
+        "machine_name": "Portable computer",
+        "outbound_code": "Fixture_outbound_code"
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_relay_settings",
+      "patch": {
+        "rotate_receiver": true
+      }
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "reload_relay_settings"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "cancel_phone_pairing"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "begin_phone_pairing",
+      "server": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "set_phone_display",
+      "id": "fixture-phone",
+      "display": "battery"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "register_phone",
+      "name": "iPhone",
+      "token": "Fixture_token_123",
+      "server": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "reload_phone_links"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "remove_phone",
+      "id": "fixture-phone"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "configure_hooks",
+      "provider": "codex",
+      "install": true,
+      "dry_run": true
+    }
+  },
+  {
+    "type": "startup",
+    "job": "service",
+    "operation": "status",
+    "dry_run": false
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "export_diagnostics",
+      "format": "html"
+    }
+  },
+  {
+    "type": "open_export"
+  }
+]

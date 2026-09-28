@@ -70,30 +70,35 @@ Rust migration. Their model behavior requires separate parity evaluation.
 
 ## Settings window implementation
 
-The cross-platform settings window uses Rust `egui`/`eframe` as a separate
-client executable. The `sidepulse-ui-client` crate owns renderer-independent
-state collection, validated IPC, polling/reconnection, save results, exports,
-and local setup actions. The window uses its typed commands and updates and
-reads the same shared presentation model as the tray
-and sends versioned service requests for every setting change. A background
-client worker performs IPC so reconnects and saves cannot block drawing. The
-service remains the owner of settings validation, persistence, monitoring,
-power policy, and device output. Native tray clients and the CLI open the
-sibling settings executable with their existing endpoint. The window is
-included in preview bundles but does not register itself for startup.
-The client crate has no renderer dependency; a webview host can reuse it.
-See [webview-ui-proposal.md](webview-ui-proposal.md) for the proposed UI direction.
+The cross-platform Settings window is a Tauri host in
+`sidepulse-settings-web`, with embedded HTML/CSS and a JavaScript presentation
+layer. Its canonical executable remains `sidepulse-next-settings`. The
+`sidepulse-ui-client` crate owns renderer-independent state collection,
+validated IPC, bounded background polling, save results, exports and local
+setup actions. The service owns validation, persistence, monitoring, power
+policy and device output. The frontend owns temporary drafts and rendering.
+
+The webview has a typed Settings action allowlist, local-window capabilities,
+a CSP, restricted navigation and clipboard write access. It has no generic
+shell/filesystem API. Native tray clients and the CLI open it with the existing
+endpoint. Startup recovery works with the offline staged manifest. The virtual
+LED overlay remains a separate Rust egui/eframe executable and keeps its
+per-endpoint singleton. Embedded assets need no Node runtime or development
+server. See [webview-ui-proposal.md](webview-ui-proposal.md) for the accepted
+architecture, runtime dependencies and validation boundary.
+
 The window covers live activity, device selection, brightness, agent /
 battery / manual display, charger baseline and power-change previews,
 transcript monitoring, and macOS awake preferences. macOS staging now includes
 native `.app` bundles for tray and settings, with the isolated endpoint in
-their resources. Local window checks exercised saving, preserving manual LED
-output, visible external-edit conflicts, retained edits, and reconnecting
-after a service restart. The animation page saves built-in presets and per-status custom LED programs
+their resources. Earlier egui window checks exercised saving, preserving manual LED
+output, visible external-edit conflicts, retained edits and reconnecting
+after a service restart. The Tauri renderer has separate Rust/browser checks;
+actual native webview checks remain pending. The animation page saves built-in presets and per-status custom LED programs
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
 named custom assets remain selectable and are preserved. Named assets, profiles, and session-opening preferences now have service-owned
-operations and native controls. Relay, hook setup, startup management, administrator helper setup, and diagnostic exports have native controls. Installation and release tools live in the installer crate.
+operations and Settings controls. Relay, hook setup, startup management, administrator helper setup, and diagnostic exports have Settings controls. Installation and release tools live in the installer crate.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -113,7 +118,7 @@ history stays inside its isolated directory. Recording runs independently of
 any window and restores existing rows on startup. The service keeps a bounded
 in-memory timeline, replays at most 128 MiB at startup, and limits chart replies
 to 2,000 observations, including the first and latest. Long timelines are
-sampled and the window labels that summary. The settings window charts battery percentage, charger power, agent status, SidePulse awake, macOS sleep, and lid state. The five legacy timeframes are saved through the service. The earlier three-row chart passed native checks; the expanded six-row layout still needs a visual check.
+sampled and the window labels that summary. The settings window charts battery percentage, charger power, agent status, SidePulse awake, macOS sleep, and lid state. The five legacy timeframes are saved through the service. The six-row Tauri chart has browser layout/interaction checks. Native system-webview validation remains pending.
 
 ## Current migration state
 

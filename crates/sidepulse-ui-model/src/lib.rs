@@ -2,6 +2,7 @@
 //! This crate reads service snapshots; it never opens hooks, monitors logs,
 //! writes device output, or imports a GUI toolkit.
 
+use serde::{Deserialize, Serialize};
 use sidepulse_core::{AgentMode, AgentStatus, DeviceInfo, MonitorSnapshot, ServerPayload};
 
 pub fn device_display_name(device: &DeviceInfo) -> String {
@@ -14,7 +15,8 @@ pub fn device_display_name(device: &DeviceInfo) -> String {
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StatusIcon {
     Idle,
     Working,
@@ -41,7 +43,7 @@ impl From<AgentMode> for StatusIcon {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRow {
     pub id: String,
     pub title: String,
@@ -51,7 +53,7 @@ pub struct AgentRow {
     pub can_open: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayState {
     pub icon: StatusIcon,
     pub title: String,
@@ -61,7 +63,7 @@ pub struct TrayState {
     pub stale_rows: Vec<AgentRow>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrayControls {
     pub visible: bool,
     pub brightness: Option<u8>,
@@ -127,7 +129,7 @@ impl TrayControls {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingsView {
     pub controls: TrayControls,
     pub full_charge_watts: Option<f64>,

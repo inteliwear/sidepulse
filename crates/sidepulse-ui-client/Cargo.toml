@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde.workspace = true
 sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-ui-model = { path = "../sidepulse-ui-model" }

@@ -6,7 +6,7 @@ cutover is a separate delivery gate.
 
 ## Automated and isolated checks
 
-- Formatting, workspace lint with all features, 226 tests, and release builds pass
+- Formatting, workspace lint with all features, 228 tests, and release builds pass
   locally. CI builds, tests, packages, archives, stages, and smoke-checks macOS,
   Windows, and Linux.
 - Captured Python comparisons cover 75 origin cases, 20 transcript cases,
@@ -18,12 +18,14 @@ cutover is a separate delivery gate.
   duplicated legacy Grok handlers, and moves backups outside active hooks.
 - Startup recovery resolves a verified staged manifest without a running service;
   tests inspect plans without registering jobs or starting helpers.
-- Headless interaction tests exercise the actual Settings presentation: provider
-  installation, offline startup recovery, CSV export, export completion, and the
-  status bar visibility preference send their expected commands. All twelve
-  pages fit horizontally at the default and minimum window sizes; the six
-  history labels remain distinct at minimum width. These checks do not verify
-  native window integration, the GPU, or desktop tray behavior.
+- Settings now uses an embedded Tauri HTML/CSS/JavaScript frontend over the
+  shared Rust client; the virtual overlay has its own Rust UI crate. Chromium
+  and WebKit presentation tests pass for all twelve pages, typed actions,
+  successful/failed saves, retained drafts during external updates, offline
+  startup recovery, animation/profile editing, phone pairing/QR, clipboard
+  requests, six-row history with keyboard selection, and narrow/dark layouts.
+  The chart keeps 12-pixel labels at minimum width. These are fixture browser
+  checks; they do not verify actual system-webview integration or desktop trays.
 - A real CLI process retains pending permissions beyond its initial replay
   limit, applies appended completion events, writes plain redirected output,
   and exits cleanly on Unix termination signals. Live monitoring keeps one
@@ -35,8 +37,10 @@ cutover is a separate delivery gate.
 - The Settings client now lives in a renderer-independent Rust crate. Local
   transport tests load its complete view without creating a window and reject
   invalid protocol versions/request IDs while preserving service conflict
-  messages. Existing Settings interaction and layout tests still pass through
-  the shared command/update types.
+  messages. The Tauri mock-runtime tests exercise the actual command capability
+  and reject requests from other windows/remote origins. Recorded browser
+  requests deserialize and validate through the Rust Settings action boundary.
+  The update queue is bounded and unchanged history replies are omitted.
 - CSV/HTML export tests cover the legacy columns, Unicode and quoting, HTML
   escaping, malformed rows, size limits, atomic publication, multiple audit
   sources, and retained source bytes.
@@ -56,11 +60,14 @@ cutover is a separate delivery gate.
   Stop, Notification, SessionEnd), ignoring only elapsed age. Live output uses
   that compact status view; Python's colored table is a presentation difference.
 
-## Native macOS checks completed
+## Earlier native macOS checks completed
 
 All five providers also passed staged binary dry-run, install/status/remove, backup,
 unknown-field retention, and Grok legacy cleanup checks. Its hook wrote an isolated
 audit; CSV/HTML exports preserved their source and escaped hostile event text.
+
+These Settings checks used the earlier egui renderer; they are not native
+validation of the replacement Tauri window.
 
 An isolated staged service used private state and a mock LED file. It had no
 physical device discovery/output, phone output, or power-control activation.
@@ -77,9 +84,10 @@ physical device discovery/output, phone output, or power-control activation.
 
 ## Outstanding native and release gates
 
-- Visually inspect the final Setup/Diagnostics pages and expanded six-row history
-  chart. The Mac became locked during these checks; computer control reported
-  that automatic unlock failed. This does not block headless verification.
+- Exercise the actual Tauri Settings window on macOS, Windows and Linux,
+  including every page, clipboard, saves/reconnection, offline startup recovery
+  and the six-row chart. The Mac remains locked and computer control could not
+  unlock it. Rust/mock/browser checks do not replace this native window gate.
 - Exercise tray menus and terminal focus/reuse. The computer-control adapter could
   not bind the windowless tray and explicitly rejected Terminal control.
 - Run native UI and physical-device checks on Windows/Linux; CI verifies their

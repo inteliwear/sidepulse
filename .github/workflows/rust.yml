@@ -23,11 +23,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo build --workspace --release --bins
+      - if: runner.os != 'Windows'
+        run: target/release/sidepulse-next-settings --check-runtime
+      - if: runner.os == 'Windows'
+        run: target/release/sidepulse-next-settings.exe --check-runtime
       - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --package target/release target/native-package 0.1.0-preview
       - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --verify-package target/native-package
       - run: cargo run --release -p sidepulse-installer --bin sidepulse-next-stage -- --archive-package target/native-package target/sidepulse-native-preview.zip
@@ -38,3 +42,28 @@ jobs:
           name: sidepulse-rust-preview-${{ matrix.os }}
           if-no-files-found: error
           path: target/sidepulse-native-preview.zip
+
+  settings-presentation:
+    name: Settings browser presentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/sidepulse-settings-web/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: crates/sidepulse-settings-web
+      - run: npx playwright install --with-deps chromium webkit
+        working-directory: crates/sidepulse-settings-web
+      - run: npm test
+        working-directory: crates/sidepulse-settings-web
+        env:
+          SIDEPULSE_UI_ARTIFACT_DIR: ${{ runner.temp }}/settings-presentation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sidepulse-settings-presentation
+          path: ${{ runner.temp }}/settings-presentation
+          if-no-files-found: warn
