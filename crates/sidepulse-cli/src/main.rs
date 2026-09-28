@@ -186,6 +186,9 @@ fn main() -> ExitCode {
             service_settings_request(&endpoint, RequestKind::Settings)
         }
         Some("open-session") => run_open_session(args),
+        Some(command @ ("animation-profile" | "animation-asset")) => {
+            run_animation_library(command, args)
+        }
         Some("service-session-preference") => {
             let (Some(endpoint), Some(provider), Some(action)) =
                 (args.next(), args.next(), args.next())
@@ -366,13 +369,10 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::from(2);
             };
-            let mode = match serde_json::from_value(serde_json::Value::String(mode)) {
-                Ok(mode) => mode,
-                Err(_) => {
-                    eprintln!("sidepulse-next: invalid agent mode");
-                    return ExitCode::from(2);
-                }
-            };
+            if !sidepulse_core::ANIMATION_STATES.contains(&mode.as_str()) {
+                eprintln!("sidepulse-next: invalid animation state");
+                return ExitCode::from(2);
+            }
             let custom_program = match (args.next(), args.next(), args.next()) {
                 (None, None, None) => None,
                 (Some(flag), Some(path), None) if flag == "--program" => {
@@ -401,8 +401,8 @@ fn main() -> ExitCode {
             };
             service_settings_request(
                 &endpoint,
-                RequestKind::SetAgentAnimation {
-                    mode,
+                RequestKind::SetAnimationState {
+                    state: mode,
                     style,
                     custom_program,
                 },
@@ -473,7 +473,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | open-session ENDPOINT AGENT_ID [app|terminal|vscode] [--dry-run] | service-session-preference ENDPOINT PROVIDER ACTION [ORIGIN] | service-session-terminal ENDPOINT TERMINAL [CUSTOM_PATH] | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | animation-profile ENDPOINT OPERATION | animation-asset ENDPOINT OPERATION | service-animation ENDPOINT MODE STYLE [--program FILE] | service-history ENDPOINT | service-history-timeframe ENDPOINT 1|6|12|24|48 | service-virtual-frame ENDPOINT | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }
@@ -641,6 +641,165 @@ fn service_devices_request(endpoint: &str, kind: RequestKind) -> ExitCode {
         }
         _ => {
             eprintln!("sidepulse-next: unexpected service reply");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn read_bounded(path: &str, limit: u64) -> Result<String, String> {
+    let mut text = String::new();
+    fs::File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(limit + 1)
+        .read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    if text.len() as u64 > limit {
+        Err("input file is too large".into())
+    } else {
+        Ok(text)
+    }
+}
+
+fn run_animation_library(command: &str, args: impl Iterator<Item = String>) -> ExitCode {
+    use sidepulse_core::AnimationLibraryEdit;
+    let args: Vec<_> = args.collect();
+    let parse = || -> Result<(&str, RequestKind), String> {
+        let values: Vec<_> = args.iter().map(String::as_str).collect();
+        let (endpoint, kind) = match (command, values.as_slice()) {
+            (_, [endpoint, "list"]) => (*endpoint, RequestKind::AnimationLibrary),
+            ("animation-profile", [endpoint, "save", name]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::SaveProfile {
+                        id: None,
+                        name: (*name).into(),
+                    },
+                },
+            ),
+            ("animation-profile", [endpoint, "save", name, id]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::SaveProfile {
+                        id: Some((*id).into()),
+                        name: (*name).into(),
+                    },
+                },
+            ),
+            ("animation-profile", [endpoint, "apply", id]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::ApplyProfile { id: (*id).into() },
+                },
+            ),
+            ("animation-profile", [endpoint, "delete", id]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::DeleteProfile { id: (*id).into() },
+                },
+            ),
+            ("animation-profile", [endpoint, "export"]) => {
+                (*endpoint, RequestKind::ExportAnimationProfile { id: None })
+            }
+            ("animation-profile", [endpoint, "export", id]) => (
+                *endpoint,
+                RequestKind::ExportAnimationProfile {
+                    id: Some((*id).into()),
+                },
+            ),
+            ("animation-profile", [endpoint, "import", path]) => {
+                let document = serde_json::from_str(&read_bounded(path, 900_000)?)
+                    .map_err(|error| format!("invalid profile JSON: {error}"))?;
+                (
+                    *endpoint,
+                    RequestKind::EditAnimationLibrary {
+                        edit: AnimationLibraryEdit::ImportProfile { document },
+                    },
+                )
+            }
+            ("animation-asset", [endpoint, "save", name, path]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::SaveAnimation {
+                        id: None,
+                        name: (*name).into(),
+                        program: read_bounded(path, 65536)?,
+                    },
+                },
+            ),
+            ("animation-asset", [endpoint, "save", name, path, id]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::SaveAnimation {
+                        id: Some((*id).into()),
+                        name: (*name).into(),
+                        program: read_bounded(path, 65536)?,
+                    },
+                },
+            ),
+            ("animation-asset", [endpoint, "delete", id]) => (
+                *endpoint,
+                RequestKind::EditAnimationLibrary {
+                    edit: AnimationLibraryEdit::DeleteAnimation { id: (*id).into() },
+                },
+            ),
+            _ => {
+                return Err(format!(
+                    "usage: sidepulse-next {command} ENDPOINT <list | save NAME {} | {}delete ID>",
+                    if command == "animation-profile" {
+                        "[ID]"
+                    } else {
+                        "FILE [ID]"
+                    },
+                    if command == "animation-profile" {
+                        "apply ID | import FILE | export [ID] | "
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        };
+        Ok((endpoint, kind))
+    };
+    let (endpoint, kind) = match parse() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("sidepulse-next: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if matches!(kind, RequestKind::EditAnimationLibrary { .. }) {
+        return service_settings_request(endpoint, kind);
+    }
+    let request = ClientRequest {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        kind,
+    };
+    let result = (|| -> Result<(), String> {
+        request.validate().map_err(str::to_owned)?;
+        let reply: ServerMessage =
+            sidepulse_ipc::request(endpoint, &request, Duration::from_secs(3))
+                .map_err(|error| error.to_string())?;
+        if reply.version != PROTOCOL_VERSION || reply.request_id != Some(1) {
+            return Err("invalid service response".into());
+        }
+        let value = match reply.payload {
+            ServerPayload::AnimationLibrary { library } => serde_json::to_value(library),
+            ServerPayload::AnimationProfileDocument { document } => serde_json::to_value(document),
+            ServerPayload::Error { message, .. } => return Err(message),
+            _ => return Err("unexpected service response".into()),
+        }
+        .map_err(|error| error.to_string())?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value).expect("animation JSON serializes")
+        );
+        Ok(())
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("sidepulse-next: {error}");
             ExitCode::FAILURE
         }
     }

@@ -19,6 +19,7 @@ struct ServiceState {
     active_device: Option<String>,
     animation_choices: Vec<AnimationChoice>,
     animation_states: Vec<AgentAnimationState>,
+    animation_library: sidepulse_core::AnimationLibrary,
     history_points: Vec<sidepulse_core::HistoryPoint>,
     history_timeframe: u32,
     history_sampled: bool,
@@ -27,6 +28,7 @@ struct ServiceState {
 enum Update {
     State(Result<Box<ServiceState>, String>),
     Opened(Result<(), String>),
+    ProfileExport(Result<String, String>),
     Saved {
         result: Result<(), String>,
         draft: DraftKind,
@@ -41,6 +43,7 @@ enum DraftKind {
     Sleep,
     Animation,
     Terminal,
+    Library,
 }
 
 fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
@@ -95,6 +98,11 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     else {
         return Err("The service did not return history.".into());
     };
+    let ServerPayload::AnimationLibrary { library } =
+        request(endpoint, RequestKind::AnimationLibrary)?
+    else {
+        return Err("The service did not return animation profiles.".into());
+    };
     Ok(ServiceState {
         settings,
         activity,
@@ -103,6 +111,7 @@ fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
         active_device,
         animation_choices: choices,
         animation_states: states,
+        animation_library: library,
         history_points: points,
         history_timeframe: timeframe_seconds,
         history_sampled: sampled,
@@ -149,12 +158,28 @@ fn start_worker(endpoint: String) -> (Sender<RequestKind>, Receiver<Update>) {
                         }
                         continue;
                     }
+                    if matches!(kind, RequestKind::ExportAnimationProfile { .. }) {
+                        let result = request(&endpoint, kind).and_then(|payload| {
+                            let ServerPayload::AnimationProfileDocument { document } = payload
+                            else {
+                                return Err("The service did not return a profile.".into());
+                            };
+                            serde_json::to_string_pretty(&document)
+                                .map_err(|error| error.to_string())
+                        });
+                        if updates.send(Update::ProfileExport(result)).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     let draft = match kind {
                         RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
                         RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
                         RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
                         RequestKind::SetAgentAnimation { .. } => DraftKind::Animation,
                         RequestKind::SetSessionTerminal { .. } => DraftKind::Terminal,
+                        RequestKind::EditAnimationLibrary { .. }
+                        | RequestKind::SetAnimationState { .. } => DraftKind::Library,
                         _ => DraftKind::None,
                     };
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
@@ -221,6 +246,12 @@ struct SettingsApp {
     terminal_saving: bool,
     session_terminal: String,
     custom_terminal_path: String,
+    profile_name: String,
+    profile_json: String,
+    asset_id: Option<String>,
+    asset_name: String,
+    asset_program: String,
+    library_saving: bool,
 }
 
 impl SettingsApp {
@@ -262,6 +293,12 @@ impl SettingsApp {
             terminal_saving: false,
             session_terminal: "terminal".into(),
             custom_terminal_path: String::new(),
+            profile_name: String::new(),
+            profile_json: String::new(),
+            asset_id: None,
+            asset_name: String::new(),
+            asset_program: "#00E5FF".into(),
+            library_saving: false,
         }
     }
 
@@ -369,6 +406,15 @@ impl SettingsApp {
                         Err(error) => (format!("Could not open session: {error}"), true),
                     });
                 }
+                Update::ProfileExport(result) => {
+                    self.message = Some(match result {
+                        Ok(document) => {
+                            self.profile_json = document;
+                            ("Profile ready to copy or save".into(), false)
+                        }
+                        Err(error) => (format!("Could not export: {error}"), true),
+                    });
+                }
                 Update::Saved { result, draft } => {
                     let success = result.is_ok();
                     match draft {
@@ -397,6 +443,9 @@ impl SettingsApp {
                             }
                         }
                         DraftKind::None => {}
+                        DraftKind::Library => {
+                            self.library_saving = false;
+                        }
                         DraftKind::Animation => {
                             self.animation_saving = false;
                             if success {
@@ -1105,6 +1154,196 @@ impl SettingsApp {
         }
     }
 
+    fn edit_library(&mut self, edit: sidepulse_core::AnimationLibraryEdit) {
+        self.send(RequestKind::EditAnimationLibrary { edit });
+        self.library_saving = true;
+    }
+
+    fn animation_profiles(&mut self, ui: &mut egui::Ui) {
+        use sidepulse_core::AnimationLibraryEdit;
+        let Some(state) = &self.state else {
+            return;
+        };
+        let library = state.animation_library.clone();
+        let choices = state.animation_choices.clone();
+        ui.add_enabled_ui(
+            !self.library_saving && !self.animation_dirty && !self.animation_saving,
+            |ui| {
+                ui.collapsing("Animation profiles", |ui| {
+                    let current = library
+                        .matching_profile
+                        .as_ref()
+                        .and_then(|id| library.profiles.get(id))
+                        .map_or("Custom selection", |profile| profile.name.as_str());
+                    ui.label(format!("Current: {current}"));
+                    for (id, profile) in &library.profiles {
+                        ui.horizontal(|ui| {
+                            ui.label(&profile.name);
+                            if ui.button("Apply").clicked() {
+                                self.edit_library(AnimationLibraryEdit::ApplyProfile {
+                                    id: id.clone(),
+                                });
+                            }
+                            if ui.button("Export").clicked() {
+                                self.send(RequestKind::ExportAnimationProfile {
+                                    id: Some(id.clone()),
+                                });
+                            }
+                            if !sidepulse_core::BUILTIN_PROFILE_IDS.contains(&id.as_str())
+                                && ui.button("Delete").clicked()
+                            {
+                                self.edit_library(AnimationLibraryEdit::DeleteProfile {
+                                    id: id.clone(),
+                                });
+                            }
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Profile name");
+                        ui.text_edit_singleline(&mut self.profile_name);
+                        if ui
+                            .add_enabled(
+                                !self.profile_name.trim().is_empty(),
+                                egui::Button::new("Save current as profile"),
+                            )
+                            .clicked()
+                        {
+                            self.edit_library(AnimationLibraryEdit::SaveProfile {
+                                id: None,
+                                name: self.profile_name.clone(),
+                            });
+                        }
+                    });
+                    if ui.button("Export current selection").clicked() {
+                        self.send(RequestKind::ExportAnimationProfile { id: None });
+                    }
+                    ui.label("Import or export profile JSON");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.profile_json)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(6)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy JSON").clicked() {
+                            ui.ctx().copy_text(self.profile_json.clone());
+                        }
+                        if ui.button("Import and apply").clicked() {
+                            match serde_json::from_str(&self.profile_json) {
+                                Ok(document) => self
+                                    .edit_library(AnimationLibraryEdit::ImportProfile { document }),
+                                Err(error) => {
+                                    self.message =
+                                        Some((format!("Invalid profile JSON: {error}"), true))
+                                }
+                            }
+                        }
+                    });
+                });
+                ui.collapsing("Named custom animations", |ui| {
+                    egui::ComboBox::from_id_salt("named-animation")
+                        .selected_text(
+                            self.asset_id
+                                .as_ref()
+                                .and_then(|id| library.custom_animations.get(id))
+                                .map_or("New animation", |asset| asset.name.as_str()),
+                        )
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.asset_id.is_none(), "New animation")
+                                .clicked()
+                            {
+                                self.asset_id = None;
+                                self.asset_name.clear();
+                                self.asset_program = "#00E5FF".into();
+                            }
+                            for (id, asset) in &library.custom_animations {
+                                if ui
+                                    .selectable_label(
+                                        self.asset_id.as_ref() == Some(id),
+                                        &asset.name,
+                                    )
+                                    .clicked()
+                                {
+                                    self.asset_id = Some(id.clone());
+                                    self.asset_name = asset.name.clone();
+                                    self.asset_program = asset.program.clone();
+                                }
+                            }
+                        });
+                    ui.label("Animation name");
+                    ui.text_edit_singleline(&mut self.asset_name);
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.asset_program)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(8)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.asset_name.trim().is_empty(),
+                                egui::Button::new("Save named animation"),
+                            )
+                            .clicked()
+                        {
+                            self.edit_library(AnimationLibraryEdit::SaveAnimation {
+                                id: self.asset_id.clone(),
+                                name: self.asset_name.clone(),
+                                program: self.asset_program.clone(),
+                            });
+                        }
+                        if let Some(id) = &self.asset_id
+                            && ui.button("Delete").clicked()
+                        {
+                            self.edit_library(AnimationLibraryEdit::DeleteAnimation {
+                                id: id.clone(),
+                            });
+                        }
+                    });
+                });
+                ui.collapsing("Lid transition animations", |ui| {
+                    for (state, label) in [
+                        ("lid_open", "Opening the lid"),
+                        ("lid_closed", "Closing the lid"),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            let mut style = library.current[state].clone();
+                            let original = style.clone();
+                            egui::ComboBox::from_id_salt(state)
+                                .selected_text(
+                                    choices
+                                        .iter()
+                                        .find(|choice| choice.id == style)
+                                        .map_or(style.as_str(), |choice| choice.name.as_str()),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for choice in &choices {
+                                        if choice.id != "custom" {
+                                            ui.selectable_value(
+                                                &mut style,
+                                                choice.id.clone(),
+                                                &choice.name,
+                                            );
+                                        }
+                                    }
+                                });
+                            if style != original {
+                                self.send(RequestKind::SetAnimationState {
+                                    state: state.into(),
+                                    style,
+                                    custom_program: None,
+                                });
+                                self.library_saving = true;
+                            }
+                        });
+                    }
+                });
+            },
+        );
+    }
+
     fn animations(&mut self, ui: &mut egui::Ui) {
         ui.heading("Agent animations");
         ui.label("Choose a device animation for each agent status.");
@@ -1114,7 +1353,9 @@ impl SettingsApp {
         };
         let choices = state.animation_choices.clone();
         let states = state.animation_states.clone();
-        ui.add_enabled_ui(!self.animation_saving, |ui| {
+        self.animation_profiles(ui);
+        ui.separator();
+        ui.add_enabled_ui(!self.animation_saving && !self.library_saving, |ui| {
             ui.add_enabled_ui(!self.animation_dirty, |ui| {
                 egui::ComboBox::from_id_salt("animation-mode")
                     .selected_text(self.animation_mode.label())

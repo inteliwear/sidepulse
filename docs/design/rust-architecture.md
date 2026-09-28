@@ -87,8 +87,8 @@ output, visible external-edit conflicts, retained edits, and reconnecting
 after a service restart. The animation page saves built-in presets and per-status custom LED programs
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
-named custom assets remain selectable and are preserved. Named asset and
-profile editing, session-opening preferences, relay controls, and broader sleep controls still need implementation.
+named custom assets remain selectable and are preserved. Named assets, profiles, and session-opening preferences now have service-owned
+operations and native controls. Relay controls and broader sleep controls remain open.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -162,7 +162,7 @@ development service can write one device with `--device PATH` and optional
 programs; the tray never touches the device file. A macOS smoke test passed
 from the Rust hook through the service into `LEDS.LED` in a temporary folder.
 Physical hardware behavior still needs validation. Automatic selection and
-saved animation styles are covered below; profile editing remains service and UI work.
+saved animation styles and profile editing are covered below.
 
 The development CLI now shares one fail-open hook handler between
 `sidepulse-next hook-log`, `sidepulse-next agent-monitor hook-log`, and
@@ -277,7 +277,7 @@ The battery LED CLI route remains pending.
 All bundled LED animation programs are now copied into the Rust device crate.
 The service resolves saved per-mode agent styles, including custom programs
 from the legacy settings `animations` directory, then validates and writes the
-selected program. Editing animation profiles in the native UI remains open.
+selected program. The native animation page now edits profiles and named assets through the service.
 The core now validates and annotates legacy relay `agent_event` envelopes.
 The service accepts these events through its local IPC and ignores repeated
 event IDs using a bounded cache. The separate `sidepulse-relay` crate owns
@@ -351,7 +351,7 @@ remains authoritative for users until the delivery gates above pass.
 2. Finish source parity: transcript edge cases, captured process ancestry and
    Junie cases, and Python-to-Rust transition comparisons.
 3. Port the remaining settings controls, relay, link, battery and sleep policy,
-   animation profiles and named custom assets, and native helper recovery
+   lid transition output and final-frame holding, and native helper recovery
    into service modules.
 4. Complete tray and settings controls behind the shared UI model, including
    macOS-specific status bar behavior and Windows/Linux capability adapters.
@@ -386,3 +386,29 @@ opens a new terminal session. Native window checks for the latest history and
 virtual clients are pending because the Mac was locked. Automated Rust checks,
 tests, release builds, staging, and service smoke checks passed on all three
 platforms at `4052e40`.
+
+
+## Profiles and named animation assets
+
+`sidepulse-core` owns profile documents, identifiers, state defaults, working-mode
+grouping, and the Cyan/Ember/Purple profiles. Captured exports from the Python
+settings model verify all three built-ins. The service owns named `.LED` assets,
+profile capture, apply, delete, import, and export. Imports remap conflicting
+custom identifiers and validate every program for 2- and 8-LED firmware before
+publishing settings. Inline programs are promoted to named assets when a profile
+is saved, making exports portable.
+
+Asset updates publish a new private file and atomically update the settings
+pointer. A failed or conflicting save removes only its new files and preserves
+previous assets, settings, and unknown fields. Previous asset versions remain
+available for rollback. Built-in profiles cannot be replaced or deleted; assets
+referenced by statuses or profiles cannot be deleted. Named assets are editable
+in the native window. Profiles can be applied, captured, imported from JSON, and
+exported as JSON there. The CLI provides `animation-profile` and `animation-asset`
+commands for file-based workflows; `service-animation` also accepts `lid_open`
+and `lid_closed` state selections. Actual lid-event output remains separate work.
+
+Portable CLI/IPC tests cover import/export, identifier collisions, working-mode
+grouping, invalid programs, and built-in protection. Persistence tests cover
+external-edit conflicts, rollback of new files, inline promotion, restart, and
+symlink directories. Native controls still await visual checks on an unlocked Mac.

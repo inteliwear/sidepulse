@@ -40,3 +40,6 @@ pub use sleep::{
     AwakePolicy, BatteryPower, MacSleepSnapshot, PowerSnapshot, SleepInputs, SleepPlan,
     battery_safeguard_active, parse_ioreg_bool, parse_pmset_assertions, plan_sleep,
 };
+
+mod animation;
+pub use animation::*;

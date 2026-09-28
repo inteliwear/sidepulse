@@ -23,6 +23,18 @@ pub enum RequestKind {
     Power,
     Devices,
     Animations,
+    AnimationLibrary,
+    EditAnimationLibrary {
+        edit: crate::AnimationLibraryEdit,
+    },
+    ExportAnimationProfile {
+        id: Option<String>,
+    },
+    SetAnimationState {
+        state: String,
+        style: String,
+        custom_program: Option<String>,
+    },
     VirtualDisplay,
     History,
     SessionTargets {
@@ -96,6 +108,12 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    AnimationLibrary {
+        library: crate::AnimationLibrary,
+    },
+    AnimationProfileDocument {
+        document: crate::AnimationProfileDocument,
+    },
     Snapshot {
         state: MonitorSnapshot,
     },
@@ -376,6 +394,26 @@ impl ClientRequest {
             && root.is_empty()
         {
             return Err("invalid device root");
+        }
+        if let RequestKind::EditAnimationLibrary { edit } = &self.kind {
+            edit.validate()?;
+        }
+        if let RequestKind::ExportAnimationProfile { id: Some(id) } = &self.kind {
+            crate::validate_animation_id(id, "profile:")?;
+        }
+        if let RequestKind::SetAnimationState {
+            state,
+            style,
+            custom_program,
+        } = &self.kind
+            && (!crate::ANIMATION_STATES.contains(&state.as_str())
+                || style.is_empty()
+                || style.len() > 128
+                || custom_program
+                    .as_ref()
+                    .is_some_and(|program| program.len() > 65536))
+        {
+            return Err("invalid animation state");
         }
         if let RequestKind::SetAgentAnimation {
             style,

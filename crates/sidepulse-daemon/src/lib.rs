@@ -290,6 +290,63 @@ impl Service {
         Ok(())
     }
 
+    pub fn animation_library(&self) -> io::Result<sidepulse_core::AnimationLibrary> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .animation_library()
+    }
+
+    pub fn export_animation_profile(
+        &self,
+        id: Option<&str>,
+    ) -> io::Result<sidepulse_core::AnimationProfileDocument> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .export_animation_profile(id)
+    }
+
+    pub fn edit_animation_library(
+        &self,
+        edit: &sidepulse_core::AnimationLibraryEdit,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .edit_animation_library(edit)?;
+        Ok(())
+    }
+
+    pub fn set_animation_state(
+        &self,
+        state: &str,
+        style: &str,
+        custom_program: Option<&str>,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_animation_state(state, style, custom_program)?;
+        Ok(())
+    }
+
     pub fn session_targets(
         &self,
         agent_id: &str,
@@ -823,6 +880,29 @@ impl Service {
                     payload: self.history_snapshot()?,
                 },
             ),
+            RequestKind::AnimationLibrary | RequestKind::ExportAnimationProfile { .. } => {
+                let result = match request.kind {
+                    RequestKind::AnimationLibrary => self
+                        .animation_library()
+                        .map(|library| ServerPayload::AnimationLibrary { library }),
+                    RequestKind::ExportAnimationProfile { id } => self
+                        .export_animation_profile(id.as_deref())
+                        .map(|document| ServerPayload::AnimationProfileDocument { document }),
+                    _ => unreachable!(),
+                };
+                let payload = result.unwrap_or_else(|error| ServerPayload::Error {
+                    code: "animation_library_unavailable".into(),
+                    message: error.to_string(),
+                });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::SessionTargets { agent_id, action } => {
                 let payload = self
                     .session_targets(&agent_id, action)
@@ -1013,7 +1093,9 @@ impl Service {
                     },
                 )
             }
-            kind @ (RequestKind::SetAgentAnimation { .. }
+            kind @ (RequestKind::EditAnimationLibrary { .. }
+            | RequestKind::SetAnimationState { .. }
+            | RequestKind::SetAgentAnimation { .. }
             | RequestKind::SetSessionOpenPreference { .. }
             | RequestKind::SetSessionTerminal { .. }
             | RequestKind::SetHistoryTimeframe { .. }
@@ -1022,6 +1104,14 @@ impl Service {
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::EditAnimationLibrary { edit } => {
+                        self.edit_animation_library(&edit)
+                    }
+                    RequestKind::SetAnimationState {
+                        state,
+                        style,
+                        custom_program,
+                    } => self.set_animation_state(&state, &style, custom_program.as_deref()),
                     RequestKind::SetSessionOpenPreference {
                         provider,
                         origin,

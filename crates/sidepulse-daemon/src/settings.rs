@@ -17,6 +17,9 @@ use sidepulse_device::animations::{BUILTIN_ANIMATIONS, builtin_animation, progra
 use sidepulse_device::target_from_device_path;
 use tempfile::NamedTempFile;
 
+#[path = "animation_library.rs"]
+mod animation_library;
+
 pub struct SettingsStore {
     path: PathBuf,
     document: Map<String, Value>,
@@ -445,21 +448,23 @@ impl SettingsStore {
     }
 
     pub fn animation_for_mode(&self, mode: AgentMode) -> io::Result<(String, String)> {
-        let key = mode.key();
-        let default = match mode {
-            AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress => {
-                "cyan-roll"
-            }
-            AgentMode::WaitingForInput | AgentMode::BlockedError => "amber-pulse",
-            AgentMode::Completed => "cyan-complete",
-            _ => "idle-pulse",
-        };
+        self.animation_for_state(mode.key())
+    }
+
+    pub fn animation_for_state(&self, key: &str) -> io::Result<(String, String)> {
+        if !sidepulse_core::ANIMATION_STATES.contains(&key) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown animation state",
+            ));
+        }
+        let default = sidepulse_core::default_animation(key);
         let selected = self
             .document
             .get("agent_animations")
             .and_then(|animations| {
                 animations.get(key).or_else(|| {
-                    matches!(mode, AgentMode::ToolRunning | AgentMode::LongTaskProgress)
+                    matches!(key, "tool_running" | "long_task_progress")
                         .then(|| animations.get("working"))
                         .flatten()
                 })
@@ -488,34 +493,7 @@ impl SettingsStore {
             else {
                 return Ok((default.to_owned(), String::new()));
             };
-            let file = custom.get("file").and_then(Value::as_str);
-            let file_program = file.and_then(|file| {
-                let path = Path::new(file);
-                (path.file_name().is_some_and(|name| name == file)
-                    && path
-                        .extension()
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("LED")))
-                .then(|| {
-                    self.path
-                        .parent()
-                        .unwrap_or_else(|| Path::new("."))
-                        .join("animations")
-                        .join(file)
-                })
-            });
-            let program = if let Some(path) = file_program {
-                fs::read_to_string(path).ok().or_else(|| {
-                    custom
-                        .get("program")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-            } else {
-                custom
-                    .get("program")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            };
+            let program = self.named_animation_program(custom);
             return Ok(program.map_or_else(
                 || (default.to_owned(), String::new()),
                 |program| ("custom".into(), program),
@@ -597,6 +575,21 @@ impl SettingsStore {
         style: &str,
         custom_program: Option<&str>,
     ) -> io::Result<()> {
+        self.set_animation_state(mode.key(), style, custom_program)
+    }
+
+    pub fn set_animation_state(
+        &mut self,
+        state: &str,
+        style: &str,
+        custom_program: Option<&str>,
+    ) -> io::Result<()> {
+        if !sidepulse_core::ANIMATION_STATES.contains(&state) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown animation state",
+            ));
+        }
         let valid = matches!(style, "default" | "custom")
             || builtin_animation(style, 8).is_some()
             || (style.starts_with("custom:")
@@ -631,21 +624,14 @@ impl SettingsStore {
                     "agent_animations must be an object",
                 )
             })?;
-        let targets = if matches!(
-            mode,
-            AgentMode::Working | AgentMode::ToolRunning | AgentMode::LongTaskProgress
-        ) {
-            vec![
-                AgentMode::Working,
-                AgentMode::ToolRunning,
-                AgentMode::LongTaskProgress,
-            ]
+        let targets = if matches!(state, "working" | "tool_running" | "long_task_progress") {
+            vec!["working", "tool_running", "long_task_progress"]
         } else {
-            vec![mode]
+            vec![state]
         };
         for target in targets {
             let setting = animations
-                .entry(target.key())
+                .entry(target)
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
@@ -666,9 +652,15 @@ impl SettingsStore {
             document: updated.clone(),
             original: self.original.clone(),
         };
-        let (resolved_style, resolved_program) = candidate.animation_for_mode(mode)?;
+        let (resolved_style, resolved_program) = candidate.animation_for_state(state)?;
         for count in [2, 8] {
-            let program = program_for_style(mode, count, 255, &resolved_style, &resolved_program)?;
+            let program = program_for_style(
+                AgentMode::IdleReady,
+                count,
+                255,
+                &resolved_style,
+                &resolved_program,
+            )?;
             sidepulse_device::led_runtime::validate_program(&program, count)?;
         }
         self.original = Some(write_atomic(
