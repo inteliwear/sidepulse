@@ -68,6 +68,7 @@ pub struct TrayControls {
     pub claude_transcripts: bool,
     pub sleep_policy: Option<String>,
     pub battery_power_preview: bool,
+    pub virtual_display_enabled: bool,
     pub recent_session_retention_seconds: f64,
 }
 
@@ -84,6 +85,10 @@ impl TrayControls {
         };
         let monitoring = settings.get("transcript_monitoring");
         Some(Self {
+            virtual_display_enabled: settings
+                .get("virtual_status_device_enabled")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
             recent_session_retention_seconds: legacy_nonnegative_setting(
                 settings,
                 "agent_list",
@@ -123,6 +128,9 @@ pub struct SettingsView {
     pub power_change_preview_seconds: f64,
     pub idle_timeout_seconds: f64,
     pub sleep_min_battery_percent: f64,
+    pub virtual_display_enabled: bool,
+    pub virtual_display_brightness: u8,
+    pub virtual_display_mode: String,
 }
 
 impl SettingsView {
@@ -132,7 +140,32 @@ impl SettingsView {
             return None;
         };
         let battery = settings.get("battery_monitoring");
+        let virtual_device = settings
+            .get("devices")
+            .and_then(|devices| devices.as_array())
+            .and_then(|devices| {
+                devices.iter().find(|device| {
+                    device.get("id").and_then(|id| id.as_str()) == Some("virtual:status-bar")
+                        || device.get("path").and_then(|path| path.as_str())
+                            == Some("virtual:status-bar")
+                })
+            });
         Some(Self {
+            virtual_display_enabled: settings
+                .get("virtual_status_device_enabled")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            virtual_display_brightness: virtual_device
+                .and_then(|device| device.get("brightness"))
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(255),
+            virtual_display_mode: virtual_device
+                .and_then(|device| device.get("led_display"))
+                .and_then(|value| value.as_str())
+                .or_else(|| settings.get("led_display").and_then(|value| value.as_str()))
+                .unwrap_or("agent")
+                .into(),
             idle_timeout_seconds: legacy_nonnegative_setting(
                 settings,
                 "agent_list",

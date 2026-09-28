@@ -51,6 +51,72 @@ impl SettingsStore {
         Value::Object(self.document.clone())
     }
 
+    pub fn virtual_display_settings(&self) -> (bool, u8, &str) {
+        let enabled = self
+            .document
+            .get("virtual_status_device_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let path = Path::new("virtual:status-bar");
+        (
+            enabled,
+            self.brightness_for_device(path),
+            self.display_for_device(path),
+        )
+    }
+
+    pub fn set_virtual_display(
+        &mut self,
+        patch: &sidepulse_core::VirtualDisplaySettingsPatch,
+    ) -> io::Result<()> {
+        patch
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut updated = self.document.clone();
+        if let Some(enabled) = patch.enabled {
+            updated.insert("virtual_status_device_enabled".into(), json!(enabled));
+        }
+        if patch.brightness.is_some() || patch.display.is_some() {
+            let devices = updated
+                .entry("devices")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "settings.devices must be an array",
+                    )
+                })?;
+            let index = devices.iter().position(|device| {
+                device.get("id").and_then(Value::as_str) == Some("virtual:status-bar")
+                    || device.get("path").and_then(Value::as_str) == Some("virtual:status-bar")
+            });
+            let index = index.unwrap_or_else(|| {
+                devices.push(json!({"id":"virtual:status-bar", "name":"SidePulse Notch", "path":"virtual:status-bar", "brightness":255, "led_display":"agent"}));
+                devices.len() - 1
+            });
+            let device = devices[index].as_object_mut().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "virtual device must be an object",
+                )
+            })?;
+            if let Some(brightness) = patch.brightness {
+                device.insert("brightness".into(), json!(brightness));
+            }
+            if let Some(display) = &patch.display {
+                device.insert("led_display".into(), json!(display));
+            }
+        }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
     pub fn brightness_for_device(&self, path: &Path) -> u8 {
         self.find_device(path)
             .and_then(|device| device.get("brightness"))
@@ -509,7 +575,8 @@ impl SettingsStore {
         };
         let (resolved_style, resolved_program) = candidate.animation_for_mode(mode)?;
         for count in [2, 8] {
-            program_for_style(mode, count, 255, &resolved_style, &resolved_program)?;
+            let program = program_for_style(mode, count, 255, &resolved_style, &resolved_program)?;
+            sidepulse_device::led_runtime::validate_program(&program, count)?;
         }
         self.original = Some(write_atomic(
             &self.path,

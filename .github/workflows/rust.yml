@@ -39,9 +39,11 @@ jobs:
             target/release/sidepulse-next-tray
             target/release/sidepulse-next-stage
             target/release/sidepulse-next-settings
+            target/release/sidepulse-next-virtual
             target/release/sidepulse-next.exe
             target/release/sidepulse-next-hook.exe
             target/release/sidepulse-next-service.exe
             target/release/sidepulse-next-tray.exe
             target/release/sidepulse-next-stage.exe
             target/release/sidepulse-next-settings.exe
+            target/release/sidepulse-next-virtual.exe

@@ -44,7 +44,7 @@ fn main() -> ExitCode {
         Some("doctor") => sidepulse_cli::run_doctor(args),
         Some("link") => sidepulse_cli::run_link(args),
         Some("battery") => sidepulse_cli::run_battery(args),
-        Some("settings") => {
+        Some(command @ ("settings" | "virtual-display")) => {
             let endpoint = match (args.next(), args.next(), args.next()) {
                 (Some(flag), Some(endpoint), None) if flag == "--endpoint" => Some(endpoint),
                 (None, None, None) => env::var("SIDEPULSE_NEXT_ENDPOINT").ok(),
@@ -52,25 +52,39 @@ fn main() -> ExitCode {
             };
             let Some(endpoint) = endpoint else {
                 eprintln!(
-                    "usage: sidepulse-next settings --endpoint ENDPOINT (or SIDEPULSE_NEXT_ENDPOINT)"
+                    "usage: sidepulse-next {command} --endpoint ENDPOINT (or SIDEPULSE_NEXT_ENDPOINT)"
                 );
                 return ExitCode::from(2);
             };
+            let (bundle, binary) = if command == "settings" {
+                ("SidePulse Settings", "sidepulse-next-settings")
+            } else {
+                ("SidePulse Virtual", "sidepulse-next-virtual")
+            };
             let result = env::current_exe().and_then(|path| {
                 let executable = if cfg!(target_os = "macos") {
-                    path.ancestors().take(3).map(|root| root.join("applications/SidePulse Settings.app/Contents/MacOS/sidepulse-next-settings"))
+                    path.ancestors()
+                        .take(3)
+                        .map(|root| {
+                            root.join(format!("applications/{bundle}.app/Contents/MacOS/{binary}"))
+                        })
                         .find(|candidate| candidate.is_file())
-                } else { None }.unwrap_or_else(|| path.with_file_name(if cfg!(windows) {
-                    "sidepulse-next-settings.exe"
                 } else {
-                    "sidepulse-next-settings"
-                }));
+                    None
+                }
+                .unwrap_or_else(|| {
+                    path.with_file_name(if cfg!(windows) {
+                        format!("{binary}.exe")
+                    } else {
+                        binary.into()
+                    })
+                });
                 std::process::Command::new(executable).arg(endpoint).spawn()
             });
             match result {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
-                    eprintln!("sidepulse-next settings: {error}");
+                    eprintln!("sidepulse-next {command}: {error}");
                     ExitCode::FAILURE
                 }
             }
@@ -355,7 +369,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
+                "usage: sidepulse-next <version | doctor [--json] | status [--json] | battery <status | configure> | settings --endpoint ENDPOINT | virtual-display --endpoint ENDPOINT | link [RELAY_CODE] [--server ORIGIN] [--config PATH] | hook-log --provider PROVIDER --log PATH | agent-monitor <doctor | status | hook-log | install | uninstall> | service-status ENDPOINT | service-settings ENDPOINT | service-power ENDPOINT | service-devices ENDPOINT | service-select ENDPOINT DEVICE_ROOT | service-brightness ENDPOINT 0-255 | service-display ENDPOINT agent|battery|custom | service-sleep-policy ENDPOINT never|agents|always | service-sleep-safeguard ENDPOINT 0-100 | service-agent-list ENDPOINT IDLE_MINUTES RETENTION_HOURS | service-animation ENDPOINT MODE STYLE [--program FILE] | service-transcript ENDPOINT codex|claude on|off | inspect-log PROVIDER JSONL_PATH [ISO_TIMESTAMP]>"
             );
             ExitCode::from(2)
         }

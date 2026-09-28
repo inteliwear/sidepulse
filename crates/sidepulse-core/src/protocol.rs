@@ -23,6 +23,10 @@ pub enum RequestKind {
     Power,
     Devices,
     Animations,
+    VirtualDisplay,
+    SetVirtualDisplay {
+        patch: VirtualDisplaySettingsPatch,
+    },
     SetAgentAnimation {
         mode: AgentMode,
         style: String,
@@ -95,6 +99,9 @@ pub enum ServerPayload {
         choices: Vec<AnimationChoice>,
         states: Vec<AgentAnimationState>,
     },
+    VirtualDisplay {
+        frame: VirtualDisplayFrame,
+    },
     StateChanged {
         state: MonitorSnapshot,
     },
@@ -125,6 +132,34 @@ pub struct AgentAnimationState {
     pub mode: AgentMode,
     pub style: String,
     pub program: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VirtualDisplaySettingsPatch {
+    pub enabled: Option<bool>,
+    pub brightness: Option<u8>,
+    pub display: Option<String>,
+}
+
+impl VirtualDisplaySettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .display
+            .as_deref()
+            .is_some_and(|display| !matches!(display, "agent" | "battery" | "custom"))
+        {
+            Err("invalid virtual display mode")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VirtualDisplayFrame {
+    pub enabled: bool,
+    pub display: String,
+    pub pixels: Vec<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -235,6 +270,9 @@ impl ClientRequest {
             return Err("invalid display mode");
         }
         if let RequestKind::SetBatterySettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetVirtualDisplay { patch } = &self.kind {
             patch.validate()?;
         }
         if let RequestKind::SetAgentListSettings { patch } = &self.kind {

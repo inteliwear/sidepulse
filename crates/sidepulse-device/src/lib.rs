@@ -12,6 +12,7 @@ pub mod battery;
 pub mod battery_diagnostics;
 pub mod battery_preview;
 pub mod battery_source;
+pub mod led_runtime;
 pub mod virtual_led;
 #[cfg(windows)]
 mod windows_volume;

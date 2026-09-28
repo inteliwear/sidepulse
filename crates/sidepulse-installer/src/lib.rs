@@ -11,13 +11,14 @@ use serde::{Deserialize, Serialize};
 use sidepulse_core::{ClientRequest, PROTOCOL_VERSION, RequestKind, ServerMessage, ServerPayload};
 use tempfile::Builder;
 
-const BINARIES: [&str; 6] = [
+const BINARIES: [&str; 7] = [
     "sidepulse-next",
     "sidepulse-next-hook",
     "sidepulse-next-service",
     "sidepulse-next-tray",
     "sidepulse-next-stage",
     "sidepulse-next-settings",
+    "sidepulse-next-virtual",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +122,7 @@ impl StagePlan {
             vec![
                 stage_dir.join("applications/SidePulse Tray.app"),
                 stage_dir.join("applications/SidePulse Settings.app"),
+                stage_dir.join("applications/SidePulse Virtual.app"),
             ]
         } else {
             Vec::new()
@@ -182,6 +184,7 @@ impl StagePlan {
             self.manifest.application_bundles.iter().zip([
                 (3, "SidePulse Tray", "io.sidepulse.next.tray", true),
                 (5, "SidePulse Settings", "io.sidepulse.next.settings", false),
+                (6, "SidePulse Virtual", "io.sidepulse.next.virtual", true),
             ])
         {
             let contents = temporary
@@ -526,7 +529,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
-            assert_eq!(manifest.binaries.len(), 6);
+            assert_eq!(manifest.binaries.len(), 7);
             assert_eq!(manifest.launch_files.len(), 2);
             assert_eq!(manifest.service_command.len(), 21);
             assert!(manifest.service_command.contains(&"cursor".to_owned()));
@@ -548,7 +551,7 @@ mod tests {
                 assert!(launch_file.is_file());
             }
             if platform == Platform::Macos {
-                assert_eq!(manifest.application_bundles.len(), 2);
+                assert_eq!(manifest.application_bundles.len(), 3);
                 for bundle in &manifest.application_bundles {
                     assert_eq!(
                         fs::read_to_string(bundle.join("Contents/Resources/endpoint.txt")).unwrap(),

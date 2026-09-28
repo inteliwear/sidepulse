@@ -2,6 +2,7 @@
 
 mod power;
 mod settings;
+mod virtual_display;
 
 use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
@@ -51,6 +52,7 @@ pub struct Service {
     seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
     relay_publisher: Arc<Mutex<Option<RelayPublisher>>>,
     battery_preview: Arc<Mutex<BatteryPreview>>,
+    virtual_output: Arc<Mutex<virtual_display::VirtualOutput>>,
 }
 
 #[derive(Default)]
@@ -269,6 +271,61 @@ impl Service {
                 )
             });
         Ok(())
+    }
+
+    pub fn set_virtual_display(
+        &self,
+        patch: &sidepulse_core::VirtualDisplaySettingsPatch,
+    ) -> io::Result<()> {
+        self.settings
+            .lock()
+            .map_err(poisoned)?
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+            })?
+            .set_virtual_display(patch)
+    }
+
+    pub fn virtual_display_frame(&self) -> io::Result<sidepulse_core::VirtualDisplayFrame> {
+        let mode = self.snapshot()?.aggregate.mode;
+        let settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_ref();
+        let (enabled, brightness, configured) = store.map_or(
+            (false, 255, "agent"),
+            SettingsStore::virtual_display_settings,
+        );
+        let preview = self.battery_preview.lock().map_err(poisoned)?;
+        let display = preview.display(configured, Instant::now()).to_owned();
+        let battery = preview.latest;
+        drop(preview);
+        let mut output = self.virtual_output.lock().map_err(poisoned)?;
+        if !enabled || display == "custom" {
+            output.clear();
+            return Ok(sidepulse_core::VirtualDisplayFrame {
+                enabled: false,
+                display,
+                pixels: vec![[0; 3]; 8],
+            });
+        }
+        let program = if display == "battery"
+            && let Some(mut battery) = battery
+        {
+            if let Some(watts) = store.and_then(SettingsStore::battery_full_charge_watts) {
+                battery.full_charge_watts = watts;
+            }
+            program_for_battery(battery, 8, 360, brightness)
+        } else if let Some(store) = store {
+            let (style, custom) = store.animation_for_mode(mode)?;
+            program_for_style(mode, 8, brightness, &style, &custom)?
+        } else {
+            sidepulse_device::program_for_mode(mode, 8, brightness)
+        };
+        Ok(sidepulse_core::VirtualDisplayFrame {
+            enabled: true,
+            display,
+            pixels: output.pixels(&program)?,
+        })
     }
 
     pub fn set_agent_animation(
@@ -537,6 +594,23 @@ impl Service {
                     },
                 )
             }
+            RequestKind::VirtualDisplay => {
+                let payload = match self.virtual_display_frame() {
+                    Ok(frame) => ServerPayload::VirtualDisplay { frame },
+                    Err(error) => ServerPayload::Error {
+                        code: "virtual_display_error".into(),
+                        message: error.to_string(),
+                    },
+                };
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::SelectDevice { root } => {
                 let payload = match self.select_device(&root) {
                     Ok(()) => {
@@ -712,10 +786,12 @@ impl Service {
                 )
             }
             kind @ (RequestKind::SetAgentAnimation { .. }
+            | RequestKind::SetVirtualDisplay { .. }
             | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
             | RequestKind::SetSleepSettings { .. }) => {
                 let result = match kind {
+                    RequestKind::SetVirtualDisplay { patch } => self.set_virtual_display(&patch),
                     RequestKind::SetAgentAnimation {
                         mode,
                         style,
@@ -1613,6 +1689,53 @@ mod tests {
     }
 
     #[test]
+    fn virtual_display_uses_service_programs_without_a_physical_device() {
+        use sidepulse_core::{AgentMode, VirtualDisplaySettingsPatch};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r#"{"unknown":7,"devices":[{"id":"virtual:status-bar","path":"virtual:status-bar","other":9}]}"#).unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        assert!(!service.virtual_display_frame().unwrap().enabled);
+        service
+            .set_agent_animation(AgentMode::IdleReady, "custom", Some("#FF0080"))
+            .unwrap();
+        service
+            .set_virtual_display(&VirtualDisplaySettingsPatch {
+                enabled: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        let frame = service.virtual_display_frame().unwrap();
+        assert!(frame.enabled);
+        assert_eq!(frame.pixels, vec![[255, 0, 128]; 8]);
+        service
+            .set_virtual_display(&VirtualDisplaySettingsPatch {
+                brightness: Some(0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            service.virtual_display_frame().unwrap().pixels,
+            vec![[0; 3]; 8]
+        );
+        service
+            .set_virtual_display(&VirtualDisplaySettingsPatch {
+                display: Some("custom".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!service.virtual_display_frame().unwrap().enabled);
+        let saved = service.settings_snapshot().unwrap().unwrap().document;
+        assert_eq!(saved["unknown"], 7);
+        assert_eq!(saved["devices"][0]["other"], 9);
+        assert_eq!(saved["devices"].as_array().unwrap().len(), 1);
+        assert_eq!(service.sync_device().unwrap(), None);
+        assert!(!directory.path().join("LEDS.LED").exists());
+        assert!(!Path::new("virtual:status-bar").exists());
+    }
+
+    #[test]
     fn animation_changes_apply_to_device_and_working_modes_without_losing_settings() {
         use sidepulse_core::AgentMode;
         let directory = tempfile::tempdir().unwrap();
@@ -1645,6 +1768,11 @@ mod tests {
         assert_eq!(saved["agent_animations"]["working"]["custom"], "keep");
         assert_eq!(saved["unknown"], 9);
         let before = fs::read(&path).unwrap();
+        assert!(
+            service
+                .set_agent_animation(AgentMode::Working, "custom", Some("not an animation"))
+                .is_err()
+        );
         assert!(
             service
                 .set_agent_animation(AgentMode::Working, "custom", Some(&"#123456\n".repeat(21)))

@@ -88,8 +88,7 @@ after a service restart. The animation page saves built-in presets and per-statu
 through the service, validates 2- and 8-LED output before saving, and keeps the
 working/tool/progress modes grouped as in the Python application. Existing
 named custom assets remain selectable and are preserved. Named asset and
-profile editing, session-opening preferences, history, relay controls, virtual
-display, and broader sleep controls still need implementation.
+profile editing, session-opening preferences, history, relay controls, and broader sleep controls still need implementation.
 The service now applies saved idle timeouts to snapshots immediately, without
 rebuilding its monitor or losing pending permissions. The shared presentation
 model includes only completed stale sessions within the configured recent
@@ -222,8 +221,18 @@ still need parity checks, especially Windows app versus CLI identification.
 The `sidepulse-device::virtual_led` module now holds the portable virtual LED
 pixel rules: status and battery colors, spatial blending, tone mapping, and
 compact program previews. Its behavior is tested against the existing Python
-rules. No platform window consumes this model yet; macOS notch rendering and
-Windows/Linux virtual display adapters remain separate UI work.
+rules. The service now hosts the same bundled firmware WASM engine in Rust, with a
+bounded interpreter, to execute presets and custom programs and return RGB
+frames. The UI does no program parsing or animation selection. Saving an
+animation checks firmware syntax for both device sizes, including line/column
+errors. A separate Rust virtual display client draws those frames; macOS uses
+native notch geometry and an all-spaces, transparent, non-interactive window,
+while Windows and Linux use a movable window. Virtual display enablement,
+brightness, and display mode are saved through the service, preserving the
+legacy virtual device ID. Tray and settings clients launch one virtual display
+per endpoint; manual mode hides it. Preview staging includes its executable and
+a macOS application bundle. Screen changes and native Windows/Linux drawing
+still require runtime validation.
 The device layer also has the portable battery LED program policy, including
 partial fills and charging pulses. The macOS reader now parses the native
 `ioreg` battery plist, including charger power, negotiated profiles, capacity,

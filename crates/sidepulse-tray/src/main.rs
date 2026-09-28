@@ -34,6 +34,8 @@ struct TrayView {
     battery_preview_enabled: Option<bool>,
     settings_item: MenuItem,
     settings_child: Option<std::process::Child>,
+    virtual_child: Option<std::process::Child>,
+    virtual_launch_attempted: bool,
     #[cfg(target_os = "macos")]
     sleep_status: MenuItem,
     #[cfg(target_os = "macos")]
@@ -113,6 +115,8 @@ impl TrayView {
             battery_preview_enabled: None,
             settings_item,
             settings_child: None,
+            virtual_child: None,
+            virtual_launch_attempted: false,
             #[cfg(target_os = "macos")]
             sleep_status,
             #[cfg(target_os = "macos")]
@@ -279,6 +283,53 @@ impl TrayView {
             .then_some(self.battery_preview_enabled)
             .flatten()
             .map(|enabled| !enabled)
+    }
+
+    fn sync_virtual_display(
+        &mut self,
+        enabled: bool,
+        endpoint: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        if !enabled {
+            self.virtual_launch_attempted = false;
+            return Ok(());
+        }
+        if self.virtual_launch_attempted
+            || self
+                .virtual_child
+                .as_mut()
+                .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+        {
+            return Ok(());
+        }
+        let current = std::env::current_exe()?;
+        let executable = if cfg!(target_os = "macos") {
+            current
+                .ancestors()
+                .take(6)
+                .map(|root| {
+                    root.join(
+                        "applications/SidePulse Virtual.app/Contents/MacOS/sidepulse-next-virtual",
+                    )
+                })
+                .find(|path| path.is_file())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            current.with_file_name(if cfg!(windows) {
+                "sidepulse-next-virtual.exe"
+            } else {
+                "sidepulse-next-virtual"
+            })
+        });
+        self.virtual_launch_attempted = true;
+        self.virtual_child = Some(
+            std::process::Command::new(executable)
+                .arg(endpoint)
+                .spawn()?,
+        );
+        Ok(())
     }
 
     fn open_settings(&mut self, endpoint: &str) -> Result<(), Box<dyn Error>> {
@@ -605,6 +656,17 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
             }
             Event::UserEvent(UserEvent::Snapshot(snapshot, controls, devices)) => {
                 let connected = snapshot.is_some();
+                if let Some(view) = view.as_mut()
+                    && let Err(error) = view.sync_virtual_display(
+                        controls
+                            .as_ref()
+                            .is_some_and(|controls| controls.virtual_display_enabled),
+                        &control_endpoint,
+                    )
+                {
+                    view.status
+                        .set_text(format!("Could not open virtual display: {error}"));
+                }
                 if let Some(snapshot) = snapshot {
                     let snapshot = *snapshot;
                     let retention = controls.as_ref().map_or(48.0 * 3600.0, |controls| {
@@ -745,6 +807,12 @@ fn run(endpoint: String) -> Result<(), Box<dyn Error>> {
                 let retention = controls.as_ref().map_or(48.0 * 3600.0, |controls| {
                     controls.recent_session_retention_seconds
                 });
+                view.sync_virtual_display(
+                    controls
+                        .as_ref()
+                        .is_some_and(|controls| controls.virtual_display_enabled),
+                    &endpoint,
+                )?;
                 let state = TrayState::from_snapshot_with_retention(&snapshot, retention);
                 if last_state.as_ref() != Some(&state) {
                     view.show_snapshot(&state)?;

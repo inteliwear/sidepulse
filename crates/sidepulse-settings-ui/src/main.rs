@@ -164,11 +164,16 @@ struct SettingsApp {
     animation_program: String,
     animation_dirty: bool,
     animation_saving: bool,
+    endpoint: String,
+    virtual_child: Option<std::process::Child>,
+    virtual_launch_attempted: bool,
+    virtual_brightness: u8,
+    virtual_brightness_dragging: bool,
 }
 
 impl SettingsApp {
     fn new(endpoint: String) -> Self {
-        let (commands, updates) = start_worker(endpoint);
+        let (commands, updates) = start_worker(endpoint.clone());
         Self {
             commands,
             updates,
@@ -196,7 +201,50 @@ impl SettingsApp {
             animation_program: String::new(),
             animation_dirty: false,
             animation_saving: false,
+            endpoint,
+            virtual_child: None,
+            virtual_launch_attempted: false,
+            virtual_brightness: 255,
+            virtual_brightness_dragging: false,
         }
+    }
+
+    fn open_virtual_display(&mut self) -> std::io::Result<()> {
+        if self
+            .virtual_child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+        {
+            return Ok(());
+        }
+        let current = std::env::current_exe()?;
+        let executable = if cfg!(target_os = "macos") {
+            current
+                .ancestors()
+                .take(6)
+                .map(|root| {
+                    root.join(
+                        "applications/SidePulse Virtual.app/Contents/MacOS/sidepulse-next-virtual",
+                    )
+                })
+                .find(|path| path.is_file())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            current.with_file_name(if cfg!(windows) {
+                "sidepulse-next-virtual.exe"
+            } else {
+                "sidepulse-next-virtual"
+            })
+        });
+        self.virtual_launch_attempted = true;
+        self.virtual_child = Some(
+            std::process::Command::new(executable)
+                .arg(&self.endpoint)
+                .spawn()?,
+        );
+        Ok(())
     }
 
     fn send(&mut self, kind: RequestKind) {
@@ -238,7 +286,21 @@ impl SettingsApp {
                         self.animation_style = animation.style.clone();
                         self.animation_program = animation.program.clone();
                     }
+                    if !self.virtual_brightness_dragging {
+                        self.virtual_brightness = state.settings.virtual_display_brightness;
+                    }
+                    let virtual_enabled = state.settings.virtual_display_enabled;
+                    if !virtual_enabled {
+                        self.virtual_launch_attempted = false;
+                    }
                     self.state = Some(*state);
+                    if virtual_enabled
+                        && !self.virtual_launch_attempted
+                        && let Err(error) = self.open_virtual_display()
+                    {
+                        self.message =
+                            Some((format!("Could not open virtual display: {error}"), true));
+                    }
                 }
                 Update::State(Err(_)) => self.connected = false,
                 Update::Saved { result, draft } => {
@@ -315,6 +377,8 @@ impl SettingsApp {
         let devices = state.devices.clone();
         let active = state.active_device.clone();
         let controls = state.settings.controls.clone();
+        let mut virtual_enabled = state.settings.virtual_display_enabled;
+        let virtual_display = state.settings.virtual_display_mode.clone();
         ui.add_space(12.0);
         if devices.is_empty() {
             ui.label("No SidePulse devices connected.");
@@ -362,6 +426,54 @@ impl SettingsApp {
                 }
             }
             ui.weak("Manual output keeps the program already on the device.");
+        });
+        ui.add_space(20.0);
+        ui.separator();
+        ui.strong("Virtual display");
+        if ui
+            .checkbox(&mut virtual_enabled, "Show status on screen")
+            .changed()
+        {
+            self.send(RequestKind::SetVirtualDisplay {
+                patch: sidepulse_core::VirtualDisplaySettingsPatch {
+                    enabled: Some(virtual_enabled),
+                    ..Default::default()
+                },
+            });
+        }
+        ui.weak(if cfg!(target_os = "macos") {
+            "Appears beneath the notch, or at the top of a screen without a notch."
+        } else {
+            "Appears in a movable status window."
+        });
+        ui.add_enabled_ui(virtual_enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Virtual brightness");
+                let response = ui.add(egui::Slider::new(&mut self.virtual_brightness, 0..=255));
+                self.virtual_brightness_dragging = response.dragged();
+                if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                    self.send(RequestKind::SetVirtualDisplay {
+                        patch: sidepulse_core::VirtualDisplaySettingsPatch {
+                            brightness: Some(self.virtual_brightness),
+                            ..Default::default()
+                        },
+                    });
+                }
+            });
+            for choice in DISPLAY_CHOICES {
+                if ui
+                    .radio(virtual_display == choice.value, choice.label)
+                    .clicked()
+                {
+                    self.send(RequestKind::SetVirtualDisplay {
+                        patch: sidepulse_core::VirtualDisplaySettingsPatch {
+                            display: Some(choice.value.into()),
+                            ..Default::default()
+                        },
+                    });
+                }
+            }
+            ui.weak("Manual output hides the virtual display.");
         });
     }
 
