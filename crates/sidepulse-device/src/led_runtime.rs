@@ -136,10 +136,7 @@ impl LedRuntime {
         self.memory
             .read(&self.store, self.output, &mut bytes[..self.count * 3])
             .map_err(runtime_error)?;
-        Ok(bytes[..self.count * 3]
-            .chunks_exact(3)
-            .map(|rgb| [rgb[0], rgb[1], rgb[2]])
-            .collect())
+        Ok(bytes[..self.count * 3].as_chunks::<3>().0.to_vec())
     }
 }
 
