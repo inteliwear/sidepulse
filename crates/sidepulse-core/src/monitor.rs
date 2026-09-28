@@ -944,3 +944,58 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_transitions {
+    use super::*;
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        provider: String,
+        rows: Vec<Value>,
+        steps: Vec<Step>,
+    }
+    #[derive(Deserialize)]
+    struct Step {
+        now: DateTime<Utc>,
+        statuses: Vec<AgentStatus>,
+        stale_statuses: Vec<AgentStatus>,
+        mode: AgentMode,
+        active_count: usize,
+        stale_count: usize,
+    }
+    #[test]
+    fn captured_python_provider_transitions_and_expiry_match() {
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("../resources/parity/python-transitions.json"))
+                .unwrap();
+        for case in cases {
+            let mut monitor = Monitor::default();
+            for (index, step) in case.steps.iter().enumerate() {
+                if let Some(row) = case.rows.get(index) {
+                    let event = crate::parse_log_line(&case.provider, &row.to_string()).unwrap();
+                    monitor.ingest(&event);
+                }
+                let snapshot = monitor.snapshot(step.now);
+                assert_eq!(
+                    snapshot.statuses, step.statuses,
+                    "{} step {index}",
+                    case.name
+                );
+                assert_eq!(
+                    snapshot.stale_statuses, step.stale_statuses,
+                    "{} stale step {index}",
+                    case.name
+                );
+                assert_eq!(
+                    snapshot.aggregate.mode, step.mode,
+                    "{} aggregate step {index}",
+                    case.name
+                );
+                assert_eq!(snapshot.aggregate.active_count, step.active_count);
+                assert_eq!(snapshot.aggregate.stale_count, step.stale_count);
+            }
+        }
+    }
+}

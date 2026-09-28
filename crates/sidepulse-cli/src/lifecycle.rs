@@ -12,24 +12,29 @@ fn fail(error: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
+    let mut import_config = None;
+    let mut import_logs = None;
     let mut source = None;
     let mut stage = None;
     let mut dry_run = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
-                println!("Usage: sidepulse setup --stage-dir DIR [--source-dir DIR] [--dry-run]");
+                println!(
+                    "Usage: sidepulse setup --stage-dir DIR [--source-dir DIR] [--import-config DIR] [--import-logs DIR] [--dry-run]"
+                );
                 return ExitCode::SUCCESS;
             }
             "--dry-run" => dry_run = true,
-            "--source-dir" | "--stage-dir" => {
+            "--source-dir" | "--stage-dir" | "--import-config" | "--import-logs" => {
                 let Some(value) = args.next() else {
                     return fail(format!("{arg} requires a directory"));
                 };
-                if arg == "--source-dir" {
-                    source = Some(PathBuf::from(value));
-                } else {
-                    stage = Some(PathBuf::from(value));
+                match arg.as_str() {
+                    "--source-dir" => source = Some(PathBuf::from(value)),
+                    "--stage-dir" => stage = Some(PathBuf::from(value)),
+                    "--import-config" => import_config = Some(PathBuf::from(value)),
+                    _ => import_logs = Some(PathBuf::from(value)),
                 }
             }
             _ => return fail(format!("unknown setup option {arg}")),
@@ -42,13 +47,23 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
             Some(path) => path,
             None => env::current_exe()?.parent().unwrap().to_path_buf(),
         };
-        let plan = StagePlan::new(&source, &stage, Platform::current()?)?;
+        let mut plan = StagePlan::new(&source, &stage, Platform::current()?)?;
+        if import_config.is_some() || import_logs.is_some() {
+            plan = plan.with_legacy_import(sidepulse_installer::legacy::LegacyImport::new(
+                import_config.as_deref(),
+                import_logs.as_deref(),
+            )?);
+        }
         let manifest = if dry_run {
             plan.manifest()
         } else {
             plan.stage()?
         };
-        Ok(serde_json::to_value(manifest)?)
+        let mut value = serde_json::to_value(manifest)?;
+        if !plan.imported_files().is_empty() {
+            value["imported_files"] = serde_json::to_value(plan.imported_files())?;
+        }
+        Ok(value)
     })();
     match result {
         Ok(value) => {

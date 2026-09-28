@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentOrigin {
     pub kind: String,
     pub label: String,
@@ -10,7 +11,7 @@ pub struct AgentOrigin {
     pub confidence: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub ppid: Option<u32>,
@@ -81,7 +82,7 @@ pub fn origin_from_environment(
             confidence: "explicit".into(),
         });
     }
-    let term = env.get("TERM_PROGRAM").map_or("", String::as_str);
+    let term = env.get("TERM_PROGRAM").map_or("", |value| value.trim());
     if term.eq_ignore_ascii_case("vscode") || env.keys().any(|key| key.starts_with("VSCODE_")) {
         return Some(AgentOrigin::surface(provider, "vscode", "env:VSCODE"));
     }
@@ -116,7 +117,7 @@ pub fn origin_from_terminal_environment(
     env: &HashMap<String, String>,
 ) -> Option<AgentOrigin> {
     env.get("TERM_PROGRAM")
-        .filter(|term| !term.trim().is_empty() && !term.eq_ignore_ascii_case("vscode"))
+        .filter(|term| !term.trim().is_empty() && !term.trim().eq_ignore_ascii_case("vscode"))
         .map(|_| AgentOrigin::surface(provider, "cli", "env:TERM_PROGRAM"))
 }
 
@@ -208,31 +209,30 @@ pub fn origin_from_processes(provider: &str, processes: &[ProcessInfo]) -> Optio
         return Some(AgentOrigin::surface(provider, "app", source));
     }
     for info in processes {
-        let basename = std::path::Path::new(&info.comm)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let command_basename = info
-            .command
-            .split_whitespace()
-            .next()
-            .and_then(|name| std::path::Path::new(name).file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let is_cli = [
-            basename.trim_end_matches(".exe"),
-            command_basename.trim_end_matches(".exe"),
-        ]
-        .iter()
-        .any(|name| match provider {
-            "codex" => *name == "codex",
-            "claude" => ["claude", "claude-code"].contains(name),
-            "grok" => *name == "grok",
-            "junie" => *name == "junie",
+        let command = shlex::split(&info.command).and_then(|words| words.into_iter().next());
+        let basename = std::iter::once(info.comm.as_str())
+            .chain(command.as_deref())
+            .map(|value| {
+                value
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .find(|name| {
+                !name.is_empty()
+                    && !["sh", "bash", "zsh", "python", "python3", "env"]
+                        .contains(&name.trim_end_matches(".exe"))
+            })
+            .unwrap_or_default();
+        let is_cli = match provider {
+            "codex" => basename.trim_end_matches(".exe") == "codex",
+            "claude" => ["claude", "claude-code"].contains(&basename.trim_end_matches(".exe")),
+            "grok" => basename.trim_end_matches(".exe") == "grok",
+            "junie" => basename.trim_end_matches(".exe") == "junie",
             _ => false,
-        });
+        };
         if is_cli {
             return Some(AgentOrigin::surface(
                 provider,
@@ -388,5 +388,31 @@ mod tests {
             origin_from_processes("codex", &windows_cli).unwrap().label,
             "Codex CLI"
         );
+    }
+}
+
+#[cfg(test)]
+mod captured_parity {
+    use super::*;
+    #[test]
+    fn captured_python_process_and_environment_cases_match() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../resources/parity/python-origins.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            let provider = case["provider"].as_str().unwrap();
+            let actual = if let Some(env) = case.get("env") {
+                origin_from_environment(provider, &serde_json::from_value(env.clone()).unwrap())
+            } else {
+                origin_from_processes(
+                    provider,
+                    &serde_json::from_value::<Vec<ProcessInfo>>(case["processes"].clone()).unwrap(),
+                )
+            };
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                case["expected"],
+                "{case}"
+            );
+        }
     }
 }

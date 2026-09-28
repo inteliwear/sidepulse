@@ -683,6 +683,77 @@ mod tests {
     }
 
     #[test]
+    fn captured_python_configs_preserve_provider_behavior_across_upgrade_and_removal() {
+        fn normalize(value: &mut Value) {
+            match value {
+                Value::Object(fields) => {
+                    for (key, value) in fields {
+                        if key == "command"
+                            && value.as_str().is_some_and(|command| {
+                                command.contains("hook_entry.py")
+                                    || command.contains("sidepulse-next-hook")
+                            })
+                        {
+                            *value = json!("<managed>");
+                        } else {
+                            normalize(value);
+                        }
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        normalize(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn parse(provider: &str, text: &str) -> Value {
+            if provider == "codex" {
+                serde_json::to_value(toml::from_str::<toml::Value>(text).unwrap()).unwrap()
+            } else {
+                serde_json::from_str(text).unwrap()
+            }
+        }
+        let cases: Value =
+            serde_json::from_str(include_str!("../resources/parity/python-hook-configs.json"))
+                .unwrap();
+        for case in cases.as_array().unwrap() {
+            let provider = case["provider"].as_str().unwrap();
+            let directory = scratch_dir();
+            let config = directory.join("config");
+            let log = directory.join("events.jsonl");
+            let executable = directory.join("sidepulse-next-hook");
+            fs::write(&config, case["original"].as_str().unwrap()).unwrap();
+            let plan = |action| {
+                if provider == "codex" {
+                    plan_codex_hooks(&config, &log, &executable, action)
+                } else {
+                    plan_json_hooks(provider, &config, &log, &executable, action)
+                }
+                .unwrap()
+            };
+            let installed = plan(Action::Install);
+            let mut actual = parse(provider, &installed.updated);
+            normalize(&mut actual);
+            assert_eq!(actual, case["installed"], "install {provider}");
+            let applied = installed.apply().unwrap();
+            assert_eq!(
+                fs::read_to_string(applied.backup_path.unwrap()).unwrap(),
+                case["original"].as_str().unwrap()
+            );
+            assert!(!plan(Action::Install).changed, "idempotent {provider}");
+            let removed = plan(Action::Uninstall);
+            let mut actual = parse(provider, &removed.updated);
+            normalize(&mut actual);
+            assert_eq!(actual, case["removed"], "remove {provider}");
+            removed.apply().unwrap();
+            assert!(!plan(Action::Uninstall).changed, "removed {provider}");
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn install_keeps_unrelated_claude_hooks_and_is_idempotent() {
         let dir = scratch_dir();
         let config = dir.join("settings.json");

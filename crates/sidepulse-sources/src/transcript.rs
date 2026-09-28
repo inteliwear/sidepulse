@@ -1,13 +1,13 @@
 //! Optional Codex and Claude transcript recovery. These sources are opt-in,
 //! matching the Python settings defaults, and produce the same hook event model.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde_json::{Value, json};
 use sidepulse_core::{HookEvent, parse_log_line};
 
@@ -115,18 +115,40 @@ fn recent_files(root: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
         .collect())
 }
 
+// Python accepts naive ISO timestamps as UTC and uses the current time when
+// a transcript omits or corrupts a timestamp. Keep those rows recoverable.
+fn transcript_timestamp(value: Option<&Value>, fallback: DateTime<Utc>) -> DateTime<Utc> {
+    let Some(text) = value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return fallback;
+    };
+    if let Ok(time) = DateTime::parse_from_rfc3339(text) {
+        return time.with_timezone(&Utc);
+    }
+    for format in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(time) = NaiveDateTime::parse_from_str(text, format) {
+            return time.and_utc();
+        }
+    }
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .ok()
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map_or(fallback, |time| time.and_utc())
+}
+
 fn load_file(provider: &str, path: &Path) -> io::Result<Vec<HookEvent>> {
     let Some(session_id) = session_id(path) else {
         return Ok(Vec::new());
     };
-    let mut lines = VecDeque::with_capacity(MAX_LINES);
-    for line in BufReader::new(File::open(path)?).lines() {
-        let line = line?;
-        if lines.len() == MAX_LINES {
-            lines.pop_front();
-        }
-        lines.push_back(line);
-    }
+    let lines = crate::read_recent_lines(&mut File::open(path)?, MAX_LINES)?;
     let mut events = Vec::new();
     let mut cwd: Option<String> = None;
     let mut turn_id: Option<String> = None;
@@ -137,12 +159,7 @@ fn load_file(provider: &str, path: &Path) -> io::Result<Vec<HookEvent>> {
         let Some(object) = row.as_object() else {
             continue;
         };
-        let timestamp = object
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-            .map(|time| time.with_timezone(&Utc));
-        let Some(timestamp) = timestamp else { continue };
+        let timestamp = transcript_timestamp(object.get("timestamp"), Utc::now());
         let event = if provider == "codex-transcripts" {
             let Some(payload) = object.get("payload").and_then(Value::as_object) else {
                 continue;
@@ -319,7 +336,10 @@ fn claude_event(
                     }),
                 );
             }
-            if row.get("toolUseResult").is_some() {
+            if row
+                .get("toolUseResult")
+                .is_some_and(|value| !value.is_null())
+            {
                 return event(
                     "claude",
                     if response_failed(row.get("toolUseResult")) {
@@ -483,6 +503,29 @@ fn session_id(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn python_timestamp_fallback_and_naive_utc_rows_remain_recoverable() {
+        let expected = DateTime::parse_from_rfc3339("2026-09-27T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for value in [
+            json!("2026-09-27T12:00:00"),
+            json!("2026-09-27 12:00:00"),
+            json!("2026-09-27T12:00"),
+            json!(" 2026-09-27T14:00:00+02:00 "),
+        ] {
+            assert_eq!(transcript_timestamp(Some(&value), Utc::now()), expected);
+        }
+        for value in [json!("broken"), json!(""), Value::Null, json!(123)] {
+            assert_eq!(transcript_timestamp(Some(&value), expected), expected);
+        }
+        assert_eq!(transcript_timestamp(None, expected), expected);
+        assert_eq!(
+            transcript_timestamp(Some(&json!("2026-09-27")), expected),
+            DateTime::parse_from_rfc3339("2026-09-27T00:00:00Z").unwrap()
+        );
+    }
+
     use super::*;
     use tempfile::tempdir;
 
@@ -542,5 +585,41 @@ mod tests {
                 .collect::<Vec<_>>()[..3],
             &["UserPromptSubmit", "PreToolUse", "PostToolUseFailure"]
         );
+    }
+}
+
+#[cfg(test)]
+mod captured_parity {
+    use super::*;
+    #[test]
+    fn captured_python_transcript_events_match() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../resources/parity/python-transcripts.json"))
+                .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("12345678-1234-1234-1234-123456789abc.jsonl");
+        let timestamp = DateTime::parse_from_rfc3339("2026-09-27T12:00:00Z")
+            .unwrap()
+            .timestamp();
+        for case in cases.as_array().unwrap() {
+            fs::write(&path, format!("{}\n", case["row"])).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp as u64),
+                ))
+                .unwrap();
+            let events = load_file(
+                &format!("{}-transcripts", case["provider"].as_str().unwrap()),
+                &path,
+            )
+            .unwrap();
+            let actual:Vec<_>=events.iter().map(|event|json!({"provider":event.provider,"event_name":event.event_name,"session_id":event.session_id,"turn_id":event.turn_id,"cwd":event.cwd,"tool_name":event.tool_name,"message":event.message})).collect();
+            assert_eq!(json!(actual), case["expected"], "{case}");
+        }
     }
 }

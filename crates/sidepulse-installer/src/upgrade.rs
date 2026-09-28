@@ -115,7 +115,13 @@ pub(crate) fn files(root: &Path, relative: &Path, result: &mut Vec<PathBuf>) -> 
 }
 fn snapshot(root: &Path) -> io::Result<Vec<DataFile>> {
     let mut paths = Vec::new();
-    for path in ["settings.json", "links.json", "relay.json", "state"] {
+    for path in [
+        "settings.json",
+        "links.json",
+        "relay.json",
+        "state",
+        "animations",
+    ] {
         files(root, Path::new(path), &mut paths)?;
     }
     paths.sort();
@@ -143,7 +149,13 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 fn copy_data(root: &Path, data: &[DataFile]) -> io::Result<()> {
     // Only used on unpublished temporary trees. Remove deleted runtime files too.
-    for relative in ["settings.json", "links.json", "relay.json", "state"] {
+    for relative in [
+        "settings.json",
+        "links.json",
+        "relay.json",
+        "state",
+        "animations",
+    ] {
         let path = root.join(relative);
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_dir() => fs::remove_dir_all(path)?,
@@ -586,6 +598,8 @@ mod tests {
                 b"unknown log fields\n",
             )
             .unwrap();
+            fs::create_dir_all(root.join("animations")).unwrap();
+            fs::write(root.join("animations/custom.LED"), b"#00FF80").unwrap();
             Self {
                 _directory: directory,
                 root,
@@ -624,6 +638,7 @@ mod tests {
         fs::write(f.root.join("settings.json"), b"{\"unknown\":\"latest\"}\n").unwrap();
         fs::remove_file(f.root.join("links.json")).unwrap();
         fs::write(f.root.join("state/new.log"), b"latest history\n").unwrap();
+        fs::write(f.root.join("animations/custom.LED"), b"#FF0080").unwrap();
         let latest = snapshot(&f.root).unwrap();
         RollbackPlan::new(&f.root, &f.backup, &f.saved)
             .unwrap()

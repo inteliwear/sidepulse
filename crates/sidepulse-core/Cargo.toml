@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+shlex = "2"
 chrono.workspace = true
 regex.workspace = true
 serde.workspace = true

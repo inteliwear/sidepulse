@@ -31,6 +31,27 @@ an explicit operation. Review the emitted plan, then run the same command withou
 `--dry-run`. Status bar startup uses `status-bar install`. Updates require the
 selected service to be stopped; run replacement from outside that preview.
 
+## Import an existing Python setup
+
+Import is explicit and targets a new preview. Review the list before creating it:
+
+```sh
+./bin/sidepulse setup --source-dir . --stage-dir /chosen/preview \
+  --import-config /captured/sidepulse-config --import-logs /captured/agent-logs --dry-run
+```
+
+Remove `--dry-run` to create the preview. The config directory supplies raw
+`settings.json`, `links.json`, and `animations/*.LED`; the logs directory supplies
+`codex.jsonl`, `claude.jsonl`, `grok.jsonl`, `cursor.jsonl`, and `junie.jsonl` when
+present. Unknown JSON fields and saved profiles are retained. Source files are
+checked again before publication and remain unchanged. Invalid JSON, symlinks,
+unexpected animation entries, and oversized files are rejected.
+
+The preview keeps its disabled default relay configuration. Hook installation,
+startup registration, physical output, and power management require separate
+explicit operations. Updating or rolling back a preview retains the latest raw
+settings, links, animation assets, relay configuration, and runtime state.
+
 ## Mac signing and installer
 
 ```sh

@@ -111,7 +111,7 @@ pub fn load_recent_events(sources: &[SourceSpec], max_lines: usize) -> io::Resul
 /// Seek backward until every selected line has its start, leaving older log
 /// bytes unread. The final partial line is retained for the JSON parser to
 /// reject or accept, matching the previous forward reader.
-fn read_recent_lines(file: &mut File, max_lines: usize) -> io::Result<Vec<String>> {
+pub(crate) fn read_recent_lines(file: &mut File, max_lines: usize) -> io::Result<Vec<String>> {
     if max_lines == 0 {
         return Ok(Vec::new());
     }
@@ -125,8 +125,11 @@ fn read_recent_lines(file: &mut File, max_lines: usize) -> io::Result<Vec<String
     let target_newlines = max_lines.saturating_add(usize::from(last[0] == b'\n'));
     let mut newline_count = 0;
     let mut chunks = Vec::new();
-    while position > 0 && newline_count < target_newlines {
-        let size = position.min(64 * 1024) as usize;
+    let mut consumed = 0;
+    const MAX_REPLAY_BYTES: usize = 16 * 1024 * 1024;
+    while position > 0 && newline_count < target_newlines && consumed < MAX_REPLAY_BYTES {
+        let size = (position.min(64 * 1024) as usize).min(MAX_REPLAY_BYTES - consumed);
+        consumed += size;
         position -= size as u64;
         file.seek(SeekFrom::Start(position))?;
         let mut chunk = vec![0; size];
@@ -143,13 +146,15 @@ fn read_recent_lines(file: &mut File, max_lines: usize) -> io::Result<Vec<String
     if bytes.last() == Some(&b'\n') {
         lines.pop();
     }
+    if position > 0 {
+        lines.remove(0);
+    }
     let start = lines.len().saturating_sub(max_lines);
     lines[start..]
         .iter()
         .map(|line| {
             let line = line.strip_suffix(b"\r").unwrap_or(line);
-            String::from_utf8(line.to_vec())
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+            Ok(String::from_utf8_lossy(line).into_owned())
         })
         .collect()
 }
@@ -185,6 +190,19 @@ mod tests {
         );
         assert_eq!(with_cursor.len(), 5);
         assert_eq!(with_cursor[3].path, PathBuf::from("/logs/cursor.jsonl"));
+    }
+
+    #[test]
+    fn replay_caps_an_oversized_row_and_replaces_invalid_utf8_like_python() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.jsonl");
+        let mut bytes = vec![b'x'; 17 * 1024 * 1024];
+        bytes.extend_from_slice(b"\ncomplete\ninvalid \xff\n");
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            read_recent_lines(&mut File::open(&path).unwrap(), 500).unwrap(),
+            ["complete", "invalid \u{fffd}"]
+        );
     }
 
     #[test]

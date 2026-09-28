@@ -4439,6 +4439,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 

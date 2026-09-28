@@ -1,6 +1,7 @@
 //! Native preview staging, explicit startup management, and reversible updates.
 //! Preview operations keep separate paths from the installed Python application.
 
+pub mod legacy;
 pub mod package;
 pub mod startup;
 pub mod upgrade;
@@ -79,6 +80,7 @@ pub struct StageManifest {
 pub struct StagePlan {
     source_dir: PathBuf,
     manifest: StageManifest,
+    imported: Option<legacy::LegacyImport>,
 }
 
 impl StagePlan {
@@ -151,6 +153,7 @@ impl StagePlan {
         };
         Ok(Self {
             source_dir,
+            imported: None,
             manifest: StageManifest {
                 schema_version: 1,
                 platform,
@@ -176,6 +179,15 @@ impl StagePlan {
         &self.manifest
     }
 
+    pub fn with_legacy_import(mut self, imported: legacy::LegacyImport) -> Self {
+        self.imported = Some(imported);
+        self
+    }
+    pub fn imported_files(&self) -> &[PathBuf] {
+        self.imported
+            .as_ref()
+            .map_or(&[], |import| import.files.as_slice())
+    }
     pub fn stage(&self) -> io::Result<&StageManifest> {
         let final_dir = &self.manifest.stage_dir;
         if fs::symlink_metadata(final_dir).is_ok() {
@@ -185,6 +197,9 @@ impl StagePlan {
             ));
         }
         let temporary = self.prepare()?;
+        if let Some(imported) = &self.imported {
+            imported.check()?;
+        }
         fs::rename(temporary.path(), final_dir)?;
         Ok(&self.manifest)
     }
@@ -280,6 +295,9 @@ impl StagePlan {
         manifest_file.write_all(b"\n")?;
         manifest_file.sync_all()?;
         drop(manifest_file);
+        if let Some(imported) = &self.imported {
+            imported.copy(temporary.path())?;
+        }
         Ok(temporary)
     }
 }

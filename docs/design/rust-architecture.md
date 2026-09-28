@@ -346,17 +346,18 @@ below. Runtime UI and physical device validation remain outstanding.
 
 ## Remaining work, in delivery order
 
-1. Finish captured source parity: transcript edge cases, process ancestry,
-   Junie cases, and Python-to-Rust transition comparisons.
-2. Verify native hook installation and removal against captured real configs
-   for all five providers, preserving unrelated configuration and backups.
+1. Verify provider hook activation in real clients. Captured process ancestry,
+   transcript events, and Python-to-Rust transitions now pass across all providers.
+2. Complete the latest three-platform build/package checks. Captured install/removal
+   documents for all five providers preserve unrelated configuration and backups.
 3. Finish native visual checks for tray,
    settings, session opening, virtual display, and window placement.
 4. Verify portable packages, platform signatures, and root-owned helper
    installation. Preview startup and native update/rollback are implemented.
 5. Validate real devices and Windows/Linux native UI behavior.
-6. Verify migration from a captured Python setup, then switch hook and state
-   ownership only after the delivery gates pass.
+6. Switch hook and state ownership only after the delivery gates pass.
+   Explicit import of a captured Python setup preserves saved custom assets,
+   profiles, settings, links, and provider logs in an isolated preview.
 
 ## Portable local reply classifier
 
@@ -649,7 +650,7 @@ smoke checks now exercise those entry points and require graceful service exit.
 prepares all nine native binaries, aliases, application bundles, and launch files
 in a sibling temporary directory. The selected service must be stopped before
 replacement. Its endpoint and startup paths remain stable. Raw `settings.json`,
-`links.json`, `relay.json`, and all ordinary files under `state/` are retained,
+`links.json`, `relay.json`, named `animations/` assets, and all ordinary files under `state/` are retained,
 including unknown settings and log fields. State is bounded to 128 MiB and
 10,000 files; symlinks and special files are refused, except stale IPC sockets.
 Unknown files elsewhere in the old bundle remain in the backup.
@@ -758,3 +759,22 @@ tests pass without microphone capture, an external scoreboard request, or real
 LED writes. Live capture is compiled in CI on all three platforms; actual audio
 hardware and permission behavior remain unverified. The classifier benchmark
 was already ported in `sidepulse-reply`.
+
+
+## Captured compatibility and explicit import
+
+The Rust tests now exercise 75 origin cases and 20 transcript cases captured from
+Python, plus 35 transition sequences and install/remove documents for all five
+provider configurations.
+They compare event routing, context, error handling, provider hook shapes, saved
+unrelated entries, and backups. Bounded transcript replay retains the newest
+complete rows, replaces invalid UTF-8 like Python, and accepts naive timestamps
+as UTC with the same missing/invalid timestamp fallback.
+
+`setup --import-config DIR --import-logs DIR` first produces a reviewable list
+with `--dry-run`, then copies raw settings, phone links, custom LED assets, and
+provider logs into a new isolated preview. A contract test loads the imported
+custom animation and saved profile through the headless service. Unknown fields
+are retained and sources are checked before publication. Legacy relay activation
+is excluded from this initial import. Updates and rollback now retain named
+animation files alongside the latest runtime documents.

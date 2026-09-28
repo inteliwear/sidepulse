@@ -339,7 +339,8 @@ impl StartupPlan {
         let label = "io.sidepulse.next.sd-guard.system".to_owned();
         let path = directory.join(format!("{label}.plist"));
         let command = vec![
-            root.join("bin/sidepulse-next-sd-guard")
+            root.join("bin")
+                .join("sidepulse-next-sd-guard")
                 .to_string_lossy()
                 .into_owned(),
         ];
@@ -874,9 +875,10 @@ mod tests {
             StartupPlan::system_guard_at(&root, &launchd, Operation::Install, false).unwrap();
         assert!(plan.system);
         assert!(plan.contents.contains("<string>root</string>"));
+        let executable = root.join("bin").join("sidepulse-next-sd-guard");
         assert!(
             plan.contents
-                .contains("immutable payload/bin/sidepulse-next-sd-guard")
+                .contains(&xml_escape(&executable.to_string_lossy()))
         );
         assert!(plan.probe.args[1].starts_with("system/"));
         assert!(
