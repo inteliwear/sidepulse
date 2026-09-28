@@ -3450,6 +3450,7 @@ name = "sidepulse-cli"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ctrlc",
  "interprocess",
  "serde_json",
  "sidepulse-core",

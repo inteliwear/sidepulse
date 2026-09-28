@@ -23,6 +23,7 @@ pub struct Plan {
     pub changed: bool,
     pub installed: bool,
     pub rule: String,
+    #[cfg(any(target_os = "macos", test))]
     #[serde(skip)]
     original: Option<Vec<u8>>,
 }
@@ -86,6 +87,7 @@ pub fn plan(path: &Path, user: &str, operation: Operation) -> io::Result<Plan> {
         changed,
         installed,
         rule,
+        #[cfg(any(target_os = "macos", test))]
         original,
     })
 }

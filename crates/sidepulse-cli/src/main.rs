@@ -27,6 +27,12 @@ fn main() -> ExitCode {
                 let _ = sidepulse_cli::run_hook(args);
                 ExitCode::SUCCESS
             }
+            Some("leds") => sidepulse_cli::run_leds("agent", args),
+            Some("status-bar") => sidepulse_cli::run_status_bar(args),
+            Some("version") if args.next().is_none() => {
+                println!("sidepulse-next {}", env!("CARGO_PKG_VERSION"));
+                ExitCode::SUCCESS
+            }
             Some("status") => sidepulse_cli::run_status(args),
             Some("watch" | "live") => sidepulse_cli::run_watch(args),
             Some("doctor") => sidepulse_cli::run_doctor(args),

@@ -693,6 +693,11 @@ impl Service {
         Ok(())
     }
 
+    pub fn update_battery_snapshot(&self, snapshot: BatterySnapshot) -> io::Result<()> {
+        self.accept_battery(snapshot.led_state(), Instant::now())?;
+        *self.battery_diagnostics.lock().map_err(poisoned)? = Some(snapshot);
+        Ok(())
+    }
     pub fn sync_device(&self) -> io::Result<Option<bool>> {
         let battery = self.battery_preview.lock().map_err(poisoned)?.latest;
         self.render_device_with_battery_at(battery, Instant::now())
@@ -912,6 +917,63 @@ impl Service {
             );
         }
         match request.kind {
+            RequestKind::RenderLedProgram {
+                source,
+                led_count,
+                full_watts,
+            } => {
+                let result = (|| -> io::Result<String> {
+                    if source == "agent" {
+                        return Ok(sidepulse_device::program_for_mode(
+                            self.snapshot()?.aggregate.mode,
+                            usize::from(led_count),
+                            255,
+                        ));
+                    }
+                    let saved_baseline = self
+                        .settings
+                        .lock()
+                        .map_err(poisoned)?
+                        .as_ref()
+                        .and_then(SettingsStore::battery_full_charge_watts);
+                    let baseline = match &full_watts {
+                        Some(sidepulse_core::ChargerBaseline::Auto) => None,
+                        Some(sidepulse_core::ChargerBaseline::Watts { watts }) => Some(*watts),
+                        None => saved_baseline,
+                    };
+                    let battery = if full_watts.is_some() {
+                        read_battery_snapshot(baseline)?
+                    } else {
+                        self.battery_diagnostics
+                            .lock()
+                            .map_err(poisoned)?
+                            .clone()
+                            .map_or_else(|| read_battery_snapshot(baseline), Ok)?
+                    };
+                    let mut state = battery.led_state().ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, "no battery is present")
+                    })?;
+                    if let Some(watts) = baseline {
+                        state.full_charge_watts = watts;
+                    }
+                    Ok(program_for_battery(state, usize::from(led_count), 360, 255))
+                })();
+                let payload = result.map_or_else(
+                    |error| ServerPayload::Error {
+                        code: "led_program_failed".into(),
+                        message: error.to_string(),
+                    },
+                    |program| ServerPayload::LedProgram { program },
+                );
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
+            }
             RequestKind::Animations => {
                 let payload = self
                     .settings
@@ -2008,14 +2070,8 @@ pub fn run_with_options(endpoint: &str, options: RunOptions<'_>) -> io::Result<(
         std::thread::spawn(move || {
             let mut last_error = None;
             loop {
-                let result = read_battery_snapshot(None).and_then(|battery| {
-                    battery_service.accept_battery(battery.led_state(), Instant::now())?;
-                    *battery_service
-                        .battery_diagnostics
-                        .lock()
-                        .map_err(poisoned)? = Some(battery);
-                    Ok(())
-                });
+                let result = read_battery_snapshot(None)
+                    .and_then(|battery| battery_service.update_battery_snapshot(battery));
                 match result {
                     Ok(()) => last_error = None,
                     Err(error) => {

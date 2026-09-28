@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
+pub(super) fn request(endpoint: &str, kind: RequestKind) -> Result<ServerPayload, String> {
     let request = ClientRequest {
         version: PROTOCOL_VERSION,
         request_id: 1,

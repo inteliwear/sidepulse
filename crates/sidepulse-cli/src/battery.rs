@@ -11,6 +11,7 @@ use sidepulse_device::battery_diagnostics::{BatterySnapshot, read_battery_snapsh
 
 pub fn run_battery(mut args: impl Iterator<Item = String>) -> ExitCode {
     match args.next().as_deref() {
+        Some("leds") => crate::run_leds("battery", args),
         Some("status") => run_status(args),
         Some("configure") => run_configure(args),
         _ => {
@@ -66,7 +67,7 @@ fn run_status(mut args: impl Iterator<Item = String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn parse_full_watts(value: &str) -> Result<ChargerBaseline, &'static str> {
+pub(super) fn parse_full_watts(value: &str) -> Result<ChargerBaseline, &'static str> {
     let value = value.trim().to_lowercase();
     if ["", "auto", "default"].contains(&value.as_str()) {
         Ok(ChargerBaseline::Auto)

@@ -41,6 +41,13 @@ fn manual_delivery_and_saved_phone_links_are_owned_by_the_service() {
     service.configure_phone_links(&links).unwrap();
     service.configure_settings(&settings).unwrap();
     service.configure_device(&target, 173).unwrap();
+    service
+        .update_battery_snapshot(sidepulse_device::battery_diagnostics::BatterySnapshot {
+            percent: 50,
+            battery_present: true,
+            ..Default::default()
+        })
+        .unwrap();
     let listener = sidepulse_ipc::bind(&endpoint).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_server = stop.clone();
@@ -130,6 +137,57 @@ fn manual_delivery_and_saved_phone_links_are_owned_by_the_service() {
     );
     assert_eq!(fs::read_to_string(device.join("TEST.LED")).unwrap(), "off");
     assert_eq!(fs::read_to_string(&target).unwrap(), "#00E5FF");
+    let dot = dir.path().join("SidePulseDot");
+    fs::create_dir(&dot).unwrap();
+    let preview = run(
+        "agent-monitor",
+        &[
+            "leds",
+            "--once",
+            "--dry-run",
+            "--device",
+            dot.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(
+        preview["program"],
+        sidepulse_device::program_for_mode(sidepulse_core::AgentMode::IdleReady, 2, 255)
+    );
+    assert!(!dot.join(sidepulse_device::DEFAULT_FILE_NAME).exists());
+    let mirrored = run(
+        "battery",
+        &[
+            "leds",
+            "--once",
+            "--device",
+            dot.to_str().unwrap(),
+            "--file-name",
+            "BATTERY.LED",
+        ],
+    );
+    assert!(
+        mirrored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mirrored.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(dot.join("BATTERY.LED")).unwrap(),
+        sidepulse_device::battery::program_for_battery(
+            sidepulse_device::battery::BatteryState {
+                percent: 50,
+                ..Default::default()
+            },
+            2,
+            360,
+            255
+        )
+    );
     let removed = run("phone-link", &["remove", "abababababab"]);
     assert!(removed.status.success());
     let saved: Value = serde_json::from_slice(&fs::read(links).unwrap()).unwrap();

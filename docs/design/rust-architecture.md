@@ -546,3 +546,19 @@ missing helpers, delay, explicit retry, failed restoration and recovery without
 invoking power commands. A real read-only SD session check passed locally.
 System helper installation, actual sleep changes and eject protection remain
 inactive in the preview.
+
+## Agent and battery LED CLI loops
+
+`agent-monitor leds` and `battery leds` now use the Rust service to select a
+destination, render a program for its two- or eight-LED size, and perform manual
+delivery. They support explicit devices, filenames, dry runs, one-shot output,
+refresh intervals and graceful interruption. Unchanged programs are suppressed
+between refreshes. Battery output uses the saved charger baseline or an explicit
+`--full-watts` override; explicit `auto` is distinct from an omitted option.
+Agent CLI output retains the legacy default animation palette.
+
+Portable real CLI/IPC tests verify a two-LED agent preview without writing and
+a battery program written to an explicit custom filename. The shared service
+continues to own the monitor, battery snapshot and device write. The optional
+per-provider log flags on a detached LED loop still need compatibility work;
+the Rust route currently selects the service through its explicit endpoint.

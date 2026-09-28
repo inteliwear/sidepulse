@@ -4,6 +4,7 @@ mod doctor;
 mod helpers;
 mod hook_config;
 mod hook_impl;
+mod leds;
 mod relay_link;
 mod status;
 
@@ -18,3 +19,5 @@ pub use status::run_watch;
 pub use delivery::{run_delivery, run_phone_link};
 
 pub use helpers::{run_sd_guard, run_status_bar};
+
+pub use leds::run_leds;

@@ -25,6 +25,11 @@ pub enum RequestKind {
     RetryPowerControl,
     Devices,
     Animations,
+    RenderLedProgram {
+        source: String,
+        led_count: u8,
+        full_watts: Option<ChargerBaseline>,
+    },
     AnimationLibrary,
     EditAnimationLibrary {
         edit: crate::AnimationLibraryEdit,
@@ -143,6 +148,9 @@ pub struct ServerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerPayload {
+    LedProgram {
+        program: String,
+    },
     PowerControl {
         status: crate::PowerControlStatus,
     },
@@ -380,6 +388,18 @@ impl ClientRequest {
             && !matches!(mode.as_str(), "agent" | "battery" | "custom")
         {
             return Err("invalid display mode");
+        }
+        if let RequestKind::RenderLedProgram {
+            source,
+            led_count,
+            full_watts,
+        } = &self.kind
+            && (!matches!(source.as_str(), "agent" | "battery")
+                || !matches!(led_count, 2 | 8)
+                || full_watts.as_ref().is_some_and(|baseline|matches!(baseline,ChargerBaseline::Watts {watts} if !watts.is_finite() || *watts<1.0))
+                || (source == "agent" && full_watts.is_some()))
+        {
+            return Err("invalid LED source or dimensions");
         }
         if let RequestKind::Deliver { request } = &self.kind {
             request.validate()?;
