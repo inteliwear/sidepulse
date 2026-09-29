@@ -1,0 +1,695 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::{AgentMode, MonitorSnapshot, PowerSnapshot, SessionAction, SessionOpenOption};
+
+/// IPC data model shared by the service, CLI, and platform UI adapters.
+/// Each JSON message occupies one line and is limited to 1 MiB on the wire.
+pub const PROTOCOL_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClientRequest {
+    pub version: u16,
+    pub request_id: u64,
+    #[serde(flatten)]
+    pub kind: RequestKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum RequestKind {
+    HookSetup,
+    ConfigureHooks {
+        provider: String,
+        install: bool,
+        #[serde(default)]
+        dry_run: bool,
+    },
+    Diagnostics,
+    ExportDiagnostics {
+        format: crate::DiagnosticFormat,
+    },
+    Shutdown,
+    Snapshot,
+    Settings,
+    Power,
+    PowerControl,
+    RetryPowerControl,
+    Devices,
+    Animations,
+    RenderLedProgram {
+        source: String,
+        led_count: u8,
+        full_watts: Option<ChargerBaseline>,
+    },
+    PreviewAnimation {
+        state: String,
+        program: Option<String>,
+        seconds: u8,
+    },
+    AnimationLibrary,
+    EditAnimationLibrary {
+        edit: crate::AnimationLibraryEdit,
+    },
+    ExportAnimationProfile {
+        id: Option<String>,
+    },
+    SetLidAnimationTiming {
+        open_seconds: Option<f64>,
+        close_seconds: Option<f64>,
+    },
+    SetAnimationState {
+        state: String,
+        style: String,
+        custom_program: Option<String>,
+    },
+    VirtualDisplay,
+    History,
+    RelaySettings,
+    PhoneLinks,
+    SetPhoneDisplay {
+        id: String,
+        display: String,
+    },
+    RegisterPhone {
+        token: String,
+        name: String,
+        server: Option<String>,
+    },
+    RemovePhone {
+        id: String,
+    },
+    BeginPhonePairing {
+        server: Option<String>,
+    },
+    CancelPhonePairing,
+    ReloadPhoneLinks,
+    DeliveryStatus {
+        id: String,
+    },
+    Deliver {
+        request: crate::DeliveryRequest,
+    },
+    SetRelaySettings {
+        patch: crate::RelaySettingsPatch,
+    },
+    ReloadRelaySettings,
+    SessionTargets {
+        agent_id: String,
+        action: Option<SessionAction>,
+    },
+    SetSessionOpenPreference {
+        provider: String,
+        origin: Option<String>,
+        action: SessionAction,
+    },
+    SetSessionTerminal {
+        terminal: String,
+        custom_path: Option<String>,
+    },
+    SetHistoryTimeframe {
+        seconds: u32,
+    },
+    SetVirtualDisplay {
+        patch: VirtualDisplaySettingsPatch,
+    },
+    SetAgentAnimation {
+        mode: AgentMode,
+        style: String,
+        custom_program: Option<String>,
+    },
+    SelectDevice {
+        root: String,
+    },
+    SetBrightness {
+        brightness: u8,
+    },
+    SetDisplayMode {
+        mode: String,
+    },
+    SetTrayVisibility {
+        visible: bool,
+    },
+    SetBatterySettings {
+        patch: BatterySettingsPatch,
+    },
+    SetAgentListSettings {
+        patch: AgentListSettingsPatch,
+    },
+    SetSleepSettings {
+        patch: SleepSettingsPatch,
+    },
+    SetSleepPolicy {
+        policy: String,
+    },
+    SetTranscriptMonitoring {
+        provider: String,
+        enabled: bool,
+    },
+    Subscribe,
+    IngestHook {
+        provider: String,
+        line: Value,
+    },
+    IngestRelay {
+        message: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerMessage {
+    pub version: u16,
+    /// Unsolicited subscription updates have no request ID.
+    pub request_id: Option<u64>,
+    #[serde(flatten)]
+    pub payload: ServerPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerPayload {
+    HookSetup {
+        status: crate::HookSetupStatus,
+    },
+    HooksConfigured {
+        provider: String,
+        install: bool,
+        changed: bool,
+        backup_path: Option<String>,
+        trust_review_required: bool,
+        dry_run: bool,
+    },
+    Diagnostics {
+        status: crate::DiagnosticsStatus,
+    },
+    DiagnosticsExported {
+        path: String,
+        events: usize,
+    },
+    LedProgram {
+        program: String,
+    },
+    PowerControl {
+        status: crate::PowerControlStatus,
+    },
+    DeliveryJob {
+        job: crate::DeliveryJobView,
+    },
+    PhoneLinks {
+        configured: bool,
+        output_enabled: bool,
+        links: Vec<crate::PhoneLinkSummary>,
+        pairing: Option<crate::PhonePairingView>,
+    },
+    Delivery {
+        outcomes: Vec<crate::DeliveryOutcome>,
+    },
+    RelaySettings {
+        settings: crate::RelaySettings,
+    },
+    AnimationLibrary {
+        library: crate::AnimationLibrary,
+    },
+    AnimationProfileDocument {
+        document: crate::AnimationProfileDocument,
+    },
+    Snapshot {
+        state: MonitorSnapshot,
+    },
+    Settings {
+        settings: Value,
+        active_device: Option<String>,
+        brightness: Option<u8>,
+        display_mode: Option<String>,
+    },
+    Power {
+        snapshot: PowerSnapshot,
+    },
+    Devices {
+        devices: Vec<DeviceInfo>,
+        active_device: Option<String>,
+    },
+    Animations {
+        choices: Vec<AnimationChoice>,
+        states: Vec<AgentAnimationState>,
+    },
+    VirtualDisplay {
+        frame: VirtualDisplayFrame,
+    },
+    History {
+        points: Vec<HistoryPoint>,
+        timeframe_seconds: u32,
+        sampled: bool,
+    },
+    SessionTargets {
+        options: Vec<SessionOpenOption>,
+        selected: Option<SessionAction>,
+        terminal: String,
+        custom_terminal_path: String,
+    },
+    StateChanged {
+        state: MonitorSnapshot,
+    },
+    Ack,
+    Error {
+        code: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub root: String,
+    pub target: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnimationChoice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentAnimationState {
+    pub mode: AgentMode,
+    pub style: String,
+    pub program: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VirtualDisplaySettingsPatch {
+    pub enabled: Option<bool>,
+    pub brightness: Option<u8>,
+    pub display: Option<String>,
+}
+
+impl VirtualDisplaySettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .display
+            .as_deref()
+            .is_some_and(|display| !matches!(display, "agent" | "battery" | "custom"))
+        {
+            Err("invalid virtual display mode")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VirtualDisplayFrame {
+    pub enabled: bool,
+    pub display: String,
+    pub pixels: Vec<[u8; 3]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPoint {
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
+    pub agent_status: AgentMode,
+    pub display_status: String,
+    pub battery_level: Option<f64>,
+    pub charger_power_watts: Option<f64>,
+    pub lid_closed: Option<bool>,
+    pub keep_awake_active: Option<bool>,
+    #[serde(default)]
+    pub keep_awake_requested: Option<bool>,
+    #[serde(default)]
+    pub mac_sleep_prevented: Option<bool>,
+}
+
+pub const HISTORY_TIMEFRAMES: [u32; 5] = [3600, 21600, 43200, 86400, 172800];
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChargerBaseline {
+    Auto,
+    Watts { watts: f64 },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BatterySettingsPatch {
+    pub display: Option<String>,
+    pub full_charge_watts: Option<ChargerBaseline>,
+    pub show_on_power_change: Option<bool>,
+    pub power_change_preview_seconds: Option<f64>,
+}
+
+impl BatterySettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .display
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "agent" | "battery" | "custom"))
+        {
+            return Err("invalid display mode");
+        }
+        if let Some(ChargerBaseline::Watts { watts }) = self.full_charge_watts
+            && (!watts.is_finite() || watts <= 0.0)
+        {
+            return Err("invalid charger wattage");
+        }
+        if self
+            .power_change_preview_seconds
+            .is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0)
+        {
+            return Err("invalid power-change preview duration");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentListSettingsPatch {
+    pub idle_timeout_seconds: Option<f64>,
+    pub recent_session_retention_seconds: Option<f64>,
+}
+
+impl AgentListSettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if [
+            self.idle_timeout_seconds,
+            self.recent_session_retention_seconds,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|seconds| !seconds.is_finite() || seconds < 0.0)
+        {
+            Err("invalid agent-list duration")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SleepSettingsPatch {
+    pub policy: Option<String>,
+    pub min_battery_percent: Option<f64>,
+}
+
+impl SleepSettingsPatch {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .policy
+            .as_deref()
+            .is_some_and(|policy| !matches!(policy, "never" | "agents" | "always"))
+        {
+            return Err("invalid sleep policy");
+        }
+        if self
+            .min_battery_percent
+            .is_some_and(|percent| !percent.is_finite() || !(0.0..=100.0).contains(&percent))
+        {
+            return Err("invalid sleep battery safeguard");
+        }
+        Ok(())
+    }
+}
+
+impl ClientRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != PROTOCOL_VERSION {
+            return Err("unsupported protocol version");
+        }
+        if let RequestKind::IngestHook { provider, line } = &self.kind
+            && (provider.is_empty() || !line.is_object())
+        {
+            return Err("invalid hook event");
+        }
+        if let RequestKind::IngestRelay { message } = &self.kind
+            && !message.is_object()
+        {
+            return Err("invalid relay event");
+        }
+        if let RequestKind::SetDisplayMode { mode } = &self.kind
+            && !matches!(mode.as_str(), "agent" | "battery" | "custom")
+        {
+            return Err("invalid display mode");
+        }
+        if let RequestKind::RenderLedProgram {
+            source,
+            led_count,
+            full_watts,
+        } = &self.kind
+            && (!matches!(source.as_str(), "agent" | "battery")
+                || !matches!(led_count, 2 | 8)
+                || full_watts.as_ref().is_some_and(|baseline|matches!(baseline,ChargerBaseline::Watts {watts} if !watts.is_finite() || *watts<1.0))
+                || (source == "agent" && full_watts.is_some()))
+        {
+            return Err("invalid LED source or dimensions");
+        }
+        if let RequestKind::Deliver { request } = &self.kind {
+            request.validate()?;
+        }
+        if let RequestKind::RegisterPhone {
+            token,
+            name,
+            server,
+        } = &self.kind
+            && (token.len() > 512
+                || name.trim().is_empty()
+                || name.len() > 512
+                || server.as_ref().is_some_and(|server| server.len() > 4096))
+        {
+            return Err("invalid phone registration");
+        }
+        if let RequestKind::DeliveryStatus { id } = &self.kind
+            && (id.is_empty() || id.len() > 128)
+        {
+            return Err("invalid delivery identifier");
+        }
+        if let RequestKind::SetPhoneDisplay { id, display } = &self.kind
+            && (id.is_empty()
+                || id.len() > 128
+                || !matches!(display.as_str(), "agent" | "battery" | "custom"))
+        {
+            return Err("invalid phone display");
+        }
+        if let RequestKind::RemovePhone { id } = &self.kind
+            && (id.is_empty() || id.len() > 128)
+        {
+            return Err("invalid phone identifier");
+        }
+        if let RequestKind::BeginPhonePairing { server } = &self.kind
+            && server.as_ref().is_some_and(|server| server.len() > 4096)
+        {
+            return Err("invalid pairing server");
+        }
+        if let RequestKind::SetRelaySettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetBatterySettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetVirtualDisplay { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetHistoryTimeframe { seconds } = &self.kind
+            && !HISTORY_TIMEFRAMES.contains(seconds)
+        {
+            return Err("invalid history timeframe");
+        }
+        if let RequestKind::SessionTargets { agent_id, .. } = &self.kind
+            && (agent_id.is_empty() || agent_id.len() > 4096)
+        {
+            return Err("invalid agent ID");
+        }
+        if let RequestKind::SetSessionOpenPreference {
+            provider, origin, ..
+        } = &self.kind
+            && (!matches!(
+                provider.as_str(),
+                "codex" | "claude" | "grok" | "junie" | "cursor"
+            ) || origin.as_ref().is_some_and(|origin| origin.len() > 512))
+        {
+            return Err("invalid session preference");
+        }
+        if let RequestKind::SetSessionTerminal {
+            terminal,
+            custom_path,
+        } = &self.kind
+            && (!matches!(
+                terminal.as_str(),
+                "terminal"
+                    | "iterm"
+                    | "ghostty"
+                    | "warp"
+                    | "kitty"
+                    | "wezterm"
+                    | "alacritty"
+                    | "custom"
+            ) || custom_path
+                .as_ref()
+                .is_some_and(|path| path.len() > 4096 || path.contains('\0')))
+        {
+            return Err("invalid terminal preference");
+        }
+        if let RequestKind::SetAgentListSettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetSleepSettings { patch } = &self.kind {
+            patch.validate()?;
+        }
+        if let RequestKind::SetSleepPolicy { policy } = &self.kind
+            && !matches!(policy.as_str(), "never" | "agents" | "always")
+        {
+            return Err("invalid sleep policy");
+        }
+        if let RequestKind::SetTranscriptMonitoring { provider, .. } = &self.kind
+            && !matches!(provider.as_str(), "codex" | "claude")
+        {
+            return Err("invalid transcript provider");
+        }
+        if let RequestKind::SelectDevice { root } = &self.kind
+            && root.is_empty()
+        {
+            return Err("invalid device root");
+        }
+        if let RequestKind::EditAnimationLibrary { edit } = &self.kind {
+            edit.validate()?;
+        }
+        if let RequestKind::ExportAnimationProfile { id: Some(id) } = &self.kind {
+            crate::validate_animation_id(id, "profile:")?;
+        }
+        if let RequestKind::SetLidAnimationTiming {
+            open_seconds,
+            close_seconds,
+        } = &self.kind
+            && [open_seconds, close_seconds]
+                .into_iter()
+                .flatten()
+                .any(|seconds| !seconds.is_finite() || !(0.1..=10.0).contains(seconds))
+        {
+            return Err("lid duration must be between 0.1 and 10 seconds");
+        }
+        if let RequestKind::PreviewAnimation {
+            state,
+            program,
+            seconds,
+        } = &self.kind
+            && (!crate::ANIMATION_STATES.contains(&state.as_str())
+                || !matches!(seconds, 3 | 10)
+                || program.as_ref().is_some_and(|program| {
+                    program.is_empty() || program.len() > 512 || program.lines().count() > 20
+                }))
+        {
+            return Err("invalid animation preview");
+        }
+        if let RequestKind::SetAnimationState {
+            state,
+            style,
+            custom_program,
+        } = &self.kind
+            && (!crate::ANIMATION_STATES.contains(&state.as_str())
+                || style.is_empty()
+                || style.len() > 128
+                || custom_program
+                    .as_ref()
+                    .is_some_and(|program| program.len() > 65536))
+        {
+            return Err("invalid animation state");
+        }
+        if let RequestKind::SetAgentAnimation {
+            style,
+            custom_program,
+            ..
+        } = &self.kind
+            && (style.is_empty()
+                || style.len() > 128
+                || custom_program
+                    .as_ref()
+                    .is_some_and(|program| program.len() > 65536))
+        {
+            return Err("invalid animation setting");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_device_payloads_without_optional_volume_label() {
+        let device: DeviceInfo = serde_json::from_str(
+            r#"{"root":"D:\\","target":"D:\\LEDS.LED","reason":"contains LEDS.LED"}"#,
+        )
+        .unwrap();
+        assert_eq!(device.label, None);
+    }
+
+    #[test]
+    fn round_trips_versioned_hook_request() {
+        let input = r#"{"version":1,"request_id":5,"command":"ingest_hook","provider":"codex","line":{"logged_at":"2026-09-26T12:00:00Z","event":{"hook_event_name":"Stop"}}}"#;
+        let request: ClientRequest = serde_json::from_str(input).unwrap();
+        assert_eq!(request.validate(), Ok(()));
+        assert_eq!(
+            serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
+                .unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_version_and_non_object_hook() {
+        let request = ClientRequest {
+            version: 2,
+            request_id: 0,
+            kind: RequestKind::Snapshot,
+        };
+        assert!(request.validate().is_err());
+        let request = ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 0,
+            kind: RequestKind::IngestHook {
+                provider: "claude".into(),
+                line: Value::Null,
+            },
+        };
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_only_supported_display_modes() {
+        let mut request = ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 1,
+            kind: RequestKind::SetDisplayMode {
+                mode: "battery".into(),
+            },
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetDisplayMode {
+            mode: "custom".into(),
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetDisplayMode {
+            mode: "invalid".into(),
+        };
+        assert_eq!(request.validate(), Err("invalid display mode"));
+        request.kind = RequestKind::SetSleepPolicy {
+            policy: "agents".into(),
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetSleepPolicy {
+            policy: "automatic".into(),
+        };
+        assert_eq!(request.validate(), Err("invalid sleep policy"));
+        request.kind = RequestKind::SetTranscriptMonitoring {
+            provider: "codex".into(),
+            enabled: true,
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.kind = RequestKind::SetTranscriptMonitoring {
+            provider: "cursor".into(),
+            enabled: true,
+        };
+        assert_eq!(request.validate(), Err("invalid transcript provider"));
+    }
+}

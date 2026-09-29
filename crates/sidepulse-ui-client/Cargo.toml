@@ -1,0 +1,20 @@
+[package]
+name = "sidepulse-ui-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }
+sidepulse-ui-model = { path = "../sidepulse-ui-model" }
+sidepulse-installer = { path = "../sidepulse-installer" }
+sidepulse-platform = { path = "../sidepulse-platform" }
+serde_json.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+interprocess = "2.4"
+tempfile = "3"

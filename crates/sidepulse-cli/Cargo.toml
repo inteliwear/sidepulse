@@ -1,0 +1,37 @@
+[package]
+name = "sidepulse-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sidepulse-next"
+path = "src/main.rs"
+
+[[bin]]
+name = "sidepulse-next-hook"
+path = "src/hook.rs"
+
+[dependencies]
+sidepulse-installer = { path = "../sidepulse-installer" }
+ctrlc = { version="3.5", features=["termination"] }
+sidepulse-helpers = {path="../sidepulse-helpers"}
+sidepulse-links = { path = "../sidepulse-links" }
+sidepulse-platform = { path = "../sidepulse-platform" }
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-device = { path = "../sidepulse-device" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }
+sidepulse-sources = { path = "../sidepulse-sources" }
+sidepulse-hook-config = { path = "../sidepulse-hook-config" }
+sidepulse-relay = { path = "../sidepulse-relay" }
+serde_json.workspace = true
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }
+
+[dev-dependencies]
+sidepulse-daemon = { path = "../sidepulse-daemon" }
+interprocess.workspace = true
+tempfile = "3"

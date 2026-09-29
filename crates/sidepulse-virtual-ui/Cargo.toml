@@ -1,0 +1,24 @@
+[package]
+name = "sidepulse-virtual-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+autobins = false
+
+[[bin]]
+name = "sidepulse-next-virtual"
+path = "src/virtual_main.rs"
+
+[dependencies]
+sidepulse-installer = { path = "../sidepulse-installer" }
+sidepulse-core = { path = "../sidepulse-core" }
+sidepulse-ipc = { path = "../sidepulse-ipc" }
+serde_json.workspace = true
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSScreen", "NSWindow", "NSView", "NSColor", "NSResponder", "NSGraphics"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSArray", "NSObject"] }
+raw-window-handle = "0.6"

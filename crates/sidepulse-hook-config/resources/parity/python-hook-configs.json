@@ -1,0 +1,701 @@
+[
+  {
+    "provider": "codex",
+    "original": "model = \"saved-model\"\n[features]\nhooks = false\n[[hooks.Stop]]\nmatcher = \"*\"\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = \"user-notify\"\n",
+    "installed": {
+      "model": "saved-model",
+      "features": {
+        "hooks": true
+      },
+      "hooks": {
+        "Stop": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-notify"
+              }
+            ]
+          },
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionStart": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PreToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PermissionRequest": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PreCompact": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostCompact": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "Interrupt": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>",
+                "timeout": 3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "removed": {
+      "model": "saved-model",
+      "features": {
+        "hooks": true
+      },
+      "hooks": {
+        "Stop": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-notify"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "provider": "claude",
+    "original": "{\"model\": \"saved-model\", \"future\": {\"value\": 7}, \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"user-guard\"}]}]}}",
+    "installed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          },
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionStart": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostToolUseFailure": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PermissionRequest": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "Notification": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PreCompact": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostCompact": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "matcher": "*",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "removed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "provider": "grok",
+    "original": "{\"model\": \"saved-model\", \"future\": {\"value\": 7}, \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"user-guard\"}]}]}}",
+    "installed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          },
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "PostToolUseFailure": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "PermissionDenied": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "Notification": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "PreCompact": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "PostCompact": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "StopFailure": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "removed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "provider": "cursor",
+    "original": "{\"model\": \"saved-model\", \"future\": {\"value\": 7}, \"hooks\": {\"stop\": [{\"command\": \"user-guard\"}]}}",
+    "installed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "stop": [
+          {
+            "command": "user-guard"
+          },
+          {
+            "command": "<managed>"
+          }
+        ],
+        "sessionStart": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "sessionEnd": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "beforeSubmitPrompt": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "preToolUse": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "beforeShellExecution": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "afterShellExecution": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "afterFileEdit": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "postToolUse": [
+          {
+            "command": "<managed>"
+          }
+        ],
+        "postToolUseFailure": [
+          {
+            "command": "<managed>"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "removed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "stop": [
+          {
+            "command": "user-guard"
+          }
+        ]
+      },
+      "version": 1
+    }
+  },
+  {
+    "provider": "junie",
+    "original": "{\"model\": \"saved-model\", \"future\": {\"value\": 7}, \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"user-guard\"}]}]}}",
+    "installed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          },
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "StopFailure": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "<managed>"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "removed": {
+      "model": "saved-model",
+      "future": {
+        "value": 7
+      },
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              {
+                "type": "command",
+                "command": "user-guard"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

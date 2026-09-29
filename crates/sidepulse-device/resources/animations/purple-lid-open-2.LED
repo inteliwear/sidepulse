@@ -1,0 +1,4 @@
+off 90ms cosine
+#FF00FF 180ms ease
+#FF00FF 220ms ease
+off 320ms ease-out

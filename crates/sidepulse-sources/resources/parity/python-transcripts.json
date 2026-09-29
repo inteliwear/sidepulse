@@ -1,0 +1,456 @@
+[
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "text": "fix the test"
+          },
+          {
+            "text": "please"
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "codex",
+        "event_name": "UserPromptSubmit",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": "fix the test\nplease"
+      }
+    ]
+  },
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "text": "Done."
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "codex",
+        "event_name": "Stop",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": "Done."
+      }
+    ]
+  },
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "name": "Bash",
+        "arguments": "{\"command\":\"pytest\"}",
+        "call_id": "call1"
+      }
+    },
+    "expected": [
+      {
+        "provider": "codex",
+        "event_name": "PreToolUse",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": "Bash",
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "output": "Exit code: 1",
+        "call_id": "call1"
+      }
+    },
+    "expected": [
+      {
+        "provider": "codex",
+        "event_name": "PostToolUse",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "task_complete",
+        "last_agent_message": "Which option?"
+      }
+    },
+    "expected": [
+      {
+        "provider": "codex",
+        "event_name": "Stop",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": "Which option?"
+      }
+    ]
+  },
+  {
+    "provider": "codex",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "response_item",
+      "payload": {
+        "type": "unknown"
+      }
+    },
+    "expected": []
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "cwd": "/repo",
+      "message": {
+        "content": "hello"
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "UserPromptSubmit",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": "hello"
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "text": "hi"
+          },
+          {
+            "text": "again"
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "UserPromptSubmit",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": "hi\nagain"
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "content": "ok"
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PostToolUse",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "is_error": true,
+            "content": "failed"
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PostToolUseFailure",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "content": {
+              "success": false
+            }
+          }
+        ]
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PostToolUseFailure",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": "prompt"
+      },
+      "isMeta": true
+    },
+    "expected": []
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": "prompt"
+      },
+      "toolUseResult": null
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "UserPromptSubmit",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": "prompt"
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": "prompt"
+      },
+      "toolUseResult": {
+        "success": false
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PostToolUseFailure",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": "prompt"
+      },
+      "toolUseResult": {
+        "exit_code": 0
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PostToolUse",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": null,
+        "tool_name": null,
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "assistant",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "tool_use",
+            "name": "Bash",
+            "id": "c",
+            "input": {
+              "command": "ls"
+            }
+          }
+        ],
+        "stop_reason": null
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "PreToolUse",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": "Bash",
+        "message": null
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "assistant",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Done."
+          }
+        ],
+        "stop_reason": "end_turn"
+      }
+    },
+    "expected": [
+      {
+        "provider": "claude",
+        "event_name": "Stop",
+        "session_id": "12345678-1234-1234-1234-123456789abc",
+        "turn_id": null,
+        "cwd": "/repo",
+        "tool_name": null,
+        "message": "Done."
+      }
+    ]
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "assistant",
+      "cwd": "/repo",
+      "message": {
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "internal"
+          }
+        ],
+        "stop_reason": null
+      }
+    },
+    "expected": []
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": "<task-notification>build complete</task-notification>"
+      }
+    },
+    "expected": []
+  },
+  {
+    "provider": "claude",
+    "row": {
+      "timestamp": "2026-09-27T12:00:00Z",
+      "type": "user",
+      "message": {
+        "content": ""
+      }
+    },
+    "expected": []
+  }
+]

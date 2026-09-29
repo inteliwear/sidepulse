@@ -1,0 +1,21 @@
+[package]
+name = "sidepulse-examples"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+live-audio = ["dep:cpal"]
+
+[dependencies]
+sidepulse-device = { path = "../sidepulse-device" }
+clap = { version = "4", features = ["derive"] }
+cpal = { version = "0.18.2", optional = true }
+ctrlc = { version = "3.5", features = ["termination"] }
+serde.workspace = true
+serde_json.workspace = true
+ureq = "=2.12.1"
+
+[dev-dependencies]
+tempfile = "3"

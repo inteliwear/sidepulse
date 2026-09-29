@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SidePulse Settings</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <nav aria-label="Settings tabs" id="navigation" role="tablist"></nav>
+    <main>
+      <div id="page" role="tabpanel"></div>
+    </main>
+    <footer>
+      <div><div id="connection" class="connection" role="status">Connecting…</div><div id="message" role="status" aria-live="polite" hidden></div></div>
+      <div class="window-actions"><button id="back-settings" hidden>Back to Settings</button><button id="controls-toggle" aria-expanded="false" aria-controls="controls-menu">Controls…</button><button id="setup-open">Setup…</button></div>
+    </footer>
+    <nav id="controls-menu" aria-label="Other SidePulse controls" hidden></nav>
+  </div>
+</body>
+</html>

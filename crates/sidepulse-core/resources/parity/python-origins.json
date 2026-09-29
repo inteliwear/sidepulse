@@ -1,0 +1,981 @@
+[
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "zsh",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": {
+      "kind": "codex_cli",
+      "label": "Codex CLI",
+      "source": "process:codex",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "codex",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": {
+      "kind": "codex_cli",
+      "label": "Codex CLI",
+      "source": "process:codex",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "claude",
+        "command": "claude --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "junie",
+        "command": "junie --resume"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "worker",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "sh",
+        "command": "\"/folder with spaces/codex\" resume s"
+      }
+    ],
+    "expected": {
+      "kind": "codex_cli",
+      "label": "Codex CLI",
+      "source": "process:codex",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "env",
+        "command": "\"/folder with spaces/claude-code\" --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Code Helper",
+        "command": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+      }
+    ],
+    "expected": {
+      "kind": "codex_vscode",
+      "label": "Codex in VS Code",
+      "source": "process:Visual Studio Code",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Cursor Helper",
+        "command": "/Applications/Cursor.app/Contents/MacOS/Cursor"
+      }
+    ],
+    "expected": {
+      "kind": "codex_cursor",
+      "label": "Codex in Cursor",
+      "source": "process:Cursor",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "java",
+        "command": "/Applications/RustRover.app/Contents/MacOS/rustrover"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "app",
+        "command": "/Applications/Codex.app/Contents/MacOS/Codex"
+      }
+    ],
+    "expected": {
+      "kind": "codex_app",
+      "label": "Codex UI",
+      "source": "process:Codex.app",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "zsh",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "codex",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "claude",
+        "command": "claude --resume s"
+      }
+    ],
+    "expected": {
+      "kind": "claude_cli",
+      "label": "Claude Code CLI",
+      "source": "process:claude",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "junie",
+        "command": "junie --resume"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "worker",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "sh",
+        "command": "\"/folder with spaces/codex\" resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "env",
+        "command": "\"/folder with spaces/claude-code\" --resume s"
+      }
+    ],
+    "expected": {
+      "kind": "claude_cli",
+      "label": "Claude Code CLI",
+      "source": "process:claude",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Code Helper",
+        "command": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+      }
+    ],
+    "expected": {
+      "kind": "claude_vscode",
+      "label": "Claude in VS Code",
+      "source": "process:Visual Studio Code",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Cursor Helper",
+        "command": "/Applications/Cursor.app/Contents/MacOS/Cursor"
+      }
+    ],
+    "expected": {
+      "kind": "claude_cursor",
+      "label": "Claude in Cursor",
+      "source": "process:Cursor",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "java",
+        "command": "/Applications/RustRover.app/Contents/MacOS/rustrover"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "app",
+        "command": "/Applications/Codex.app/Contents/MacOS/Codex"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "zsh",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "codex",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "claude",
+        "command": "claude --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "junie",
+        "command": "junie --resume"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "worker",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "sh",
+        "command": "\"/folder with spaces/codex\" resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "env",
+        "command": "\"/folder with spaces/claude-code\" --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Code Helper",
+        "command": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+      }
+    ],
+    "expected": {
+      "kind": "grok_vscode",
+      "label": "Grok in VS Code",
+      "source": "process:Visual Studio Code",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Cursor Helper",
+        "command": "/Applications/Cursor.app/Contents/MacOS/Cursor"
+      }
+    ],
+    "expected": {
+      "kind": "grok_cursor",
+      "label": "Grok in Cursor",
+      "source": "process:Cursor",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "java",
+        "command": "/Applications/RustRover.app/Contents/MacOS/rustrover"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "app",
+        "command": "/Applications/Codex.app/Contents/MacOS/Codex"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "zsh",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "codex",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "claude",
+        "command": "claude --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "junie",
+        "command": "junie --resume"
+      }
+    ],
+    "expected": {
+      "kind": "junie_cli",
+      "label": "Junie CLI",
+      "source": "process:junie",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "worker",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "sh",
+        "command": "\"/folder with spaces/codex\" resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "env",
+        "command": "\"/folder with spaces/claude-code\" --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Code Helper",
+        "command": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+      }
+    ],
+    "expected": {
+      "kind": "junie_vscode",
+      "label": "Junie",
+      "source": "process:Visual Studio Code",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Cursor Helper",
+        "command": "/Applications/Cursor.app/Contents/MacOS/Cursor"
+      }
+    ],
+    "expected": {
+      "kind": "junie_cursor",
+      "label": "Junie",
+      "source": "process:Cursor",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "java",
+        "command": "/Applications/RustRover.app/Contents/MacOS/rustrover"
+      }
+    ],
+    "expected": {
+      "kind": "junie_ide",
+      "label": "Junie in JetBrains IDE",
+      "source": "process:JetBrains IDE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "app",
+        "command": "/Applications/Codex.app/Contents/MacOS/Codex"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "zsh",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "codex",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "claude",
+        "command": "claude --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "junie",
+        "command": "junie --resume"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "worker",
+        "command": "codex resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "sh",
+        "command": "\"/folder with spaces/codex\" resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "env",
+        "command": "\"/folder with spaces/claude-code\" --resume s"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Code Helper",
+        "command": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+      }
+    ],
+    "expected": {
+      "kind": "cursor_vscode",
+      "label": "Cursor",
+      "source": "process:Visual Studio Code",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "Cursor Helper",
+        "command": "/Applications/Cursor.app/Contents/MacOS/Cursor"
+      }
+    ],
+    "expected": {
+      "kind": "cursor_cursor",
+      "label": "Cursor",
+      "source": "process:Cursor",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "java",
+        "command": "/Applications/RustRover.app/Contents/MacOS/rustrover"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cursor",
+    "processes": [
+      {
+        "pid": 20,
+        "ppid": 10,
+        "comm": "app",
+        "command": "/Applications/Codex.app/Contents/MacOS/Codex"
+      }
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codex",
+    "env": {
+      "TERM_PROGRAM": " vscode "
+    },
+    "expected": {
+      "kind": "codex_vscode",
+      "label": "Codex in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "env": {
+      "TERM_PROGRAM": "vscode"
+    },
+    "expected": {
+      "kind": "codex_vscode",
+      "label": "Codex in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "env": {
+      "VSCODE_IPC_HOOK_CLI": "x"
+    },
+    "expected": {
+      "kind": "codex_vscode",
+      "label": "Codex in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "env": {
+      "__CFBundleIdentifier": "com.openai.codex"
+    },
+    "expected": {
+      "kind": "codex_app",
+      "label": "Codex UI",
+      "source": "env:__CFBundleIdentifier",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "codex",
+    "env": {
+      "SIDEPULSE_AGENT_ORIGIN": " Custom   Agent ",
+      "SIDEPULSE_AGENT_ORIGIN_KIND": "custom cli"
+    },
+    "expected": {
+      "kind": "custom cli",
+      "label": "Custom Agent",
+      "source": "env:SIDEPULSE_AGENT_ORIGIN",
+      "confidence": "explicit"
+    }
+  },
+  {
+    "provider": "claude",
+    "env": {
+      "TERM_PROGRAM": " vscode "
+    },
+    "expected": {
+      "kind": "claude_vscode",
+      "label": "Claude in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "env": {
+      "TERM_PROGRAM": "vscode"
+    },
+    "expected": {
+      "kind": "claude_vscode",
+      "label": "Claude in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "env": {
+      "VSCODE_IPC_HOOK_CLI": "x"
+    },
+    "expected": {
+      "kind": "claude_vscode",
+      "label": "Claude in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "claude",
+    "env": {
+      "__CFBundleIdentifier": "com.openai.codex"
+    },
+    "expected": null
+  },
+  {
+    "provider": "claude",
+    "env": {
+      "SIDEPULSE_AGENT_ORIGIN": " Custom   Agent ",
+      "SIDEPULSE_AGENT_ORIGIN_KIND": "custom cli"
+    },
+    "expected": {
+      "kind": "custom cli",
+      "label": "Custom Agent",
+      "source": "env:SIDEPULSE_AGENT_ORIGIN",
+      "confidence": "explicit"
+    }
+  },
+  {
+    "provider": "grok",
+    "env": {
+      "TERM_PROGRAM": " vscode "
+    },
+    "expected": {
+      "kind": "grok_vscode",
+      "label": "Grok in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "grok",
+    "env": {
+      "TERM_PROGRAM": "vscode"
+    },
+    "expected": {
+      "kind": "grok_vscode",
+      "label": "Grok in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "grok",
+    "env": {
+      "VSCODE_IPC_HOOK_CLI": "x"
+    },
+    "expected": {
+      "kind": "grok_vscode",
+      "label": "Grok in VS Code",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "grok",
+    "env": {
+      "__CFBundleIdentifier": "com.openai.codex"
+    },
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "env": {
+      "SIDEPULSE_AGENT_ORIGIN": " Custom   Agent ",
+      "SIDEPULSE_AGENT_ORIGIN_KIND": "custom cli"
+    },
+    "expected": {
+      "kind": "custom cli",
+      "label": "Custom Agent",
+      "source": "env:SIDEPULSE_AGENT_ORIGIN",
+      "confidence": "explicit"
+    }
+  },
+  {
+    "provider": "junie",
+    "env": {
+      "TERM_PROGRAM": " vscode "
+    },
+    "expected": {
+      "kind": "junie_vscode",
+      "label": "Junie",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "env": {
+      "TERM_PROGRAM": "vscode"
+    },
+    "expected": {
+      "kind": "junie_vscode",
+      "label": "Junie",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "env": {
+      "VSCODE_IPC_HOOK_CLI": "x"
+    },
+    "expected": {
+      "kind": "junie_vscode",
+      "label": "Junie",
+      "source": "env:VSCODE",
+      "confidence": "inferred"
+    }
+  },
+  {
+    "provider": "junie",
+    "env": {
+      "__CFBundleIdentifier": "com.openai.codex"
+    },
+    "expected": null
+  },
+  {
+    "provider": "junie",
+    "env": {
+      "SIDEPULSE_AGENT_ORIGIN": " Custom   Agent ",
+      "SIDEPULSE_AGENT_ORIGIN_KIND": "custom cli"
+    },
+    "expected": {
+      "kind": "custom cli",
+      "label": "Custom Agent",
+      "source": "env:SIDEPULSE_AGENT_ORIGIN",
+      "confidence": "explicit"
+    }
+  }
+]

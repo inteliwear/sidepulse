@@ -1,0 +1,832 @@
+# Rust architecture and CLI compatibility
+
+This document tracks the migration while the Python release remains operational.
+The Rust implementation must not replace installed hooks or launch agents until
+the corresponding behavior has passed parity checks on each target platform.
+
+## Process boundaries
+
+```text
+agent hooks -> sidepulse service <- CLI
+                         ^
+                         |
+                    tray / settings UI
+                         |
+                  platform UI adapter
+```
+
+The service owns event ingestion, agent state, persistence, settings, device
+selection and output, relay, battery policy, and sleep policy. The UI owns only
+presentation, input, and platform-specific windows. The CLI requests service
+actions for live operations and may inspect files directly only for offline
+diagnostics and installation. The hook path must remain short and best effort.
+
+The protocol uses versioned newline-delimited JSON request, response, and
+subscription messages, with a 1 MiB message limit. A local transport adapter
+will map Unix sockets and Windows named pipes while retaining the same message
+format. Authentication and single-instance ownership are transport concerns.
+The service is the sole writer of `latest.json` and the sole active LED writer.
+Both the CLI and UI must reconnect and request a full snapshot after a service
+restart. AppKit/Win32/Linux tray implementations are adapters over the same
+view model. macOS notch rendering and Disk Arbitration have platform-specific
+implementations; the absence of these features elsewhere is explicit.
+
+## CLI compatibility contract
+
+The existing `sidepulse` commands are `version`, `update`, `agent-monitor`,
+`setup`, `write`, `push`, `link`, `service`, `status-bar`, `settings`,
+`sdejectguard`, `battery`, and internal `hook-log`. The standalone
+`agent-monitor` executable supports `version`, `doctor`, `status`, `live`,
+`watch`, `leds`, `status-bar`, `install`, `uninstall`, and `hook-log`.
+`agent-status-bar` and `sidepulse-reply` are additional entry points.
+
+During migration:
+
+- Preserve command names, aliases, flags, exit codes, and documented JSON
+  fields. Add new commands only where needed for the service protocol.
+- Keep `sidepulse hook-log` and `agent-monitor hook-log` as compatibility paths
+  for previously installed provider configs. New configs can invoke a dedicated
+  Rust hook executable.
+- Keep hook config paths, state paths, settings JSON, provider JSONL, audit JSONL,
+  link and relay JSON compatible. Migrate schemas only with a versioned reader.
+- Route operating-system operations through platform adapters. Unsupported
+  features should return a clear capability error, not disappear from help.
+- Keep the current Python distribution available until the native installer can
+  upgrade hooks, services, and user data and can roll back on failure.
+
+## Delivery gates
+
+1. Core event normalization and status transitions match captured Python cases.
+2. Hook installation and event delivery work with all five providers.
+3. One service owns output with and without the tray UI running.
+4. CLI and UI observe the same state and can reconnect after a crash.
+5. macOS, Linux, and Windows builds pass CLI and service smoke tests; platform
+   UI and device capabilities are exercised where available.
+6. Installation upgrades an existing Python setup without losing settings,
+   links, logs, or hooks. The released runtime invokes no Python code.
+
+The optional reply classifier and maintained examples are part of the final
+Rust migration. Their model behavior requires separate parity evaluation.
+
+## Settings window implementation
+
+The cross-platform Settings window is a Tauri host in
+`sidepulse-settings-web`, with embedded HTML/CSS and a JavaScript presentation
+layer. Its canonical executable remains `sidepulse-next-settings`. The
+`sidepulse-ui-client` crate owns renderer-independent state collection,
+validated IPC, bounded background polling, save results, exports and local
+setup actions. The service owns validation, persistence, monitoring, power
+policy and device output. The frontend owns temporary drafts and rendering.
+
+The webview has a typed Settings action allowlist, local-window capabilities,
+a CSP, restricted navigation and clipboard write access. It has no generic
+shell/filesystem API. Native tray clients and the CLI open it with the existing
+endpoint. Startup recovery works with the offline staged manifest. The virtual
+LED overlay remains a separate Rust egui/eframe executable and keeps its
+per-endpoint singleton. Embedded assets need no Node runtime or development
+server. See [webview-ui-proposal.md](webview-ui-proposal.md) for the accepted
+architecture, runtime dependencies and validation boundary.
+
+Settings follows the Python five-tab structure: Agents, Animations, Advanced,
+History and Diagnostics. Hooks, session openers and transcript switches are
+kept together on Agents. Profiles and the eight state rows share one compact
+Animations table, with Rust-rendered firmware previews and bounded Show actions.
+Advanced contains list timing, the battery sleep threshold, power-change preview
+and tray visibility. History follows Python's six-row order. Additional service
+controls use a separate Controls menu and Setup entry. The source-based browser
+contract checks the structure against Python rather than a second handwritten
+list. Edited row clones save the named asset and state assignment atomically;
+temporary previews leave saved preferences unchanged and resume current output.
+
+The separate controls cover live activity, device selection, brightness, agent /
+battery / manual display, charger baseline and power-change previews,
+transcript monitoring, and macOS awake preferences. macOS staging now includes
+native `.app` bundles for tray and settings, with the isolated endpoint in
+their resources. Earlier egui window checks exercised saving, preserving manual LED
+output, visible external-edit conflicts, retained edits and reconnecting
+after a service restart. The Tauri renderer has separate Rust/browser checks;
+actual native webview checks remain pending. The animation page saves built-in presets and per-status custom LED programs
+through the service, validates 2- and 8-LED output before saving, and keeps the
+working/tool/progress modes grouped as in the Python application. Existing
+named custom assets remain selectable and are preserved. Named assets, profiles, and session-opening preferences now have service-owned
+operations and Settings controls. Relay, hook setup, startup management, administrator helper setup, and diagnostic exports have Settings controls. Installation and release tools live in the installer crate.
+The service now applies saved idle timeouts to snapshots immediately, without
+rebuilding its monitor or losing pending permissions. The shared presentation
+model includes only completed stale sessions within the configured recent
+retention, matching Python menu rules. The window can save these durations and
+the macOS battery sleep safeguard through validated requests; the development
+CLI exposes `service-agent-list` and `service-sleep-safeguard` for the same
+operations. Sleep controls still report an unsupported-platform error on
+Windows and Linux.
+
+## Activity history
+
+The service records status, battery, charger, lid, and sleep observations every
+two seconds in the existing `status-history.jsonl` schema. Its 34 fields match
+a captured Python record. The file defaults beside the explicit state file,
+or beside an explicit settings file; `--history PATH` overrides it. Preview
+history stays inside its isolated directory. Recording runs independently of
+any window and restores existing rows on startup. The service keeps a bounded
+in-memory timeline, replays at most 128 MiB at startup, and limits chart replies
+to 2,000 observations, including the first and latest. Long timelines are
+sampled and the window labels that summary. The settings window charts battery percentage, charger power, agent status, SidePulse awake, macOS sleep, and lid state. The five legacy timeframes are saved through the service. The six-row Tauri chart has browser layout/interaction checks. Native system-webview validation remains pending.
+
+## Current migration state
+
+The Rust workspace currently contains the portable event/status core, a
+versioned protocol, local IPC, a development service, a development CLI, and
+the `sidepulse-next-hook` hook executable. The hook handles Cursor names,
+Junie's missing context, Grok routing, provider JSONL, legacy audit JSONL, and
+best-effort service delivery. The service can replay provider logs at startup
+when launched with `--log PROVIDER PATH` pairs. Hook and service are separate
+from the UI. Unix IPC startup can reclaim an abandoned socket after checking
+that it is a socket with no listener; active sockets and regular files remain.
+The `sidepulse-ui-model` crate turns service snapshots into common tray state
+without owning monitoring or output. A `sidepulse-next-tray` client
+now renders the mode, active agents, and a quit action. It polls and reconnects
+to the service; its UI event loop is native on macOS and Windows and uses the
+KSNI tray backend on Linux. The development tray compiled and stayed running
+during a macOS smoke test with a temporary Rust service and hook event.
+The shared UI model now interprets one service settings response into portable
+tray controls; platform event loops no longer issue separate requests for each
+control. A disconnect also resets the visible status title through that model.
+Rust formatting, linting, and workspace tests run in CI on macOS, Linux, and
+Windows; the workflow also stages and smoke-tests the isolated service on each
+OS, then retains portable
+preview binaries. A downloaded artifact can be staged at its destination with
+`sidepulse-next-stage` so generated startup files contain the right absolute
+paths. These are development artifacts, not signed release packages. Visual behavior
+on macOS and runtime UI and device behavior on Linux
+and Windows still need validation. These executables are not installed by the
+existing setup flow.
+
+The `sidepulse-installer` crate can assemble those binaries into a new,
+isolated preview directory with a settings file, state directory, manifest,
+and platform launch definitions. macOS gets LaunchAgent plists, Linux gets
+systemd user units, and Windows gets PowerShell launch scripts. The
+`sidepulse-next-stage` command supports a dry run and refuses to overwrite an
+existing preview. It does not register startup jobs, install hooks, use the
+existing settings file, read provider logs from the user's normal home, or
+enable physical device output. All five preview log paths remain inside the
+stage directory. This is a staging
+step for native installation and rollback testing, not a production cutover.
+Its `--smoke-stage` check starts and stops the staged service and verifies
+snapshot/settings IPC with no selected device.
+
+The `sidepulse-device` crate now owns the default LED programs, program
+validation, candidate discovery, and synced writes. An explicitly configured
+development service can write one device with `--device PATH` and optional
+`--brightness 0-255`. The service polls its own state and skips unchanged
+programs; the tray never touches the device file. A macOS smoke test passed
+from the Rust hook through the service into `LEDS.LED` in a temporary folder.
+Physical hardware behavior still needs validation. Automatic selection and
+saved animation styles and profile editing are covered below.
+
+The development CLI now shares one fail-open hook handler between
+`sidepulse-next hook-log`, `sidepulse-next agent-monitor hook-log`, and
+`sidepulse-next-hook`. It also supports `status` and `agent-monitor status` as
+one-shot offline views of the Rust monitor, with the existing status flags and
+JSON field names. Status reads the last requested number of lines per provider
+and accepts explicit log paths. It reads configured hook commands for custom
+log paths in the five provider configuration files, then falls back to the
+default state directory. The monitor retains project and prompt titles across
+hook events and reads Codex session titles from its local index. An isolated
+Python/Rust status comparison matched both provider display names and modes.
+Seven additional marker, message-precedence, question, and notification cases
+also match Python's status rules.
+Default source selection follows Python by including Cursor only when its log
+is explicitly requested.
+The `sidepulse-sources` crate shares source selection,
+bounded replay, and appended-row recovery between CLI and service. The service
+replays those sources at startup and tails new complete rows so events written
+while its socket is unavailable can still reach the monitor. Optional Codex
+and Claude transcript sources can now be supplied to one-shot status with
+`--codex-transcripts DIR` or `--claude-transcripts DIR`, and to the service
+with `--transcript codex|claude DIR`. They replay recent files and detect later
+file changes; they remain opt-in as in the Python defaults. Twenty captured
+transcript cases now match the Python reader. Provider
+JSONL replay now seeks backward for the last requested lines instead of
+scanning entire historical logs.
+When an explicit settings document enables Codex or Claude transcript
+monitoring, the service discovers their default transcript directories;
+explicit `--transcript` paths still take precedence. The service now applies
+transcript setting changes while running and preserves JSONL recovery cursors.
+The CLI can change those settings with `service-transcript`, and the tray has
+Codex and Claude transcript toggles backed by service IPC.
+
+The development service can load and atomically update the legacy
+`latest.json` status schema when launched with `--state PATH`. State output is
+opt-in during migration so a trial Rust service cannot overwrite the active
+Python application's state file. The released installer must hand ownership
+of that file to the Rust service during cutover.
+
+The service can also load a legacy settings document with explicit
+`--settings PATH`. It preserves unknown fields and rejects a write if another
+process changed the document after startup. A device started with `--device`
+uses its saved brightness unless `--brightness` overrides it. The Rust CLI
+can inspect settings and change brightness through service requests; the
+native tray offers brightness presets through the same requests. The service
+alone saves the setting and writes the LED program. Settings paths remain opt-in during migration, and native tray interaction still needs visual runtime validation.
+An opt-in `--auto-device` mode now scans platform mount roots, keeps the
+selected device while mounted, and reconnects after removal and return.
+It uses each device's saved brightness. Windows discovery now enumerates
+assigned fixed and removable drives and recognizes their volume label or
+`LEDS.LED`. Dot LED counts use that volume label too. Native volume queries
+suppress missing-media dialogs for their calling thread and restore its error
+mode; Windows tests cover the native probe and that restoration. Physical
+device runtime validation remains open.
+An optional label in the device protocol lets the shared UI model show the
+device name instead of just its Windows drive letter. Older payloads without
+that label still deserialize and use their mount path.
+The service now exposes its discovered devices and accepts a selection over
+IPC. The CLI can list or select them, and the native tray renders the same
+choices. Only the service changes its active `DeviceOutput`.
+
+The core now resolves explicit, environment, and process-based agent origins
+and reads legacy structured origin labels from hook payloads. The hook reads
+Unix ancestry through `ps` and Windows ancestry from a native process
+snapshot. The Junie hook uses that ancestry to match terminal events to the
+right recent session on both platforms. Seventy-five captured origin cases cover
+process trees and Windows app versus CLI identification and match Python.
+
+The `sidepulse-device::virtual_led` module now holds the portable virtual LED
+pixel rules: status and battery colors, spatial blending, tone mapping, and
+compact program previews. Its behavior is tested against the existing Python
+rules. The service now hosts the same bundled firmware WASM engine in Rust, with a
+bounded interpreter, to execute presets and custom programs and return RGB
+frames. The UI does no program parsing or animation selection. Saving an
+animation checks firmware syntax for both device sizes, including line/column
+errors. A separate Rust virtual display client draws those frames; macOS uses
+native notch geometry and an all-spaces, transparent, non-interactive window,
+while Windows and Linux use a movable window. Virtual display enablement,
+brightness, and display mode are saved through the service, preserving the
+legacy virtual device ID. Tray and settings clients launch one virtual display
+per endpoint; manual mode hides it. Preview staging includes its executable and
+a macOS application bundle. Screen changes and native Windows/Linux drawing
+still require runtime validation.
+The device layer also has the portable battery LED program policy, including
+partial fills and charging pulses. The macOS reader now parses the native
+`ioreg` battery plist, including charger power, negotiated profiles, capacity,
+health, and a cached model-based charger baseline. Its artificial fixture
+matches the legacy Python JSON snapshot. `sidepulse-next battery status`
+provides the legacy JSON fields, saved charger baseline, and `--full-watts`
+override; a live macOS comparison matched the stable fields and JSON keys.
+Linux and Windows readers supply charge percentage and power state while
+unavailable richer diagnostics remain explicitly unknown.
+When saved per-device settings
+select battery display, the service writes that program instead of the agent
+program, without UI ownership of the device. The CLI and tray can switch the
+saved per-device display between agent and battery through IPC. Power-change
+previews now run in the service through a portable transition policy, including
+the seven-second default and return to agent output. Battery queries run in a
+separate worker so they do not delay device synchronization or IPC. Empty
+macOS battery-query output is treated as no battery, covering desktop hosts.
+Manual (`custom`) display mode leaves existing device output untouched,
+including during previews. All three tray adapters offer this choice and a
+power-change-preview toggle through the shared model and service requests.
+`sidepulse-next battery configure --endpoint ENDPOINT` (or
+`SIDEPULSE_NEXT_ENDPOINT`) updates the legacy battery settings atomically
+through the service, preserving unknown settings. Its process test exercises
+the actual CLI and service on each target platform. Global display defaults
+remain separate from saved per-device choices, matching the Python settings.
+The battery LED CLI renders through the service and supports one-shot and
+continuous output, destination previews, explicit filenames, charger baselines,
+duplicate suppression, and interruption.
+All bundled LED animation programs are now copied into the Rust device crate.
+The service resolves saved per-mode agent styles, including custom programs
+from the legacy settings `animations` directory, then validates and writes the
+selected program. The native animation page now edits profiles and named assets through the service.
+The core now validates and annotates legacy relay `agent_event` envelopes.
+The service accepts these events through its local IPC and ignores repeated
+event IDs using a bounded cache. The separate `sidepulse-relay` crate owns
+legacy `relay.json` settings, receiver-code generation, HTTP publishing, and
+bounded SSE streaming. `sidepulse-next link` can create a receiving code or
+save an outbound code. A development service started with explicit
+`--relay-config PATH` sends local hook events and receives remote events;
+loopback HTTP tests cover both paths. Relay remains opt-in so the development
+service cannot connect through the installed Python setup unexpectedly. The native Link computers page controls relay configuration; production activation remains part of cutover.
+The core also owns portable awake-policy decisions, battery safeguard rules,
+closed-lid LED and animation decisions, and pure macOS sleep-diagnostic
+parsers. A read-only macOS service adapter reports the actual lid state,
+active external displays, and system sleep assertions through IPC; the CLI
+can inspect this with `service-power`. It uses CoreGraphics for display state.
+Non-macOS services return an explicit unsupported-platform error for this
+macOS-specific observation. An explicit development `--power-control` service
+option applies the saved awake policy on macOS. The service owns the
+`caffeinate -ims` process and, only when the saved closed-lid override is
+enabled, requests the existing noninteractive `pmset` helper and display
+sleep. The policy uses battery safeguards and CoreGraphics display state.
+No installer enables this option yet. Physical lid transitions, helper
+recovery after a service crash, and the broader settings UI still require
+validation. The service can now update the saved awake policy through IPC;
+`service-sleep-policy` and the macOS tray use that request. The tray remains a
+client and never calls power commands directly.
+
+The `sidepulse-hook-config` crate can build install and uninstall plans for
+Codex, Claude, Grok, Cursor, and Junie configurations. Its tests cover
+preserving unrelated hooks, idempotence, backups, and rejecting a config that
+changed after planning. The development CLI exposes those plans with explicit
+`--config`, `--log`, and `--hook` paths and now defaults to all five providers,
+the user's home, the existing state directory convention, and a sibling Rust
+hook executable. It accepts a positional provider name like the Python CLI.
+It also accepts Python's per-provider `--codex-log`, `--claude-log`,
+`--grok-log`, `--cursor-log`, and `--junie-log` overrides, including `~` paths,
+for single-provider and batch installation.
+Temporary-home process tests cover dry run, apply, uninstall, default paths,
+and missing argument values. No production hook config has been changed.
+An explicit `--provider all --home DIR --log-dir DIR --hook PATH` batch route
+now plans all five providers first and restores earlier config files if a
+later apply fails. The test uses a temporary home; live installation still
+awaits Codex trust review and live upgrade verification.
+The batch route removes old SidePulse commands from the two legacy Grok hook
+JSON files while preserving unrelated commands in those files. It now also
+relocates SidePulse backup JSON files out of Grok's live hooks directory into
+the legacy backup folder. A relocation error rolls back provider config writes.
+The Rust CLI also supports read-only `agent-monitor doctor` and `doctor --json`
+reports of hook events and log paths for all five providers.
+`agent-monitor live` and `watch` retain a single Rust monitor and tail appended
+events after bounded initial replay. Pending permissions survive events beyond
+the replay limit. Redirected output has no terminal cursor commands, and
+termination signals stop the loop cleanly. Their terminal presentation uses the
+one-shot status view instead of Python's wider colored table; source paths,
+aggregate/reason text, and agent details remain available.
+Text/JSON status and live output return cleanly when a downstream reader closes
+its pipe. A zero `--recent-seconds` disables the live age filter, matching Python.
+Codex requires a user trust review for new or changed non-managed hooks. The
+Rust installer reports this step and does not write trust hashes itself. The
+Python installer still has its legacy automatic trust refresh, so cutover
+must validate the new review flow. This follows the current
+[official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
+
+The Python application remains authoritative until the delivery gates pass.
+The Rust preview now implements the native helpers, phone transport, settings
+controls, compatibility entry points, and native startup lifecycle described
+below. Runtime UI and physical device validation remain outstanding.
+
+## Remaining work, in delivery order
+
+1. Verify provider hook activation in real clients. Captured process ancestry,
+   transcript events, and Python-to-Rust transitions now pass across all providers.
+2. Complete the latest three-platform build/package checks. Captured install/removal
+   documents for all five providers preserve unrelated configuration and backups.
+3. Finish native visual checks for tray,
+   settings, session opening, virtual display, and window placement.
+4. Verify portable packages, platform signatures, and root-owned helper
+   installation. Preview startup and native update/rollback are implemented.
+5. Validate real devices and Windows/Linux native UI behavior.
+6. Switch hook and state ownership only after the delivery gates pass.
+   Explicit import of a captured Python setup preserves saved custom assets,
+   profiles, settings, links, and provider logs in an isolated preview.
+
+## Portable local reply classifier
+
+`sidepulse-reply` contains local CPU inference, pinned model downloads, the
+captured prompt, and the existing label parser. `sidepulse-next-reply` is the
+ninth staged executable, available through `sidepulse-next reply`. Model
+downloads are explicit; inference runs offline. The Rust benchmark example
+loads once and reports canonical predictions and warm timing. This optional
+component stays outside the monitor and UI.
+
+The [evaluation](reply-classifier-evaluation.md) records the measured prediction
+differences between the MLX and portable GGUF formats. The native backend is
+implemented; classification parity and GPU performance are not claimed.
+
+## Session opening (Rust preview)
+
+Session targets, URL escaping, provider resume arguments, and preference precedence
+live in `sidepulse-core`. The service returns available targets and owns atomic
+preference writes. The tray, settings window, and `open-session` CLI call the
+`sidepulse-platform` activation adapter. `open-session --dry-run` retrieves the
+chosen target without opening an application. An explicitly unsupported action
+returns an error instead of launching a different destination.
+
+The Sessions page saves provider defaults and terminal selection. Provider-wide
+changes discard that provider's origin overrides, as in the Python settings
+model. Custom `.command` files on macOS are unique, private, and remove themselves
+when run. Windows resume commands use encoded PowerShell literals, avoiding
+Windows Terminal's semicolon parsing. macOS app bundles declare their terminal
+automation usage. Ghostty scripting requires its current AppleScript support;
+see the [Ghostty documentation](https://ghostty.org/docs/features/applescript) and
+[Windows Terminal arguments](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments).
+
+Portable integration tests exercise the actual CLI and local IPC, preference
+persistence, unknown-field retention, missing sessions, explicit-action failures,
+and hostile characters in session arguments. Native activation and existing
+terminal focus/reuse still require validation. Terminal reuse is implemented as described below. Native history and virtual-display checks passed in the isolated preview. The final Setup and Diagnostics screens still need visual checks; the desktop became locked during their verification. Automated checks, release builds, packaging, staging, and service smoke checks pass on all three platforms. See rust-native-validation.md for the current checks and remaining gates.
+
+
+## Profiles and named animation assets
+
+`sidepulse-core` owns profile documents, identifiers, state defaults, working-mode
+grouping, and the Cyan/Ember/Purple profiles. Captured exports from the Python
+settings model verify all three built-ins. The service owns named `.LED` assets,
+profile capture, apply, delete, import, and export. Imports remap conflicting
+custom identifiers and validate every program for 2- and 8-LED firmware before
+publishing settings. Inline programs are promoted to named assets when a profile
+is saved, making exports portable.
+
+Asset updates publish a new private file and atomically update the settings
+pointer. A failed or conflicting save removes only its new files and preserves
+previous assets, settings, and unknown fields. Previous asset versions remain
+available for rollback. Built-in profiles cannot be replaced or deleted; assets
+referenced by statuses or profiles cannot be deleted. Named assets are editable
+in the native window. Profiles can be applied, captured, imported from JSON, and
+exported as JSON there. The CLI provides `animation-profile` and `animation-asset`
+commands for file-based workflows; `service-animation` also accepts `lid_open`
+and `lid_closed` state selections. Lid-event output and final-frame holding are described below.
+
+Portable CLI/IPC tests cover import/export, identifier collisions, working-mode
+grouping, invalid programs, and built-in protection. Persistence tests cover
+external-edit conflicts, rollback of new files, inline promotion, restart, and
+symlink directories. Native controls still await visual checks on an unlocked Mac.
+
+
+## Lid output and device keepalive
+
+The core now owns lid edge detection, transition timing, interrupted transitions,
+and final-output holding. The service caches read-only power observations and
+applies this policy when it drives a physical device. A close transition can
+finish and retain its final frame until opening the lid or resuming work releases
+the hold. Unknown observations preserve the last known lid state, and startup
+with a closed lid does not invent an animation event. Manual output remains
+untouched. The virtual display keeps its existing independent behavior.
+
+The legacy 0.15-second restore allowance, default transition durations, working
+awake behavior, and five-minute completion/input/error grace are represented
+in pure policy types. Custom transition duration saves are atomic and retain
+existing programs and unknown settings. The native animation page and CLI can
+save timing. The service touches the firmware's `keepalive` file once a minute,
+preserving its content, including while output is manual or held.
+
+Deterministic tests drive simulated lid observations into a real temporary LED
+file, verify transition/hold/open/manual behavior, interrupted transitions,
+unknown readings, startup, grace expiry, and atomic duration saves. Native lid
+hardware and power-control execution still need validation; automatic system
+power changes remain behind the explicit `--power-control` preview flag.
+
+## Relay configuration controls
+
+The service now owns relay settings when started with an explicit `--relay-config`
+path. The native Link computers page creates and replaces receiving codes,
+configures sending links and the computer name, disconnects either direction,
+and shows the last successful activity and transport errors. The Rust CLI can
+use `link --endpoint` for the same service-owned writes, or manage an explicit
+legacy relay file offline. Unknown fields and private permissions are preserved;
+external edits produce a conflict until the saved file is explicitly reloaded.
+
+Receiving connections are tied to the configuration generation. Changing or
+stopping a link discards later messages from its previous stream, then reconnects
+using the new configuration. An idle connection may take up to its bounded
+read timeout to close, but its old messages cannot enter the monitor after the
+change. Isolated preview bundles include their own disabled relay file. No
+network relay starts until a receiving code or sending link is configured.
+
+Portable tests cover actual CLI/IPC updates, code replacement, conflicts and
+reload, unknown fields, permissions, and SSE cancellation. Local HTTP process
+tests exercise publishing, receiving, and rejecting stale events after a receiver
+is disabled. A `--mock-power` JSON input supports deterministic device/lid process
+checks on every platform and cannot be combined with system power control.
+
+## Phone pairing and manual delivery (Rust preview)
+
+`sidepulse-core` selects destinations without I/O: `write` prefers a mounted
+local device, `push` prefers a saved phone, notifications require a phone, and
+ambiguous names require an explicit ID. `--all` fans LED programs out to both
+kinds of destination. `--dry-run` returns the same plan without writing or sending.
+
+`sidepulse-links` owns the legacy version-1 `links.json` schema, private atomic
+credential saves, pairing URLs and QR matrices, bounded registration SSE, and
+HTTP notification transport. Unknown saved fields survive edits; conflicting
+external saves require a reload. Public snapshots expose the legacy short phone
+ID, name and server, without a push token. Transport errors redact tokens.
+
+The service owns five-minute pairing sessions, cancellation, saved phone
+mutations, and bounded asynchronous delivery jobs. A replaced or cancelled
+pairing cannot save a late registration. Manual local writes switch the device
+to its saved custom display mode while holding the output lock, preserving its
+brightness setting. Explicit filenames are resolved once and written as given.
+Delivery errors are reported for each destination.
+
+The settings client's Link phones page renders the service's QR matrix and
+saved phone summaries. The CLI exposes `phone-link pair|list|cancel|reload|register|remove`
+and `write` / `push`, with `--endpoint` or `SIDEPULSE_NEXT_ENDPOINT`. CLI pairing
+starts a service-owned session; `phone-link list` reads its subsequent state.
+Preview staging supplies an isolated empty `links.json` and an explicit service
+path. It never imports the installed phone credentials.
+
+Portable tests cover legacy documents, unknown fields, stale saves, Unix file
+permissions, actual local HTTP pairing and notification delivery, invalid
+registrations, cancellation before connecting, destination routing, actual
+CLI/IPC registration/removal, dry runs, manual output, and custom filenames.
+Automatic linked-phone output and saved display controls are implemented below. Native QR rendering, cancellation, local fixture registration, and saved display changes passed. Real phone receipt remains unverified.
+
+### Automatic linked-phone output
+
+The service now has explicit `--phone-output` activation, requiring both a
+settings path and a phone links path. Preview staging leaves it disabled.
+An independent worker renders eight-LED agent animations or battery programs
+and sends only when the generated program changes. Battery power-change preview
+uses the shared service policy. Phone output uses full brightness, matching the
+legacy phone path. Failures retain the last successful program, expose a
+redacted error and retry after thirty seconds.
+
+The legacy `ios/ID` device settings are preserved and edited atomically by the
+service. The native Phone page and `phone-link display ID agent|battery|custom`
+control each phone's display. A manual LED delivery serializes against automatic
+sends and saves custom mode before transport, so the next automatic cycle
+cannot overwrite it. Notification-only delivery leaves the display preference
+intact. Network operations do not hold the settings or UI snapshot locks.
+
+Local HTTP tests verify agent-to-manual-to-agent transitions, duplicate
+suppression, battery output, saved unknown fields, link removal, error redaction
+and retry backoff. Real phone receipt remains a separate device validation gate.
+
+## Native helpers and power recovery (Rust preview)
+
+`sidepulse-helpers` replaces the packaged C SD eject guard with a Rust binary
+using the installed macOS DiskArbitration/CoreFoundation APIs. Hardware matching
+preserves the legacy Secure Digital protocol / SDXC model rule. It dissents
+software ejects, deduplicates five-second mount retries, releases retries when a
+disk mounts or disappears, caps retained disks, bounds redirected logs, and
+unregisters callbacks on termination. `sdejectguard check` opens and closes a
+session without registering a veto. `sdejectguard run [--no-mount]` is the explicit
+runtime route. Windows and Linux report the unavailable capability.
+
+The preview now stages eight binaries, including the guard, without registering
+or running it. Actual eject/wake behavior and the guard's startup manager remain
+separate validation and installer work.
+
+`status-bar install-sleep-helper`, `uninstall-sleep-helper`, and
+`sleep-helper-status` are Rust CLI routes. Install/remove support an inspectable
+`--dry-run`; applying on macOS requires root. Installation publishes only the
+legacy two-command pmset sudoers rule, validates it with visudo, sets root
+ownership and mode 0440, and checks for an external edit before publishing.
+Symlinks and unrelated existing sudoers rules are refused. Tests use temporary
+files and never install a system rule.
+
+The service exposes power-control health, accurate requested/active state even
+when the helper fails, a thirty-second retry delay, and an explicit retry
+request. The Sleep page shows runtime errors and retry control; CLI routes are
+`service-power-control` and `service-power-retry`. Mocked controller tests cover
+missing helpers, delay, explicit retry, failed restoration and recovery without
+invoking power commands. A real read-only SD session check passed locally.
+System helper installation, actual sleep changes and eject protection remain
+inactive in the preview.
+
+## Agent and battery LED CLI loops
+
+`agent-monitor leds` and `battery leds` now use the Rust service to select a
+destination, render a program for its two- or eight-LED size, and perform manual
+delivery. They support explicit devices, filenames, dry runs, one-shot output,
+refresh intervals and graceful interruption. Unchanged programs are suppressed
+between refreshes. Battery output uses the saved charger baseline or an explicit
+`--full-watts` override; explicit `auto` is distinct from an omitted option.
+Agent CLI output retains the legacy default animation palette.
+
+Portable real CLI/IPC tests verify a two-LED agent preview without writing and
+a battery program written to an explicit custom filename. The shared service
+continues to own its monitor, battery snapshot and device write. Optional
+per-provider log flags select standalone monitoring through the same shared
+source readers and monitor, as described in Native CLI compatibility below.
+
+## Native preview startup and shutdown
+
+`sidepulse-next setup --stage-dir DIR` assembles the isolated native bundle;
+`--dry-run` produces its manifest without writing it. Service and tray lifecycle
+commands accept that explicit bundle:
+
+```sh
+sidepulse-next service install --stage-dir DIR --dry-run
+sidepulse-next service install --stage-dir DIR --no-start
+sidepulse-next service start --stage-dir DIR
+sidepulse-next service status --stage-dir DIR
+sidepulse-next service stop --stage-dir DIR
+sidepulse-next service uninstall --stage-dir DIR
+sidepulse-next status-bar install --stage-dir DIR --dry-run
+```
+
+Startup registration lives in `sidepulse-installer`, separately from UI and
+monitor policy. Each preview has a unique label derived from its path. macOS
+uses user LaunchAgents, Linux uses user systemd units, and Windows uses a
+Task Scheduler logon trigger with the current user's interactive token and
+least privilege. Windows definitions follow Microsoft's
+[logon task schema](https://learn.microsoft.com/en-us/windows/win32/taskschd/logon-trigger-example--xml-).
+Existing files and task commands must match their expected owner. Plans detect
+external edits, refuse symlinks or unrelated entries, and retain a verified
+startup file if the manager fails so installation can be retried explicitly.
+Windows task inspection checks its action, working directory, user, logon type,
+and privileges. Manager queries distinguish registration from running state;
+Windows running state is reported as unknown rather than inferred from a task's
+presence. No startup registration was applied to the development machine.
+
+`sidepulse-next sdejectguard install|start|stop|uninstall|status --stage-dir DIR`
+manages the macOS guard in the user scope. System scope uses the root-owned
+immutable native PKG payload, as described below. Hardware validation remains
+open.
+
+The service handles termination signals and explicit IPC shutdown. It cancels
+background recovery, relay, discovery, output, history, battery, and power loops,
+joins runtime workers, and flushes its final state. The power controller drops
+before process exit and restores any override it applied; failed restoration is
+logged. Native power queries and mutations have deadlines. Windows service stops
+request a graceful IPC shutdown before removing the scheduled task. Real binary
+checks verify both IPC and termination shutdown with isolated logs and files;
+these checks do not activate power control.
+
+## Native CLI compatibility
+
+The staged `bin` directory now also contains native entry points named
+`sidepulse`, `agent-monitor`, `agent-status-bar`, and `sidepulse-reply`. They are
+copies of the corresponding Rust executables, with no Python launcher. The
+multicall CLI routes the original names to their command groups, supports help
+and version flags, and resolves its explicit preview bundle's endpoint when
+connection arguments are omitted. These files have not been added to the
+user's active PATH.
+
+Agent LED monitoring also runs independently of a background service. Provider
+logs, transcripts, replay limits, stale policy, and tool timeout options use the
+shared source reader and core monitor. The CLI retains monitor state across
+new log records, uses the common device and destination modules, supports
+one-shot and continuous previews/writes, restores externally changed output,
+refreshes firmware keepalive, and handles interruption. Explicit connection
+arguments select service-owned rendering and delivery. Standalone source flags
+cannot change the policy of an explicitly selected running service.
+
+Tests compare actual CLI output with captured Python two-LED programs, follow a
+new completion event through the continuous loop, verify custom filenames and
+no writes during previews, and exercise native compatibility names. Staged
+smoke checks now exercise those entry points and require graceful service exit.
+
+
+## Offline preview updates, rollback, and recovery
+
+`sidepulse update --source-dir DOWNLOAD --stage-dir PREVIEW --backup-dir BACKUP`
+prepares all nine native binaries, aliases, application bundles, and launch files
+in a sibling temporary directory. The selected service must be stopped before
+replacement. Its endpoint and startup paths remain stable. Raw `settings.json`,
+`links.json`, `relay.json`, named `animations/` assets, and all ordinary files under `state/` are retained,
+including unknown settings and log fields. State is bounded to 128 MiB and
+10,000 files; symlinks and special files are refused, except stale IPC sockets.
+Unknown files elsewhere in the old bundle remain in the backup.
+
+`sidepulse rollback --stage-dir PREVIEW --backup-dir BACKUP --save-current SAVED`
+restores older native executables while preserving the latest runtime settings
+and logs. Deleted runtime files are not revived. Both saved bundles remain
+available for another rollback. Backups contain identity and payload checksums;
+modified backups are refused. Advisory filesystem locks prevent concurrent
+native updates. Settings, payloads, and source binaries are rechecked before
+publication. `--dry-run` prints each plan without making changes.
+
+A durable receipt is written before the original directory moves. Publication
+failures restore it when its original path remains vacant. If a process is
+interrupted in the gap between directory moves, `sidepulse recover --stage-dir
+PREVIEW --backup-dir BACKUP` restores the checksum-verified original. Recovery
+refuses to overwrite any directory at the original location. On Windows, run
+bundle replacement from the downloaded binaries outside the selected bundle;
+open executables can prevent filesystem replacement. Restart existing preview
+startup entries after an update; these commands do not change their registration.
+
+Tests cover raw data preservation, rollback and redo, deleted files, edited
+plans and backups, concurrent operations, live endpoints, publication failure,
+and interrupted publication recovery. Actual native executable update and
+rollback smoke tests use isolated previews. This is a native preview migration
+path; ownership transfer from the production Python installation is still gated
+on hardware, UI, and release validation.
+
+
+## Relocatable native release payloads
+
+`sidepulse-next-stage --package SOURCE PACKAGE VERSION` creates a portable
+payload containing nine binaries, compatibility aliases, and immutable macOS
+application bundles. Settings, state, startup entries, and absolute paths are
+excluded. `--verify-package PACKAGE` checks platform, architecture, exact file
+list, sizes, executable modes, and SHA-256 hashes. `--archive-package PACKAGE ZIP`
+creates an archive without replacing any existing output and retains Unix
+executable permissions. All three CI jobs now build, archive, stage, and
+smoke-check this payload.
+
+A downloaded package can be passed directly to `setup --source-dir PACKAGE` or
+`update --source-dir PACKAGE`. macOS application bundles and signature resources
+are copied byte-for-byte. UI clients derive the service endpoint from the
+external preview manifest, so no application resource changes during staging.
+The updater verifies both standalone binaries and copied application bundles.
+
+`--sign-package PACKAGE IDENTITY --dry-run` reports native signing commands.
+On macOS the implementation signs standalone binaries and then application
+bundles with hardened runtime and a secure timestamp, verifying every result
+before resealing checksums. On Windows it uses a certificate thumbprint and
+`--timestamp-url HTTPS_URL`, SHA-256 file/timestamp digests, and Authenticode
+verification. Actual distribution signing requires publisher credentials.
+Linux archives use a detached GPG signature. Checksums indicate integrity and
+do not authenticate the publisher.
+
+The signing sequence follows [Apple's distribution signing guidance](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/)
+and [Microsoft's SignTool documentation](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool).
+Notarization and native installer wrapping are described in
+`packaging/NATIVE.md`; genuine distribution signing and OS trust verification
+remain external release gates until credentials are available.
+
+
+The native Mac PKG builder uses fixed, non-relocatable application components
+and recommended system ownership under
+`/Library/Application Support/SidePulse/NativePreview`. It includes no
+postinstall activation. `sdejectguard install --scope system --dry-run` plans a
+distinct system job from that payload. Mutation requires root, verifies payload
+checksums and root ownership throughout the path, and refuses writable parents,
+symlinks, or different existing jobs. Stop/removal remain available after payload
+loss. Tests use fake launch managers; no system startup entry or live veto was
+installed.
+
+Local release QA passed package creation, ad hoc code signatures, archive
+extraction, verification after staging, service smoke checks, and unsigned PKG
+creation/inspection. Genuine Developer ID/Authenticode signing, notarization,
+installer application, and OS trust prompts remain unverified.
+
+
+## Existing terminal session reuse
+
+Session targets now carry optional service-derived matching hints. Older targets
+without hints still decode. On macOS the platform adapter checks existing
+Terminal and iTerm tabs before creating a new session. Ghostty uses session
+markers first, then accepts a bare prompt title only when one surface matches;
+a common working directory never selects a Ghostty surface. Its command names
+and objects were checked against the installed Ghostty scripting dictionary.
+Custom application paths recognize these three supported terminals too.
+
+If no match is found, scripting fails, or the bounded three-second lookup times
+out, normal session launch runs with a recognizable SidePulse/session title.
+Title controls are filtered before terminal output, and shell/script values
+remain quoted data. Captured title and matching cases, quoting, and optional
+protocol compatibility pass automated tests. Actual terminal focus and reuse
+remain part of macOS visual QA; no real activation script was executed during
+this implementation.
+
+
+## Maintained native examples
+
+`sidepulse-examples` ports the audio meter and original score demonstration.
+CPAL capture is an optional feature; the application service and GUI clients
+have no audio dependency. The examples keep pure level/score program generation
+separate from capture, network polling, presentation, and device output.
+57 captured Python programs match exactly. Offline CLI checks and mock-device
+tests pass without microphone capture, an external scoreboard request, or real
+LED writes. Live capture is compiled in CI on all three platforms; actual audio
+hardware and permission behavior remain unverified. The classifier benchmark
+was already ported in `sidepulse-reply`.
+
+
+## Captured compatibility and explicit import
+
+The Rust tests now exercise 75 origin cases and 20 transcript cases captured from
+Python, plus 35 transition sequences and install/remove documents for all five
+provider configurations.
+They compare event routing, context, error handling, provider hook shapes, saved
+unrelated entries, and backups. Bounded transcript replay retains the newest
+complete rows, replaces invalid UTF-8 like Python, and accepts naive timestamps
+as UTC with the same missing/invalid timestamp fallback.
+
+`setup --import-config DIR --import-logs DIR` first produces a reviewable list
+with `--dry-run`, then copies raw settings, phone links, custom LED assets, and
+provider logs, debug audit logs, status history, and saved latest agent state into a new isolated preview. A contract test loads the imported
+custom animation and saved profile through the headless service. Unknown fields
+are retained and sources are checked before publication. Legacy relay activation
+is excluded from this initial import. Updates and rollback now retain named
+animation files alongside the latest runtime documents.
+
+
+## Setup, diagnostics, and native recovery
+
+Provider configuration mutations are service-owned and use the same atomic,
+backed-up plans as the CLI. The Setup page reports current versus legacy hooks
+for all five providers, preserves unrelated settings and handlers, removes Grok
+legacy duplicates, and keeps backups outside Grok's active hook directory. Codex
+installation returns the required trust-review instruction. Cursor becomes a
+source when its hooks are installed without restarting the monitor.
+
+The installer crate owns startup and administrator setup operations. Settings
+uses a verified staged manifest and caches service context so startup controls
+remain available after the monitor stops. A newly opened staged Settings app can
+recover that context without a running service. Enable at login and Start now
+are separate actions. UI drawing never invokes startup manager processes.
+
+Debug CSV and HTML exports are bounded, streamed, and atomically published by the
+service. CSV preserves the 14 legacy columns; HTML escapes event data and uses
+no external resources. Hooks keep audit and inferred-provider output beside the
+selected log by default, with an explicit audit-path override. Legacy import
+retains audit/history/latest files as well as provider logs.
+
+The macOS virtual display consumes service frames and changes visibility in the
+window's logic callback, which continues while hidden. Native checks verified
+battery cyan, a saved custom working program, manual-mode hiding, and reappearance
+when agent display resumes. Accepted macOS IPC streams are explicitly blocking,
+so large history responses survive partial reads and writes.
+
+Detailed validation and outstanding delivery gates are tracked in
+[rust-native-validation.md](rust-native-validation.md).
+
+
+The saved `show_menu_bar_icon` preference is service-owned and preserved from
+legacy settings. Settings and the `tray-visibility ENDPOINT show|hide` CLI can
+change it; all tray adapters apply it without stopping monitoring. The Settings
+window remains available to restore a hidden icon. Linux's tray host decides
+whether to hide or move a passive icon into its overflow area.

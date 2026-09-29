@@ -1,0 +1,4837 @@
+[
+  {
+    "name": "codex/basic",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "SessionStart",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:05+00:00",
+        "hook_event_name": "Notification",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "notification_type": "idle_prompt",
+        "message": "Ready"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project (fixture-)",
+            "mode": "idle_ready",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "SessionStart",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:05+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/permission",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PermissionRequest",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/failure",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "StopFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostToolUseFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "StopFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/compact",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "SessionEnd",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "SessionEnd",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/missing_context",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/post_tool_expiry",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:02:10+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "codex/completed_expiry",
+    "provider": "codex",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:21:40+00:00",
+        "statuses": [],
+        "stale_statuses": [
+          {
+            "provider": "codex",
+            "agent_id": "codex:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": true
+          }
+        ],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 1
+      }
+    ]
+  },
+  {
+    "name": "claude/basic",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "SessionStart",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:05+00:00",
+        "hook_event_name": "Notification",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "notification_type": "idle_prompt",
+        "message": "Ready"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project (fixture-)",
+            "mode": "idle_ready",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "SessionStart",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:05+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/permission",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PermissionRequest",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/failure",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "StopFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostToolUseFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "StopFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/compact",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "SessionEnd",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "SessionEnd",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/missing_context",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/post_tool_expiry",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:02:10+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "claude/completed_expiry",
+    "provider": "claude",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:21:40+00:00",
+        "statuses": [],
+        "stale_statuses": [
+          {
+            "provider": "claude",
+            "agent_id": "claude:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": true
+          }
+        ],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 1
+      }
+    ]
+  },
+  {
+    "name": "grok/basic",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "SessionStart",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:05+00:00",
+        "hook_event_name": "Notification",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "notification_type": "idle_prompt",
+        "message": "Ready"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project (fixture-)",
+            "mode": "idle_ready",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "SessionStart",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:05+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/permission",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PermissionRequest",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/failure",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "StopFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostToolUseFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "StopFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/compact",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "SessionEnd",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "SessionEnd",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/missing_context",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/post_tool_expiry",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:02:10+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "grok/completed_expiry",
+    "provider": "grok",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:21:40+00:00",
+        "statuses": [],
+        "stale_statuses": [
+          {
+            "provider": "grok",
+            "agent_id": "grok:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": true
+          }
+        ],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 1
+      }
+    ]
+  },
+  {
+    "name": "cursor/basic",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "SessionStart",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:05+00:00",
+        "hook_event_name": "Notification",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "notification_type": "idle_prompt",
+        "message": "Ready"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project (fixture-)",
+            "mode": "idle_ready",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "SessionStart",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:05+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/permission",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PermissionRequest",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/failure",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "StopFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostToolUseFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "StopFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/compact",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "SessionEnd",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "SessionEnd",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/missing_context",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/post_tool_expiry",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:02:10+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "cursor/completed_expiry",
+    "provider": "cursor",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:21:40+00:00",
+        "statuses": [],
+        "stale_statuses": [
+          {
+            "provider": "cursor",
+            "agent_id": "cursor:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": true
+          }
+        ],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 1
+      }
+    ]
+  },
+  {
+    "name": "junie/basic",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "SessionStart",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:05+00:00",
+        "hook_event_name": "Notification",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "notification_type": "idle_prompt",
+        "message": "Ready"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project (fixture-)",
+            "mode": "idle_ready",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "SessionStart",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:05+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/permission",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PermissionRequest",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "waiting_for_input",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PermissionRequest",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "waiting_for_input",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/failure",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "StopFailure",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostToolUseFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "blocked_error",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "StopFailure",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "blocked_error",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/compact",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "PostCompact",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:03+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:04+00:00",
+        "hook_event_name": "SessionEnd",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "PostCompact",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:03+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:03+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:04+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:04+00:00",
+            "event_name": "SessionEnd",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/missing_context",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-session",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      },
+      {
+        "logged_at": "2026-09-27T12:00:02+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "tool_running",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PreToolUse",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "tool_running",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:02+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:02+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": null,
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/post_tool_expiry",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "PostToolUse",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "tool_name": "Bash",
+        "tool_use_id": "one",
+        "tool_input": {
+          "command": "pytest"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:02:10+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "PostToolUse",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": "Bash",
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      }
+    ]
+  },
+  {
+    "name": "junie/completed_expiry",
+    "provider": "junie",
+    "rows": [
+      {
+        "logged_at": "2026-09-27T12:00:00+00:00",
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project",
+        "prompt": "Fix the test"
+      },
+      {
+        "logged_at": "2026-09-27T12:00:01+00:00",
+        "hook_event_name": "Stop",
+        "session_id": "fixture-session",
+        "cwd": "/captured/project"
+      }
+    ],
+    "steps": [
+      {
+        "now": "2026-09-27T12:00:00+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "working",
+            "updated_at": "2026-09-27T12:00:00+00:00",
+            "event_name": "UserPromptSubmit",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "working",
+        "active_count": 1,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:00:01+00:00",
+        "statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": false
+          }
+        ],
+        "stale_statuses": [],
+        "mode": "completed",
+        "active_count": 0,
+        "stale_count": 0
+      },
+      {
+        "now": "2026-09-27T12:21:40+00:00",
+        "statuses": [],
+        "stale_statuses": [
+          {
+            "provider": "junie",
+            "agent_id": "junie:session:fixture-session",
+            "display_name": "project: Fix the test (fixture-)",
+            "mode": "completed",
+            "updated_at": "2026-09-27T12:00:01+00:00",
+            "event_name": "Stop",
+            "session_id": "fixture-session",
+            "cwd": "/captured/project",
+            "tool_name": null,
+            "message": null,
+            "origin": null,
+            "stale": true
+          }
+        ],
+        "mode": "idle_ready",
+        "active_count": 0,
+        "stale_count": 1
+      }
+    ]
+  }
+]

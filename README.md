@@ -18,6 +18,18 @@ The device mounts as a disk drive. You can control the LEDs by writing to `LEDS.
 
 The LED control DSL is described in [`LEDS_FORMAT.md`](LEDS_FORMAT.md).
 
+## Rust migration preview
+
+A native Rust implementation is available on the migration branch. Monitoring,
+hooks, settings, history, device and phone output, and power decisions belong to
+headless crates; tray/settings/virtual-display clients use the shared protocol.
+The workspace builds for macOS, Windows, and Linux. The installed Python release
+remains authoritative while native UI, hardware, and release gates are validated.
+
+See [architecture and progress](docs/design/rust-architecture.md),
+[native package setup and update](packaging/NATIVE.md), and
+[Rust examples](crates/sidepulse-examples/README.md).
+
 ## Installation
 
 Choose the level that fits how you want to use SidePulse.

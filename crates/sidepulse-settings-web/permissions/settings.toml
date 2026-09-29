@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "settings-client"
+description = "Read Settings state and execute the typed Settings action allowlist."
+commands.allow = ["settings_poll", "settings_action"]
