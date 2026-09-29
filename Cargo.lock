@@ -5560,6 +5560,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sidepulse-core",
+ "sidepulse-device",
  "sidepulse-installer",
  "sidepulse-ui-client",
  "sidepulse-ui-model",

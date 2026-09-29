@@ -17,6 +17,43 @@ shared layout/styling and browser presentation checks. Native webviews still nee
 Tauri uses WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux.
 [Tauri process model](https://v2.tauri.app/concept/process-model/)
 
+## Python UI structure
+
+The Python `build_settings_window` is the source of the Settings structure. The
+webview uses the same five top tabs in the same order, rather than the expanded
+sidebar introduced in the first Tauri port:
+
+| Tab | Groups and order |
+| --- | --- |
+| Agents | Agent Hooks (Codex, Claude, Grok, Cursor, Junie), Session Opening with Terminal App beside it, Transcript Monitoring |
+| Animations | Profile selection/save/delete, Export JSON/Import JSON/Add Custom, eight State/Animation/Live Preview/Actions rows |
+| Advanced | Agent List retention and idle timeout, Sleep Prevention battery threshold, battery plug/unplug preview, menu bar visibility |
+| History | Status History, timeframe, six chart rows, Refresh |
+| Diagnostics | Debug Log and exports, Settings File |
+
+Working, tool running and long tasks share one animation row. Lid Open and Lid
+Closed appear in the same table. Profile and custom-animation editors open as
+dialogs. The chart follows Python's order: Agent, Battery, Charger, SidePulse,
+macOS Sleep, Lid. The window starts at Python's 680 by 560 Settings size and
+allows resizing for accessibility and other desktop platforms.
+
+Additional Rust preview controls remain reachable through a separate Controls
+menu and Setup entry outside the five Settings tabs. Hook installation belongs
+on Agents; startup/helper management belongs in Setup. Previewing hook changes
+remains available in Setup. These additional controls do not become Settings tabs.
+
+A browser test reads the Python source with `ast`, without importing AppKit, and
+compares the actual tab names/order, section headings, providers, animation
+columns/state rows and history row order. Chromium and WebKit also exercise the
+controls, dialogs, retained drafts and narrow layouts.
+
+Live preview frames are produced in Rust by the bundled firmware LED engine.
+The browser only paints returned RGB values. Show requests are bounded to the
+selected connected agent-display device for three seconds (ten seconds in the
+editor), after which current agent output resumes. They do not save preferences.
+Saving an edited row creates/updates its named asset and assigns it to that row
+in one atomic Rust settings save, including the grouped working states.
+
 ## Boundaries
 
 ```text
@@ -56,8 +93,8 @@ input values. Startup recovery remains available when the service is offline.
 2. Choose Tauri with HTML/CSS — accepted.
 3. Embed the frontend and preserve the existing executable, endpoint, and app
    bundle entry points — implemented.
-4. Port all twelve Settings pages, including retained drafts, save errors,
-   offline recovery, profiles, pairing, diagnostics, and the six-row chart — implemented.
+4. Restore the Python five-tab Settings structure, dialog editors and animation
+   table; retain additional preview controls outside those tabs — implemented.
 5. Verify state/action contracts and browser layout, then exercise each actual
    system webview. Browser checks do not replace native window checks.
 6. Update the platform runtime dependencies, packaging, and CI. Preserve the
@@ -89,7 +126,7 @@ checks Chromium and WebKit with fixture data.
 
 Rust tests exercise serialized view compatibility, command validation, export
 path ownership, offline startup dispatch and the actual Tauri capability/IPC
-boundary with its mock runtime. Browser tests render every page and exercise
+boundary with its mock runtime. Browser tests compare the Python structure, render every tab/utility panel and exercise
 Settings actions, failed saves, live updates, retained drafts, history hover and
 keyboard selection, QR drawing, clipboard requests and narrow/dark layouts.
 Those tests use local fixtures and do not change real startup, hooks, devices,

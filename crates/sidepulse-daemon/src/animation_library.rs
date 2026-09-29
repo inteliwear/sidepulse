@@ -265,12 +265,30 @@ impl SettingsStore {
                     items.remove(id);
                 }
             }
-            AnimationLibraryEdit::SaveAnimation { id, name, program } => {
+            AnimationLibraryEdit::SaveAnimation {
+                state,
+                id,
+                name,
+                program,
+            } => {
                 let id = id.clone().unwrap_or_else(|| {
                     unique_animation_id("custom:", name, |id| {
                         library.custom_animations.contains_key(id)
                     })
                 });
+                if let Some(state) = state {
+                    let mut current = library.current.clone();
+                    current.insert(state.clone(), id.clone());
+                    if matches!(
+                        state.as_str(),
+                        "working" | "tool_running" | "long_task_progress"
+                    ) {
+                        for key in ["working", "tool_running", "long_task_progress"] {
+                            current.insert(key.into(), id.clone());
+                        }
+                    }
+                    apply = Some(current);
+                }
                 new_assets.insert(
                     id,
                     CustomAnimation {
@@ -464,6 +482,7 @@ mod tests {
         fs::write(&path, "{}").unwrap();
         let mut store = SettingsStore::load(&path).unwrap();
         let edit = |program: &str| AnimationLibraryEdit::SaveAnimation {
+            state: None,
             id: Some("custom:existing".into()),
             name: "Existing".into(),
             program: program.into(),
@@ -540,6 +559,7 @@ mod tests {
         assert!(
             store
                 .edit_animation_library(&AnimationLibraryEdit::SaveAnimation {
+                    state: None,
                     id: None,
                     name: "Test".into(),
                     program: "#123456".into()
@@ -548,5 +568,38 @@ mod tests {
         );
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
         assert_eq!(fs::read_to_string(path).unwrap(), "{}");
+    }
+    #[test]
+    fn saving_a_row_clone_assigns_the_named_asset_and_grouped_working_states_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        fs::write(&path, r#"{"other":"keep"}"#).unwrap();
+        let mut store = SettingsStore::load(&path).unwrap();
+        store
+            .edit_animation_library(&AnimationLibraryEdit::SaveAnimation {
+                state: Some("working".into()),
+                id: Some("custom:clone".into()),
+                name: "Working clone".into(),
+                program: "#FF0080".into(),
+            })
+            .unwrap();
+        let library = store.animation_library().unwrap();
+        for state in ["working", "tool_running", "long_task_progress"] {
+            assert_eq!(library.current[state], "custom:clone");
+        }
+        assert_eq!(library.custom_animations["custom:clone"].program, "#FF0080");
+        assert_eq!(store.snapshot()["other"], "keep");
+        let before = fs::read(&path).unwrap();
+        assert!(
+            store
+                .edit_animation_library(&AnimationLibraryEdit::SaveAnimation {
+                    state: Some("invalid".into()),
+                    id: None,
+                    name: "Invalid".into(),
+                    program: "#00FF00".into(),
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 }

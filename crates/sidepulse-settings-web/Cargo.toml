@@ -16,6 +16,7 @@ custom-protocol = ["tauri/custom-protocol"]
 [dependencies]
 sidepulse-ui-client = { path = "../sidepulse-ui-client" }
 sidepulse-ui-model = { path = "../sidepulse-ui-model" }
+sidepulse-device = { path = "../sidepulse-device" }
 sidepulse-core = { path = "../sidepulse-core" }
 sidepulse-installer = { path = "../sidepulse-installer" }
 serde.workspace = true

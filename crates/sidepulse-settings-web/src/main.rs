@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod previews;
 use bridge::{Action, Bridge, Poll};
 use std::sync::Mutex;
 
@@ -8,11 +9,12 @@ use std::sync::Mutex;
 fn settings_poll(
     state: tauri::State<'_, Mutex<Bridge>>,
     after_revision: u64,
+    preview_program: Option<String>,
 ) -> Result<Poll, String> {
     state
         .lock()
         .map_err(|_| "Settings client is unavailable.".to_string())?
-        .poll(after_revision)
+        .poll_with_previews(after_revision, preview_program.as_deref())
 }
 
 #[tauri::command]
@@ -70,7 +72,7 @@ fn main() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("SidePulse Settings")
-            .inner_size(880.0, 680.0)
+            .inner_size(680.0, 560.0)
             .min_inner_size(580.0, 420.0)
             .on_navigation(|url| {
                 (url.scheme() == "tauri" && url.host_str() == Some("localhost"))

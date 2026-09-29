@@ -800,6 +800,7 @@ fn run_animation_library(command: &str, args: impl Iterator<Item = String>) -> E
                 *endpoint,
                 RequestKind::EditAnimationLibrary {
                     edit: AnimationLibraryEdit::SaveAnimation {
+                        state: None,
                         id: None,
                         name: (*name).into(),
                         program: read_bounded(path, 65536)?,
@@ -810,6 +811,7 @@ fn run_animation_library(command: &str, args: impl Iterator<Item = String>) -> E
                 *endpoint,
                 RequestKind::EditAnimationLibrary {
                     edit: AnimationLibraryEdit::SaveAnimation {
+                        state: None,
                         id: Some((*id).into()),
                         name: (*name).into(),
                         program: read_bounded(path, 65536)?,

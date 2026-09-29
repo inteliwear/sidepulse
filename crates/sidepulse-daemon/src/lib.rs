@@ -1,5 +1,6 @@
 //! Development service with one authoritative monitor and a portable IPC API.
 
+mod animation_preview;
 mod diagnostics;
 mod history;
 mod hook_setup;
@@ -60,6 +61,7 @@ pub struct Service {
     seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
     relay_publisher: Arc<Mutex<Option<RelayPublisher>>>,
     battery_preview: Arc<Mutex<BatteryPreview>>,
+    animation_preview: Arc<Mutex<Option<animation_preview::Preview>>>,
     virtual_output: Arc<Mutex<virtual_display::VirtualOutput>>,
     history: Arc<Mutex<history::HistoryStore>>,
     battery_diagnostics: Arc<Mutex<Option<BatterySnapshot>>>,
@@ -273,7 +275,9 @@ impl Service {
         let store = settings.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
         })?;
-        store.set_display_for_device(output.target(), mode, output.brightness())
+        store.set_display_for_device(output.target(), mode, output.brightness())?;
+        *self.animation_preview.lock().map_err(poisoned)? = None;
+        Ok(())
     }
 
     pub fn set_transcript_monitoring(&self, provider: &str, enabled: bool) -> io::Result<()> {
@@ -762,6 +766,17 @@ impl Service {
         let configured = settings
             .as_ref()
             .map_or("agent", |store| store.display_for_device(output.target()));
+        {
+            let mut preview = self.animation_preview.lock().map_err(poisoned)?;
+            if let Some(active) = preview.as_ref()
+                && configured == "agent"
+                && active.target == output.target()
+                && now < active.until
+            {
+                return output.sync_program(&active.program).map(Some);
+            }
+            *preview = None;
+        }
         let display = self
             .battery_preview
             .lock()
@@ -993,6 +1008,27 @@ impl Service {
                 self.shutdown
                     .store(true, std::sync::atomic::Ordering::Release);
                 Ok(())
+            }
+            RequestKind::PreviewAnimation {
+                state,
+                program,
+                seconds,
+            } => {
+                let payload = self
+                    .preview_animation(&state, program.as_deref(), seconds)
+                    .map(|()| ServerPayload::Ack)
+                    .unwrap_or_else(|error| ServerPayload::Error {
+                        code: "animation_preview_failed".into(),
+                        message: error.to_string(),
+                    });
+                write_message(
+                    &mut stream,
+                    &ServerMessage {
+                        version: PROTOCOL_VERSION,
+                        request_id: Some(request.request_id),
+                        payload,
+                    },
+                )
             }
             RequestKind::RenderLedProgram {
                 source,

@@ -106,6 +106,8 @@ pub enum AnimationLibraryEdit {
         id: String,
     },
     SaveAnimation {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
         id: Option<String>,
         name: String,
         program: String,
@@ -129,10 +131,21 @@ impl AnimationLibraryEdit {
             Self::ApplyProfile { id } | Self::DeleteProfile { id } => {
                 validate_animation_id(id, "profile:")?
             }
-            Self::SaveAnimation { id, name, program } => {
+            Self::SaveAnimation {
+                state,
+                id,
+                name,
+                program,
+            } => {
                 validate_animation_name(name)?;
                 if let Some(id) = id {
                     validate_animation_id(id, "custom:")?;
+                }
+                if state
+                    .as_ref()
+                    .is_some_and(|state| !ANIMATION_STATES.contains(&state.as_str()))
+                {
+                    return Err("invalid animation state");
                 }
                 if program.is_empty() || program.len() > 65536 {
                     return Err("custom animation is empty or too large");

@@ -32,9 +32,11 @@ pub struct Poll {
     pub state: Option<Value>,
     pub setup: Option<sidepulse_core::HookSetupStatus>,
     pub events: Vec<Value>,
+    pub previews: std::collections::BTreeMap<String, crate::previews::Frame>,
 }
 
 pub struct Bridge {
+    previews: crate::previews::Previews,
     commands: Sender<WorkerCommand>,
     updates: Receiver<Update>,
     state: Option<Value>,
@@ -60,6 +62,7 @@ impl Bridge {
         updates: Receiver<Update>,
     ) -> Self {
         Self {
+            previews: crate::previews::Previews::default(),
             commands,
             updates,
             state: None,
@@ -111,6 +114,18 @@ impl Bridge {
             .map_err(|_| "The Settings client has closed.".to_string())?;
         self.busy = true;
         Ok(())
+    }
+
+    pub fn poll_with_previews(
+        &mut self,
+        after_revision: u64,
+        editor: Option<&str>,
+    ) -> Result<Poll, String> {
+        let mut poll = self.poll(after_revision)?;
+        if let Some(state) = &self.state {
+            poll.previews = self.previews.frames(state, editor);
+        }
+        Ok(poll)
     }
 
     pub fn poll(&mut self, after_revision: u64) -> Result<Poll, String> {
@@ -190,6 +205,7 @@ impl Bridge {
                 .flatten(),
             setup: self.setup.clone(),
             events,
+            previews: Default::default(),
         })
     }
 
@@ -262,6 +278,7 @@ fn validate_settings_request(kind: &RequestKind) -> Result<(), String> {
         RequestKind::ConfigureHooks { .. }
             | RequestKind::ExportDiagnostics { .. }
             | RequestKind::RetryPowerControl
+            | RequestKind::PreviewAnimation { .. }
             | RequestKind::EditAnimationLibrary { .. }
             | RequestKind::ExportAnimationProfile { .. }
             | RequestKind::SetLidAnimationTiming { .. }

@@ -10,15 +10,15 @@
 </head>
 <body>
   <div class="app">
-    <aside>
-      <header><span class="brand-mark" aria-hidden="true">◉</span><div><strong>SidePulse</strong><span>Settings</span></div></header>
-      <nav aria-label="Settings pages" id="navigation"></nav>
-      <div class="connection" id="connection" role="status">Connecting…</div>
-    </aside>
+    <nav aria-label="Settings tabs" id="navigation" role="tablist"></nav>
     <main>
-      <div id="message" role="status" aria-live="polite" hidden></div>
-      <div id="page"></div>
+      <div id="page" role="tabpanel"></div>
     </main>
+    <footer>
+      <div><div id="connection" class="connection" role="status">Connecting…</div><div id="message" role="status" aria-live="polite" hidden></div></div>
+      <div class="window-actions"><button id="back-settings" hidden>Back to Settings</button><button id="controls-toggle" aria-expanded="false" aria-controls="controls-menu">Controls…</button><button id="setup-open">Setup…</button></div>
+    </footer>
+    <nav id="controls-menu" aria-label="Other SidePulse controls" hidden></nav>
   </div>
 </body>
 </html>

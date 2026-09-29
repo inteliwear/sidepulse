@@ -42,6 +42,11 @@ pub enum RequestKind {
         led_count: u8,
         full_watts: Option<ChargerBaseline>,
     },
+    PreviewAnimation {
+        state: String,
+        program: Option<String>,
+        seconds: u8,
+    },
     AnimationLibrary,
     EditAnimationLibrary {
         edit: crate::AnimationLibraryEdit,
@@ -561,6 +566,19 @@ impl ClientRequest {
                 .any(|seconds| !seconds.is_finite() || !(0.1..=10.0).contains(seconds))
         {
             return Err("lid duration must be between 0.1 and 10 seconds");
+        }
+        if let RequestKind::PreviewAnimation {
+            state,
+            program,
+            seconds,
+        } = &self.kind
+            && (!crate::ANIMATION_STATES.contains(&state.as_str())
+                || !matches!(seconds, 3 | 10)
+                || program.as_ref().is_some_and(|program| {
+                    program.is_empty() || program.len() > 512 || program.lines().count() > 20
+                }))
+        {
+            return Err("invalid animation preview");
         }
         if let RequestKind::SetAnimationState {
             state,

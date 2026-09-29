@@ -119,10 +119,41 @@
   {
     "type": "request",
     "request": {
-      "command": "set_agent_animation",
-      "mode": "working",
-      "style": "custom",
-      "custom_program": "#00E5FF 500ms pulse\nrepeat"
+      "command": "set_animation_state",
+      "state": "working",
+      "style": "amber-pulse",
+      "custom_program": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "preview_animation",
+      "state": "working",
+      "program": null,
+      "seconds": 3
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "preview_animation",
+      "state": "working",
+      "program": "#00E5FF 500ms pulse\nrepeat",
+      "seconds": 10
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_animation",
+        "state": "working",
+        "id": null,
+        "name": "Working clone",
+        "program": "#00E5FF 500ms pulse\nrepeat"
+      }
     }
   },
   {
@@ -176,6 +207,7 @@
       "command": "edit_animation_library",
       "edit": {
         "operation": "save_animation",
+        "state": null,
         "id": null,
         "name": "Portable animation",
         "program": "#00E5FF"
@@ -273,6 +305,15 @@
     "request": {
       "command": "remove_phone",
       "id": "fixture-phone"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "configure_hooks",
+      "provider": "codex",
+      "install": true,
+      "dry_run": false
     }
   },
   {
@@ -420,10 +461,41 @@
   {
     "type": "request",
     "request": {
-      "command": "set_agent_animation",
-      "mode": "working",
-      "style": "custom",
-      "custom_program": "#00E5FF 500ms pulse\nrepeat"
+      "command": "set_animation_state",
+      "state": "working",
+      "style": "amber-pulse",
+      "custom_program": null
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "preview_animation",
+      "state": "working",
+      "program": null,
+      "seconds": 3
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "preview_animation",
+      "state": "working",
+      "program": "#00E5FF 500ms pulse\nrepeat",
+      "seconds": 10
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "edit_animation_library",
+      "edit": {
+        "operation": "save_animation",
+        "state": "working",
+        "id": null,
+        "name": "Working clone",
+        "program": "#00E5FF 500ms pulse\nrepeat"
+      }
     }
   },
   {
@@ -477,6 +549,7 @@
       "command": "edit_animation_library",
       "edit": {
         "operation": "save_animation",
+        "state": null,
         "id": null,
         "name": "Portable animation",
         "program": "#00E5FF"
@@ -574,6 +647,15 @@
     "request": {
       "command": "remove_phone",
       "id": "fixture-phone"
+    }
+  },
+  {
+    "type": "request",
+    "request": {
+      "command": "configure_hooks",
+      "provider": "codex",
+      "install": true,
+      "dry_run": false
     }
   },
   {

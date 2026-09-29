@@ -6,7 +6,7 @@ cutover is a separate delivery gate.
 
 ## Automated and isolated checks
 
-- Formatting, workspace lint with all features, 229 tests, and release builds pass
+- Formatting, workspace lint with all features, 232 tests, and release builds pass
   locally. CI builds, tests, packages, archives, stages, and smoke-checks macOS,
   Windows, and Linux.
 - Captured Python comparisons cover 75 origin cases, 20 transcript cases,
@@ -20,12 +20,20 @@ cutover is a separate delivery gate.
   tests inspect plans without registering jobs or starting helpers.
 - Settings now uses an embedded Tauri HTML/CSS/JavaScript frontend over the
   shared Rust client; the virtual overlay has its own Rust UI crate. Chromium
-  and WebKit presentation tests pass for all twelve pages, typed actions,
+  and WebKit presentation tests pass for the Python-matched five Settings tabs and separate utility panels,
+  typed actions,
   successful/failed saves, retained drafts during external updates, offline
   startup recovery, animation/profile editing, phone pairing/QR, clipboard
   requests, six-row history with keyboard selection, and narrow/dark layouts.
-  The chart keeps 12-pixel labels at minimum width. These are fixture browser
+  A source-based check reads Python's AST and compares actual tab names/order,
+  section headings, hook providers, animation columns/eight states and six
+  history rows. The chart keeps 12-pixel labels at minimum width. These are fixture browser
   checks; they do not verify actual system-webview integration or desktop trays.
+- Animation row previews run the bundled firmware engine in Rust; typed Show
+  requests temporarily use a selected agent-display device for three or ten
+  seconds without saving settings. Mock-device tests verify restoration and
+  cancellation when the display mode changes. Saving an edited row assigns its
+  named asset and grouped working states in one atomic settings write.
 - Completed sessions retain their opener targets after becoming inactive; both
   the service and shared Settings client include them in recent-session actions.
 - A real CLI process retains pending permissions beyond its initial replay

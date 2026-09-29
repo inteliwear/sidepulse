@@ -427,7 +427,9 @@ pub fn start_worker(endpoint: String) -> (Sender<WorkerCommand>, Receiver<Update
                         }
                         _ => DraftKind::None,
                     };
+                    let preview = matches!(kind, RequestKind::PreviewAnimation { .. });
                     let result = request(&endpoint, kind).and_then(|payload| match payload {
+                        ServerPayload::Ack if preview => Ok(()),
                         ServerPayload::Settings { .. }
                         | ServerPayload::Devices { .. }
                         | ServerPayload::RelaySettings { .. }

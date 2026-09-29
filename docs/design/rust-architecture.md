@@ -87,7 +87,18 @@ per-endpoint singleton. Embedded assets need no Node runtime or development
 server. See [webview-ui-proposal.md](webview-ui-proposal.md) for the accepted
 architecture, runtime dependencies and validation boundary.
 
-The window covers live activity, device selection, brightness, agent /
+Settings follows the Python five-tab structure: Agents, Animations, Advanced,
+History and Diagnostics. Hooks, session openers and transcript switches are
+kept together on Agents. Profiles and the eight state rows share one compact
+Animations table, with Rust-rendered firmware previews and bounded Show actions.
+Advanced contains list timing, the battery sleep threshold, power-change preview
+and tray visibility. History follows Python's six-row order. Additional service
+controls use a separate Controls menu and Setup entry. The source-based browser
+contract checks the structure against Python rather than a second handwritten
+list. Edited row clones save the named asset and state assignment atomically;
+temporary previews leave saved preferences unchanged and resume current output.
+
+The separate controls cover live activity, device selection, brightness, agent /
 battery / manual display, charger baseline and power-change previews,
 transcript monitoring, and macOS awake preferences. macOS staging now includes
 native `.app` bundles for tray and settings, with the isolated endpoint in
