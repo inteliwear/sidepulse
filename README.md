@@ -39,7 +39,7 @@ Homebrew or administrator access. On Linux, install Python 3.10 or newer first. 
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
 at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. On macOS, setup also
 installs the menu-bar app and hardware helpers. On Linux, it automatically
-uses CLI-only mode for mounted SidePulse devices and iPhone linking/push. Run
+uses CLI-only mode for mounted SidePulse devices and iPhone/Android linking and push. Run
 `sidepulse update` to upgrade to the newest version from GitHub.
 
 Setup also installs a headless SidePulse service. It runs through a LaunchAgent
@@ -226,7 +226,24 @@ must be FAT12 starting at sector zero, with one FAT and 512-byte sectors. Progra
 are limited to 512 bytes and 20 lines. It writes the existing file's first data
 sector and updates its directory size, preserving its FAT allocation.
 
-### Link an iPhone
+### Link an iPhone or Android phone
+
+Both apps can scan the QR code from `sidepulse link`, or you can paste the
+complete push token shown by the app. Android tokens use
+`fcm_<registration-token>_<32-character-sender-key>`. Keep the entire token,
+including its case and underscores. Android delivery uses the production
+bridge's FCM route and data messages; the phone applies the program to its
+connected Dot through USB. Its app must have USB access.
+
+Existing iPhone links are preserved. Android links are stored alongside them
+with private file permissions. Re-pairing the same registration replaces its
+sender key; Android link IDs stay stable when the sender key changes.
+`sidepulse push`, `sidepulse write`, `--to`, and `--all` support both platforms.
+For example:
+
+```sh
+sidepulse push "off\n#00ff00 pulse" --to "Pixel 10 Pro XL" --title "Build complete"
+```
 
 Run one command and either scan the terminal QR code with the SidePulse iOS app
 or paste the push token shown by the app. Production tokens have 64 hexadecimal
@@ -260,7 +277,7 @@ older unkeyed senders must obtain a new token.
 sidepulse link
 ```
 
-List saved iPhones and remove a stale link by its displayed ID:
+List saved phones and remove a stale link by its displayed ID:
 
 ```sh
 sidepulse unlink

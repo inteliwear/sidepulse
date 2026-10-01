@@ -53,7 +53,7 @@ from .links import (
     listen_for_ios_registration,
     load_ios_links,
     new_pairing_channel,
-    normalize_apns_token,
+    normalize_phone_token,
     pairing_url,
     remove_ios_link,
     render_terminal_qr,
@@ -191,16 +191,16 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
 
     link = subparsers.add_parser(
         "link",
-        help="Link an iPhone or connect this computer to a remote SidePulse receiver.",
+        help="Link an iPhone or Android phone, or connect this computer to a remote SidePulse receiver.",
     )
     link.add_argument("relay_code", nargs="?", help="Relay code printed by the receiving Mac.")
     link.set_defaults(func=cmd_sidepulse_link)
 
     unlink = subparsers.add_parser(
         "unlink",
-        help="List linked iPhones or remove one by its displayed ID.",
+        help="List linked phones or remove one by its displayed ID.",
     )
-    unlink.add_argument("link_id", nargs="?", help="Exact linked iPhone ID to remove.")
+    unlink.add_argument("link_id", nargs="?", help="Exact linked phone ID to remove.")
     unlink.set_defaults(func=cmd_sidepulse_unlink)
 
     service = subparsers.add_parser(
@@ -718,7 +718,7 @@ def cmd_sidepulse_link(args: argparse.Namespace) -> int:
             + ", ".join(f"{link.name} ({link.link_id})" for link in existing)
         )
         print()
-    print("Link your iPhone")
+    print("Link your iPhone or Android phone")
     print()
     print("Scan this QR code with your phone:")
     print()
@@ -755,13 +755,13 @@ def cmd_sidepulse_link(args: argparse.Namespace) -> int:
                     input_enabled = False
                     continue
                 try:
-                    token = normalize_apns_token(value)
+                    token = normalize_phone_token(value)
                 except LinkError as exc:
                     print(f"Invalid token: {exc}")
                     prompt_visible = False
                     continue
                 link = IOSLink(
-                    name="iPhone",
+                    name="Android phone" if token.startswith("fcm_") else "iPhone",
                     token=token,
                     server=server,
                     linked_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -795,9 +795,9 @@ def cmd_sidepulse_unlink(args: argparse.Namespace) -> int:
     links = load_ios_links()
     if args.link_id is None:
         if not links:
-            print("No linked iPhones.")
+            print("No linked phones.")
             return 0
-        print("Linked iPhones:")
+        print("Linked phones:")
         for link in links:
             print(f"  {link.name} ({link.link_id})")
         print("Remove one with `sidepulse unlink ID_FROM_LIST`.")
@@ -805,7 +805,7 @@ def cmd_sidepulse_unlink(args: argparse.Namespace) -> int:
 
     matches = [link for link in links if link.link_id.casefold() == args.link_id.casefold()]
     if not matches:
-        print(f"sidepulse unlink: No linked iPhone has ID {args.link_id!r}.", file=sys.stderr)
+        print(f"sidepulse unlink: No linked phone has ID {args.link_id!r}.", file=sys.stderr)
         return 1
     if len(matches) != 1:
         print(
@@ -821,7 +821,7 @@ def cmd_sidepulse_unlink(args: argparse.Namespace) -> int:
         print(f"sidepulse unlink: Could not save the linked phones: {exc}", file=sys.stderr)
         return 1
     if removed is None:
-        print("sidepulse unlink: The linked iPhone has already been removed.", file=sys.stderr)
+        print("sidepulse unlink: The linked phone has already been removed.", file=sys.stderr)
         return 1
     print(f"Unlinked {removed.name} ({removed.link_id}).")
     return 0

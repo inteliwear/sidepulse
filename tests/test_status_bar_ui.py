@@ -472,9 +472,9 @@ class MenuBuildTests(StatusBarTestCase):
         self.assertIn("Agent Status", submenu_titles)
         self.assertIn("Manual", submenu_titles)
         self.assertNotIn("Battery Level", submenu_titles)
-        self.assertIn("Linked iPhone", submenu_titles)
+        self.assertIn("Linked phone", submenu_titles)
         self.assertIn("ID aaaaaaaaaaaa", submenu_titles)
-        self.assertIn("Remove iPhone...", submenu_titles)
+        self.assertIn("Remove phone...", submenu_titles)
         self.assertNotIn("Brightness 100%", submenu_titles)
 
     def test_remove_linked_iphone_requires_confirmation_and_deletes_link(self):

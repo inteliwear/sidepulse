@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -23,6 +24,7 @@ from .settings import default_config_dir
 DEFAULT_BRIDGE_SERVER = "https://bridge.sidepulse.io"
 PAIRING_TIMEOUT_SECONDS = 5 * 60
 IOS_BUNDLE_ID = "io.sidepulse.ios"
+ANDROID_PACKAGE_ID = "io.sidepulse.android"
 APNS_TOKEN_PATTERN = re.compile(r"(?:dev_)?[0-9a-f]{64}(?:_[A-Za-z0-9_-]{1,128})?")
 PAIRING_CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -32,14 +34,26 @@ class LinkError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class IOSLink:
+class PhoneLink:
     name: str
     token: str
     server: str = DEFAULT_BRIDGE_SERVER
     linked_at: str = ""
 
     @property
+    def platform(self) -> str:
+        return "android" if self.token.startswith("fcm_") else "ios"
+
+    @property
+    def device_token(self) -> str:
+        if self.platform == "android":
+            return self.token[:-33]
+        return self.token[:68] if self.token.startswith("dev_") else self.token[:64]
+
+    @property
     def link_id(self) -> str:
+        if self.platform == "android":
+            return hashlib.sha256(self.device_token.encode("ascii")).hexdigest()[:12]
         return self.token[:12]
 
     def to_dict(self) -> dict[str, str]:
@@ -50,6 +64,10 @@ class IOSLink:
             "server": self.server,
             "linked_at": self.linked_at,
         }
+
+
+# Preserve the existing public API and integrations while supporting both phones.
+IOSLink = PhoneLink
 
 
 def default_links_path() -> Path:
@@ -87,7 +105,25 @@ def normalize_apns_token(value: str) -> str:
     return token
 
 
+def normalize_fcm_token(value: str) -> str:
+    """Keep the opaque registration unchanged; only the final suffix is a key."""
+    token = value.strip()
+    if not token.startswith("fcm_") or not re.fullmatch(r"_[0-9a-f]{32}", token[-33:]):
+        raise LinkError("Android push token must start with 'fcm_' and end with a 32-character sender key.")
+    registration = token[4:-33]
+    if not 1 <= len(registration) <= 4096 or any(
+        not 33 <= ord(char) <= 126 or char in "/\\?#%" for char in registration
+    ):
+        raise LinkError("Android push token contains an invalid registration token.")
+    return token
+
+
+def normalize_phone_token(value: str) -> str:
+    return normalize_fcm_token(value) if value.strip().startswith("fcm_") else normalize_apns_token(value)
+
+
 def load_ios_links(path: Path | None = None) -> tuple[IOSLink, ...]:
+    """Load all phones, including legacy version-1 iOS entries."""
     target = (path or default_links_path()).expanduser()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -97,24 +133,28 @@ def load_ios_links(path: Path | None = None) -> tuple[IOSLink, ...]:
         return ()
     if not isinstance(data, dict) or data.get("version") != 1:
         return ()
-    items = data.get("ios")
-    if not isinstance(items, list):
-        return ()
     links: list[IOSLink] = []
-    for item in items:
-        if not isinstance(item, dict):
+    for platform, normalizer, default_name in (
+        ("ios", normalize_apns_token, "iPhone"),
+        ("android", normalize_fcm_token, "Android phone"),
+    ):
+        items = data.get(platform, [])
+        if not isinstance(items, list):
             continue
-        try:
-            links.append(
-                IOSLink(
-                    name=str(item.get("name") or "iPhone"),
-                    token=normalize_apns_token(str(item["token"])),
-                    server=normalize_server(str(item.get("server") or DEFAULT_BRIDGE_SERVER)),
-                    linked_at=str(item.get("linked_at") or ""),
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                links.append(
+                    PhoneLink(
+                        name=str(item.get("name") or default_name),
+                        token=normalizer(str(item["token"])),
+                        server=normalize_server(str(item.get("server") or DEFAULT_BRIDGE_SERVER)),
+                        linked_at=str(item.get("linked_at") or ""),
+                    )
                 )
-            )
-        except (KeyError, LinkError):
-            continue
+            except (KeyError, LinkError):
+                continue
     return tuple(links)
 
 
@@ -125,13 +165,18 @@ def save_ios_links(links: Iterable[IOSLink], path: Path | None = None) -> Path:
         target.parent.chmod(0o700)
     except OSError:
         pass
+    phones = tuple(links)
     payload = {
         "version": 1,
-        "ios": [link.to_dict() for link in links],
+        "ios": [link.to_dict() for link in phones if link.platform == "ios"],
+        "android": [link.to_dict() for link in phones if link.platform == "android"],
     }
     temporary = target.with_suffix(target.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
+    # Create privately before writing credentials, including under a permissive umask.
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        os.fchmod(output.fileno(), 0o600)
+        output.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     temporary.replace(target)
     target.chmod(0o600)
     return target
@@ -142,9 +187,7 @@ def store_ios_link(link: IOSLink, path: Path | None = None) -> tuple[IOSLink, ..
     updated: list[IOSLink] = []
     replaced = False
     for existing in current:
-        existing_device = existing.token[:68] if existing.token.startswith("dev_") else existing.token[:64]
-        new_device = link.token[:68] if link.token.startswith("dev_") else link.token[:64]
-        if existing_device == new_device:
+        if (existing.platform, existing.device_token) == (link.platform, link.device_token):
             updated.append(link)
             replaced = True
         else:
@@ -263,6 +306,26 @@ def iter_sse_messages(response) -> Iterable[str]:
         yield "\n".join(data_lines)
 
 
+def parse_phone_registration(value: str, *, server: str) -> PhoneLink:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise LinkError("Pairing response was not valid JSON.") from exc
+    if isinstance(payload, dict) and payload.get("type") == "ios_registration":
+        return parse_ios_registration(value, server=server)
+    if not isinstance(payload, dict) or payload.get("v") != 1 or payload.get("type") != "android_registration":
+        raise LinkError("Pairing response has an unsupported format.")
+    device = payload.get("device")
+    if not isinstance(device, dict) or device.get("platform") != "android" or device.get("package_id") != ANDROID_PACKAGE_ID:
+        raise LinkError("Pairing response did not include a supported SidePulse Android device.")
+    return PhoneLink(
+        name=str(device.get("name") or "Android phone").strip()[:80] or "Android phone",
+        token=normalize_fcm_token(str(device.get("push_token") or "")),
+        server=normalize_server(server),
+        linked_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
 def listen_for_ios_registration(
     server: str,
     channel: str,
@@ -281,7 +344,7 @@ def listen_for_ios_registration(
                     if stop.is_set():
                         return
                     try:
-                        link = parse_ios_registration(message, server=server)
+                        link = parse_phone_registration(message, server=server)
                     except LinkError:
                         continue
                     results.put(link)
@@ -316,10 +379,13 @@ def send_ios_program(
             alert["body"] = clean_message
         aps["alert"] = alert
 
-    payload: dict[str, object] = {
-        "aps": aps,
-        "data": custom_data,
-    }
+    payload: dict[str, object] = {"data": custom_data}
+    if link.platform == "android":
+        payload["sidepulse_event_id"] = custom_data["sidepulse_event_id"]
+        channel = normalize_fcm_token(link.token)
+    else:
+        payload["aps"] = aps
+        channel = "apns_" + normalize_apns_token(link.token)
     if program is not None:
         payload["leds"] = program
     if clean_title:
@@ -327,7 +393,7 @@ def send_ios_program(
     if clean_message:
         payload["body"] = clean_message
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    url = f"{normalize_server(link.server)}/api/leds/apns_{link.token}"
+    url = f"{normalize_server(link.server)}/api/leds/{urllib.parse.quote(channel, safe='')}"
     request = urllib.request.Request(
         url,
         data=body,
@@ -339,6 +405,18 @@ def send_ios_program(
             return response.read().decode("utf-8", errors="replace").strip()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()
+        for secret in (url, urllib.parse.quote(channel, safe=""), channel, link.token,
+                       link.device_token, link.token.rsplit("_", 1)[-1]):
+            detail = detail.replace(secret, "[redacted]")
         raise LinkError(detail or f"Bridge returned HTTP {exc.code}.") from exc
     except (OSError, urllib.error.URLError) as exc:
-        raise LinkError(f"Could not reach the bridge: {exc}") from exc
+        raise LinkError("Could not reach the bridge. Check the connection and bridge server.") from exc
+
+
+# Platform-neutral names for new callers; old names remain compatible.
+load_phone_links = load_ios_links
+save_phone_links = save_ios_links
+store_phone_link = store_ios_link
+remove_phone_link = remove_ios_link
+listen_for_phone_registration = listen_for_ios_registration
+send_phone_program = send_ios_program

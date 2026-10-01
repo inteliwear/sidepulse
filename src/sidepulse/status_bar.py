@@ -2112,7 +2112,7 @@ class StatusBarController(NSObject):
             None,
         )
         if link is None:
-            self.set_settings_message("That iPhone is no longer linked.")
+            self.set_settings_message("That phone is no longer linked.")
             self.refresh_(None)
             return
         if not confirm_linked_phone_removal(link.name):
@@ -2122,7 +2122,7 @@ class StatusBarController(NSObject):
         try:
             removed = remove_ios_link(link.token)
             if removed is None:
-                self.set_settings_message("That iPhone is no longer linked.")
+                self.set_settings_message("That phone is no longer linked.")
             else:
                 self.settings = self.settings.without_device(device_id)
                 save_settings(self.settings)
@@ -3743,11 +3743,11 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
 
     if device.remote_link is not None:
         submenu.addItem_(NSMenuItem.separatorItem())
-        submenu.addItem_(disabled_menu_item("Linked iPhone"))
+        submenu.addItem_(disabled_menu_item("Linked phone"))
         submenu.addItem_(disabled_menu_item(f"ID {device.remote_link.link_id}"))
         submenu.addItem_(disabled_menu_item(device.remote_link.server))
         remove_phone = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Remove iPhone...",
+            "Remove phone...",
             "removeLinkedPhone:",
             "",
         )
@@ -3886,7 +3886,7 @@ def confirm_linked_phone_removal(name: str) -> bool:
     alert = NSAlert.alloc().init()
     alert.setMessageText_(f"Remove {name}?")
     alert.setInformativeText_(
-        "This Mac will stop sending SidePulse updates to this iPhone. "
+        "This Mac will stop sending SidePulse updates to this phone. "
         "You can link it again later."
     )
     alert.addButtonWithTitle_("Remove")
