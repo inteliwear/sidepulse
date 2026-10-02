@@ -13,6 +13,7 @@ from .ipc import (
     default_latest_state_path,
     send_hook_event,
 )
+from .display_brightness import system_brightness_ratio
 from .led_status import (
     AgentLedController,
     LedDisplayState,
@@ -61,6 +62,7 @@ __all__ = [
     "uninstall_sleep_helper",
     "send_hook_event",
     "program_for_display_state",
+    "system_brightness_ratio",
     "write_mode_to_leds",
 ]
 
