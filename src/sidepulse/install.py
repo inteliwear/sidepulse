@@ -18,14 +18,17 @@ from typing import Any
 from .providers import (
     CLAUDE_EVENTS,
     CODEX_EVENTS,
+    COPILOT_EVENTS,
     CURSOR_EVENTS,
     GROK_EVENTS,
     JUNIE_EVENTS,
     JUNIE_MONITOR_EVENTS,
     default_cursor_hook_config_path,
+    default_copilot_hook_config_path,
     default_grok_hook_config_path,
     default_junie_hook_config_path,
     detect_log_path,
+    is_copilot_sidepulse_entry,
 )
 
 MANAGED_START = "# >>> agent-monitor hooks >>>"
@@ -203,6 +206,84 @@ def install_junie_hooks(
         target_log.touch(exist_ok=True)
 
     return InstallResult("junie", config, target_log, changed, backup, dry_run)
+
+
+def install_copilot_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    config = config_path or default_copilot_hook_config_path()
+    target_log = (log_path or detect_log_path("copilot")).expanduser()
+    data = json.loads(config.read_text()) if config.exists() else {}
+    if not isinstance(data, dict) or data.get("version", 1) != 1:
+        raise ValueError(f"Unsupported Copilot hook configuration: {config}")
+    original = json.dumps(data, sort_keys=True)
+    data.setdefault("version", 1)
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("Copilot hooks must be a JSON object")
+    for event_name in COPILOT_EVENTS:
+        entries = hooks.get(event_name, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"Copilot {event_name} hooks must be a JSON array")
+        cleaned = [entry for entry in entries if not is_copilot_sidepulse_entry(entry)]
+        entry: dict[str, Any] = {
+            "type": "command",
+            "bash": hook_command("copilot", target_log, python_executable, event_name=event_name),
+            "timeoutSec": 3,
+        }
+        if event_name == "notification":
+            entry["matcher"] = "permission_prompt|elicitation_dialog"
+        cleaned.append(entry)
+        hooks[event_name] = cleaned
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if not dry_run:
+        if changed:
+            config.parent.mkdir(parents=True, exist_ok=True)
+            backup = backup_file(config)
+            config.write_text(json.dumps(data, indent=2) + "\n")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+    return InstallResult("copilot", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_copilot_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_copilot_hook_config_path()
+    target_log = (log_path or detect_log_path("copilot")).expanduser()
+    data = json.loads(config.read_text()) if config.exists() else {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Unsupported Copilot hook configuration: {config}")
+    original = json.dumps(data, sort_keys=True)
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event_name, entries in list(hooks.items()):
+            if not isinstance(entries, list):
+                continue
+            cleaned = [entry for entry in entries if not is_copilot_sidepulse_entry(entry)]
+            if cleaned == entries:
+                continue
+            if cleaned:
+                hooks[event_name] = cleaned
+            else:
+                hooks.pop(event_name, None)
+        if not hooks:
+            data.pop("hooks", None)
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        backup = backup_file(config)
+        if set(data) <= {"version"}:
+            config.unlink()
+        else:
+            config.write_text(json.dumps(data, indent=2) + "\n")
+    return InstallResult("copilot", config, target_log, changed, backup, dry_run)
 
 
 def uninstall_codex_hooks(
@@ -484,8 +565,11 @@ def hook_command(
     provider: str,
     log_path: Path,
     python_executable: str | None = None,
+    *,
+    event_name: str | None = None,
 ) -> str:
     executable = python_executable or sys.executable or "python3"
+    event_args = ["--event", shlex.quote(event_name)] if event_name else []
     if getattr(sys, "frozen", False) and python_executable is None:
         command = " ".join(
             [
@@ -494,6 +578,7 @@ def hook_command(
                 "hook-log",
                 "--provider",
                 shlex.quote(provider),
+                *event_args,
                 "--log",
                 shlex.quote(str(log_path.expanduser())),
             ]
@@ -506,6 +591,7 @@ def hook_command(
             shlex.quote(str(entry_point)),
             "--provider",
             shlex.quote(provider),
+            *event_args,
             "--log",
             shlex.quote(str(log_path.expanduser())),
         ]

@@ -353,7 +353,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, and Junie through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, Junie, and GitHub Copilot through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -433,6 +433,26 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| GitHub Copilot | `~/.copilot/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/copilot.jsonl` |
+
+Copilot support uses local lifecycle hooks shared by Copilot CLI and compatible
+Copilot app/IDE agent hosts, including the **Copilot** agent in the GitHub
+Copilot plugin for JetBrains. Install them with
+`sidepulse agent-monitor install copilot`, then start a new session in each host.
+If `COPILOT_HOME` is set, the hook file is installed under `$COPILOT_HOME/hooks/`
+instead. The legacy **Local**
+agent in JetBrains and inline code completion use different event paths.
+
+The adapter tracks prompt submission, tool activity, completion, errors,
+permission-prompt notifications, and `ask_user` questions. Its commands exit
+successfully and produce no stdout, so they do not approve tools or alter
+prompts/responses. It deliberately does not register `permissionRequest`, which
+fires before automatic permission rules and would make permitted tools appear
+to need user input. Hook changes take effect in new sessions; restart a host
+if it retains an existing agent process. Hooks run on the execution computer,
+so a cloud or remote session needs SidePulse's relay to reach local hardware.
+See [GitHub's hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)
+for the configuration format and event payloads.
 
 #### Local reply classifier (Apple Silicon)
 
@@ -571,6 +591,7 @@ sidepulse agent-monitor install claude
 sidepulse agent-monitor install grok
 sidepulse agent-monitor install cursor
 sidepulse agent-monitor install junie
+sidepulse agent-monitor install copilot
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -638,9 +659,17 @@ treated as Done unless the agent emits `<!-- sidepulse:ask -->`; concrete
 follow-ups such as "Want me to push?" still count as Ask. Questions inside
 markdown code spans or fenced code examples are ignored.
 
-Codex `PermissionRequest` events are treated as Ask and remain sticky until the
-matching tool command finishes. This prevents unrelated same-session activity
-from hiding an approval prompt that is still waiting on the user.
+Codex `PermissionRequest` events for manual or unknown reviewers are treated as
+Ask and remain sticky until the matching tool command finishes or the turn ends
+or is interrupted. This prevents unrelated same-session activity from hiding a
+real approval prompt. For sandbox and ordinary MCP tool requests, the hook reads
+only the matching turn's `approvals_reviewer` metadata from at most 8 MiB of the
+local transcript tail. Confirmed `auto_review` requests show Working and do not
+create a pending user approval, so a cancelled automatic review cannot leave Ask
+stuck. This metadata check is independent of the optional transcript status
+fallback. Missing or changed transcript metadata keeps Ask; app-specific and
+Computer Use approvals keep Ask because they can require a person even in
+automatic review mode. See [Codex automatic review](https://learn.chatgpt.com/docs/sandboxing/auto-review).
 
 For Codex, Claude, Grok, Cursor, or Junie projects that should report this reliably, add
 guidance like this to the relevant agent instructions:
@@ -679,6 +708,7 @@ sidepulse agent-monitor uninstall claude
 sidepulse agent-monitor uninstall grok
 sidepulse agent-monitor uninstall cursor
 sidepulse agent-monitor uninstall junie
+sidepulse agent-monitor uninstall copilot
 ```
 
 Install and start the macOS status-bar app:
@@ -748,7 +778,7 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, Grok, and Junie hooks. The transcript
+window can install or uninstall Codex, Claude, Grok, Cursor, Junie, and Copilot hooks. The transcript
 checkboxes control the file-based CLI/debug fallback; the status-bar app gets
 live updates from the local hook event socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.

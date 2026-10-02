@@ -111,11 +111,13 @@ from .ipc import HookEventServer, default_event_socket_path, default_latest_stat
 from .install import (
     install_claude_hooks,
     install_codex_hooks,
+    install_copilot_hooks,
     install_cursor_hooks,
     install_grok_hooks,
     install_junie_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
+    uninstall_copilot_hooks,
     uninstall_cursor_hooks,
     uninstall_grok_hooks,
     uninstall_junie_hooks,
@@ -153,6 +155,7 @@ from .providers import (
     ProviderConfig,
     detect_claude_config,
     detect_codex_config,
+    detect_copilot_config,
     detect_cursor_config,
     detect_grok_config,
     detect_junie_config,
@@ -969,6 +972,14 @@ class StatusBarController(NSObject):
         self.update_hooks("junie", install=False)
 
     @objc.IBAction
+    def installCopilotHooks_(self, _sender):
+        self.update_hooks("copilot", install=True)
+
+    @objc.IBAction
+    def uninstallCopilotHooks_(self, _sender):
+        self.update_hooks("copilot", install=False)
+
+    @objc.IBAction
     def toggleCodexTranscripts_(self, sender):
         self.set_transcript_monitoring("codex", sender.state() == NSOnState)
 
@@ -1524,6 +1535,7 @@ class StatusBarController(NSObject):
         grok = detect_grok_config()
         cursor = detect_cursor_config()
         junie = detect_junie_config()
+        copilot = detect_copilot_config()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1543,6 +1555,10 @@ class StatusBarController(NSObject):
         set_field_value(
             self.settings_fields.get("junie_hook_status"),
             hook_status_text(junie),
+        )
+        set_field_value(
+            self.settings_fields.get("copilot_hook_status"),
+            hook_status_text(copilot),
         )
         set_field_value(
             self.settings_fields.get("settings_path"),
@@ -1756,6 +1772,10 @@ class StatusBarController(NSObject):
                 result = install_junie_hooks()
             elif provider == "junie":
                 result = uninstall_junie_hooks()
+            elif provider == "copilot" and install:
+                result = install_copilot_hooks()
+            elif provider == "copilot":
+                result = uninstall_copilot_hooks()
             else:
                 raise ValueError(f"Unsupported hook provider: {provider}")
         except Exception as exc:
@@ -4646,7 +4666,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     secondary_action_x = 500
     value_width = primary_action_x - value_x - 5
 
-    add_label(agents_tab, "Agent Hooks", section_x, 398, 200, 24)
+    add_label(agents_tab, "Agent Hooks", section_x, 430, 200, 24)
 
     def add_hook_row(
         title: str,
@@ -4679,19 +4699,22 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         return status
 
     codex_status = add_hook_row(
-        "Codex", 364, "installCodexHooks:", "uninstallCodexHooks:"
+        "Codex", 396, "installCodexHooks:", "uninstallCodexHooks:"
     )
     claude_status = add_hook_row(
-        "Claude", 338, "installClaudeHooks:", "uninstallClaudeHooks:"
+        "Claude", 370, "installClaudeHooks:", "uninstallClaudeHooks:"
     )
     grok_status = add_hook_row(
-        "Grok", 312, "installGrokHooks:", "uninstallGrokHooks:"
+        "Grok", 344, "installGrokHooks:", "uninstallGrokHooks:"
     )
     cursor_status = add_hook_row(
-        "Cursor", 286, "installCursorHooks:", "uninstallCursorHooks:"
+        "Cursor", 318, "installCursorHooks:", "uninstallCursorHooks:"
     )
     junie_status = add_hook_row(
-        "Junie", 260, "installJunieHooks:", "uninstallJunieHooks:"
+        "Junie", 292, "installJunieHooks:", "uninstallJunieHooks:"
+    )
+    copilot_status = add_hook_row(
+        "Copilot", 266, "installCopilotHooks:", "uninstallCopilotHooks:"
     )
 
     add_separator(agents_tab, section_x, 246, tab_width - 48)
@@ -4956,6 +4979,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "grok_hook_status": grok_status,
         "cursor_hook_status": cursor_status,
         "junie_hook_status": junie_status,
+        "copilot_hook_status": copilot_status,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,

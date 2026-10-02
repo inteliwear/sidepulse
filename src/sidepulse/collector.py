@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .codex_hook import is_automatic_permission
 from .models import (
     MODE_PRIORITY,
     AgentMode,
@@ -515,6 +516,7 @@ def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[Sourc
         sources.append(SourceSpec(CLAUDE_TRANSCRIPT_PROVIDER, Path.home() / ".claude" / "projects"))
     sources.append(SourceSpec("grok", detect_log_path("grok")))
     sources.append(SourceSpec("junie", detect_log_path("junie")))
+    sources.append(SourceSpec("copilot", detect_log_path("copilot")))
     return unique_sources(sources)
 
 
@@ -1071,6 +1073,8 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"PostToolUseFailure", "PermissionDenied", "StopFailure"}:
         return AgentMode.BLOCKED_ERROR
     if event in {"PermissionRequest"}:
+        if is_automatic_permission(record.provider, event, raw):
+            return AgentMode.WORKING
         return AgentMode.WAITING_FOR_INPUT
     if event == "Notification":
         notification_type = str(raw.get("notification_type", "")).strip().lower()
@@ -1370,6 +1374,8 @@ def track_pending_permissions(
 ) -> None:
     signature = permission_signature(record)
     if record.event_name == "PermissionRequest" and signature:
+        if is_automatic_permission(record.provider, record.event_name, record.raw):
+            return
         pending_permissions_by_key.setdefault(record.status_key, set()).add(signature)
         return
 
@@ -1396,7 +1402,13 @@ def permission_signature(record: HookEvent) -> str | None:
     if command:
         return f"{tool_name or ''}\0{command}"
 
-    return None
+    # Most MCP tools use structured arguments rather than a shell command.
+    # Keep their manual approvals pending during unrelated parallel activity.
+    try:
+        arguments = json.dumps(tool_input, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return f"{tool_name or ''}\0{arguments}"
 
 
 def should_ignore_status_transition(
@@ -1415,7 +1427,10 @@ def should_ignore_status_transition(
         previous is not None
         and previous.mode == AgentMode.WAITING_FOR_INPUT
         and previous.event_name == "PermissionRequest"
-        and current.event_name != "PermissionRequest"
+        and not (
+            current.event_name == "PermissionRequest"
+            and current.mode == AgentMode.WAITING_FOR_INPUT
+        )
         and bool(pending_permission_signatures)
     )
 
