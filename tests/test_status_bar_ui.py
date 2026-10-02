@@ -805,7 +805,7 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.show_animation_program_on_device_worker(
                 program,
                 [device],
-                12,
+                self.controller.led_animation_token,
             )
 
         write_program.assert_called_once_with(
