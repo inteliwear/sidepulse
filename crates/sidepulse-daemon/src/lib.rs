@@ -1,4 +1,4 @@
-//! Development service with one authoritative monitor and a portable IPC API.
+//! Authoritative monitor, device outputs, and portable IPC API.
 
 mod animation_preview;
 mod diagnostics;
@@ -56,6 +56,7 @@ pub struct Service {
     monitor: Arc<Mutex<Monitor>>,
     subscribers: Arc<Mutex<Vec<mpsc::SyncSender<()>>>>,
     device: Arc<Mutex<Option<DeviceOutput>>>,
+    extra_devices: Arc<Mutex<Vec<DeviceOutput>>>,
     latest_state_path: Arc<Option<PathBuf>>,
     settings: Arc<Mutex<Option<SettingsStore>>>,
     seen_relay_events: Arc<Mutex<SeenRelayEvents>>,
@@ -167,6 +168,7 @@ impl Service {
 
     pub fn configure_device(&self, path: &Path, brightness: u8) -> io::Result<()> {
         *self.device.lock().map_err(poisoned)? = Some(DeviceOutput::new(path, brightness));
+        self.extra_devices.lock().map_err(poisoned)?.clear();
         Ok(())
     }
 
@@ -175,26 +177,90 @@ impl Service {
     pub fn auto_select_device(&self, roots: &[PathBuf]) -> io::Result<bool> {
         let candidates = discover_devices(roots);
         let mut device = self.device.lock().map_err(poisoned)?;
+        let mut extras = self.extra_devices.lock().map_err(poisoned)?;
         let current = device.as_ref().map(|output| output.target().to_path_buf());
         let selected = candidates
             .iter()
             .find(|candidate| current.as_deref() == Some(candidate.target.as_path()))
             .or_else(|| candidates.first());
-        if selected.map(|candidate| &candidate.target) == current.as_ref() {
-            return Ok(false);
+        let selection_changed = selected.map(|candidate| &candidate.target) != current.as_ref();
+        if selection_changed {
+            *device = if let Some(candidate) = selected {
+                let brightness = self
+                    .settings
+                    .lock()
+                    .map_err(poisoned)?
+                    .as_ref()
+                    .map_or(255, |store| store.brightness_for_device(&candidate.root));
+                Some(DeviceOutput::new(&candidate.root, brightness))
+            } else {
+                None
+            };
         }
-        *device = if let Some(candidate) = selected {
-            let brightness = self
-                .settings
-                .lock()
-                .map_err(poisoned)?
-                .as_ref()
-                .map_or(255, |store| store.brightness_for_device(&candidate.root));
-            Some(DeviceOutput::new(&candidate.root, brightness))
-        } else {
-            None
-        };
-        Ok(true)
+        let selected_target = device.as_ref().map(|output| output.target());
+        let previous_targets: Vec<_> = extras
+            .iter()
+            .map(|output| output.target().to_path_buf())
+            .collect();
+        let mut previous_extras = std::mem::take(&mut *extras);
+        let mut updated_extras = Vec::new();
+        for candidate in candidates
+            .iter()
+            .filter(|candidate| selected_target != Some(candidate.target.as_path()))
+        {
+            if let Some(index) = previous_extras
+                .iter()
+                .position(|output| output.target() == candidate.target)
+            {
+                updated_extras.push(previous_extras.swap_remove(index));
+            } else {
+                let brightness = self
+                    .settings
+                    .lock()
+                    .map_err(poisoned)?
+                    .as_ref()
+                    .map_or(255, |store| store.brightness_for_device(&candidate.root));
+                updated_extras.push(DeviceOutput::new(&candidate.root, brightness));
+            }
+        }
+        let extras_changed = updated_extras
+            .iter()
+            .map(|output| output.target())
+            .ne(previous_targets.iter().map(PathBuf::as_path));
+        *extras = updated_extras;
+        if let Some(settings) = self.settings.lock().map_err(poisoned)?.as_mut() {
+            let remembered = candidates
+                .iter()
+                .map(|candidate| {
+                    let source_name = candidate.label.clone().unwrap_or_else(|| {
+                        candidate
+                            .root
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    });
+                    let normalized = source_name
+                        .to_lowercase()
+                        .chars()
+                        .filter(|ch| ch.is_alphanumeric())
+                        .collect::<String>();
+                    let name =
+                        if normalized.contains("sidepulsedot") || normalized.contains("pulsedot") {
+                            "SidePulse Dot".to_owned()
+                        } else if normalized.contains("sidepulsepro") {
+                            "SidePulse Pro".to_owned()
+                        } else if source_name.is_empty() {
+                            "SidePulse Device".to_owned()
+                        } else {
+                            source_name
+                        };
+                    (candidate.root.to_string_lossy().into_owned(), name)
+                })
+                .collect::<Vec<_>>();
+            settings.remember_connected_devices(&remembered)?;
+        }
+        Ok(selection_changed || extras_changed)
     }
 
     pub fn available_devices(&self) -> io::Result<(Vec<DeviceInfo>, Option<String>)> {
@@ -227,8 +293,19 @@ impl Service {
             .map_err(poisoned)?
             .as_ref()
             .map_or(255, |store| store.brightness_for_device(&candidate.root));
-        *self.device.lock().map_err(poisoned)? =
-            Some(DeviceOutput::new(&candidate.root, brightness));
+        let mut device = self.device.lock().map_err(poisoned)?;
+        let mut extras = self.extra_devices.lock().map_err(poisoned)?;
+        if device
+            .as_ref()
+            .is_some_and(|output| output.target() == candidate.target)
+        {
+            return Ok(());
+        }
+        let previous = device.replace(DeviceOutput::new(&candidate.root, brightness));
+        extras.retain(|output| output.target() != candidate.target);
+        if let Some(previous) = previous {
+            extras.push(previous);
+        }
         Ok(())
     }
 
@@ -278,6 +355,66 @@ impl Service {
         store.set_display_for_device(output.target(), mode, output.brightness())?;
         *self.animation_preview.lock().map_err(poisoned)? = None;
         Ok(())
+    }
+
+    pub fn set_device_brightness(&self, root: &str, brightness: u8) -> io::Result<()> {
+        if root == "virtual:status-bar" {
+            return self.set_virtual_display(&sidepulse_core::VirtualDisplaySettingsPatch {
+                brightness: Some(brightness),
+                ..Default::default()
+            });
+        }
+        let path = std::path::Path::new(root);
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.set_brightness_for_device(path, brightness)?;
+        drop(settings);
+        if let Some(output) = self.device.lock().map_err(poisoned)?.as_mut()
+            && sidepulse_device::target_from_device_path(path) == output.target()
+        {
+            output.set_brightness(brightness);
+        }
+        if let Some(output) = self
+            .extra_devices
+            .lock()
+            .map_err(poisoned)?
+            .iter_mut()
+            .find(|output| sidepulse_device::target_from_device_path(path) == output.target())
+        {
+            output.set_brightness(brightness);
+        }
+        Ok(())
+    }
+
+    pub fn set_device_display_mode(&self, root: &str, mode: &str) -> io::Result<()> {
+        if root == "virtual:status-bar" {
+            return self.set_virtual_display(&sidepulse_core::VirtualDisplaySettingsPatch {
+                display: Some(mode.to_owned()),
+                ..Default::default()
+            });
+        }
+        if let Some(id) = root.strip_prefix("ios/") {
+            return self.set_phone_display(id, mode);
+        }
+        let path = std::path::Path::new(root);
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        let brightness = store.brightness_for_device(path);
+        store.set_display_for_device(path, mode, brightness)?;
+        *self.animation_preview.lock().map_err(poisoned)? = None;
+        Ok(())
+    }
+
+    pub fn remove_remembered_device(&self, root: &str) -> io::Result<()> {
+        let mut settings = self.settings.lock().map_err(poisoned)?;
+        let store = settings.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "no settings path is configured")
+        })?;
+        store.remove_remembered_device(std::path::Path::new(root))
     }
 
     pub fn set_transcript_monitoring(&self, provider: &str, enabled: bool) -> io::Result<()> {
@@ -759,30 +896,11 @@ impl Service {
         let snapshot = self.snapshot()?;
         let mode = snapshot.aggregate.mode;
         let mut device = self.device.lock().map_err(poisoned)?;
+        let mut extras = self.extra_devices.lock().map_err(poisoned)?;
         let settings = self.settings.lock().map_err(poisoned)?;
-        let Some(output) = device.as_mut() else {
+        if device.is_none() && extras.is_empty() {
             return Ok(None);
-        };
-        let configured = settings
-            .as_ref()
-            .map_or("agent", |store| store.display_for_device(output.target()));
-        {
-            let mut preview = self.animation_preview.lock().map_err(poisoned)?;
-            if let Some(active) = preview.as_ref()
-                && configured == "agent"
-                && active.target == output.target()
-                && now < active.until
-            {
-                return output.sync_program(&active.program).map(Some);
-            }
-            *preview = None;
         }
-        let display = self
-            .battery_preview
-            .lock()
-            .map_err(poisoned)?
-            .display(configured, now)
-            .to_owned();
         let observation = self
             .power_observation
             .lock()
@@ -818,20 +936,67 @@ impl Service {
             store.map_or(1000, |store| store.lid_animation_duration_ms("lid_open")),
             store.map_or(1300, |store| store.lid_animation_duration_ms("lid_closed")),
         );
-        if display == "custom" {
-            return Ok(Some(false));
+        let mut preview = self.animation_preview.lock().map_err(poisoned)?;
+        if preview.as_ref().is_some_and(|active| now >= active.until) {
+            *preview = None;
         }
-        match action {
-            sidepulse_core::LidOutputAction::Hold => return Ok(Some(false)),
-            sidepulse_core::LidOutputAction::Transition { state } => {
-                let (style, custom) = if let Some(store) = store {
-                    store.animation_for_state(state)?
-                } else {
-                    (
-                        sidepulse_core::default_animation(state).into(),
-                        String::new(),
-                    )
+        let battery_preview = self.battery_preview.lock().map_err(poisoned)?;
+        let mut changed = false;
+        for output in device.as_mut().into_iter().chain(extras.iter_mut()) {
+            let configured =
+                store.map_or("agent", |store| store.display_for_device(output.target()));
+            if let Some(active) = preview.as_ref()
+                && configured == "agent"
+                && active.target == output.target()
+            {
+                changed |= output.sync_program(&active.program)?;
+                continue;
+            }
+            let display = battery_preview.display(configured, now);
+            if display == "custom" {
+                continue;
+            }
+            match action {
+                sidepulse_core::LidOutputAction::Hold => continue,
+                sidepulse_core::LidOutputAction::Transition { state } => {
+                    let (style, custom) = if let Some(store) = store {
+                        store.animation_for_state(state)?
+                    } else {
+                        (
+                            sidepulse_core::default_animation(state).into(),
+                            String::new(),
+                        )
+                    };
+                    let program = program_for_style(
+                        mode,
+                        led_count_for_target(output.target()),
+                        output.brightness(),
+                        &style,
+                        &custom,
+                    )?;
+                    changed |= output.sync_program(&program)?;
+                    continue;
+                }
+                sidepulse_core::LidOutputAction::Live => {}
+            }
+            if display == "battery" {
+                let Some(mut state) = battery else {
+                    continue;
                 };
+                if let Some(full_watts) = store.and_then(SettingsStore::battery_full_charge_watts) {
+                    state.full_charge_watts = full_watts;
+                }
+                let program = program_for_battery(
+                    state,
+                    led_count_for_target(output.target()),
+                    360,
+                    output.brightness(),
+                );
+                changed |= output.sync_program(&program)?;
+                continue;
+            }
+            if let Some(store) = store {
+                let (style, custom) = store.animation_for_mode(mode)?;
                 let program = program_for_style(
                     mode,
                     led_count_for_target(output.target()),
@@ -839,42 +1004,12 @@ impl Service {
                     &style,
                     &custom,
                 )?;
-                return output.sync_program(&program).map(Some);
+                changed |= output.sync_program(&program)?;
+            } else {
+                changed |= output.sync(mode)?;
             }
-            sidepulse_core::LidOutputAction::Live => {}
         }
-        let battery_display = display == "battery";
-        if battery_display && battery.is_none() {
-            return Ok(Some(false));
-        }
-        if battery_display && let Some(mut state) = battery {
-            if let Some(full_watts) = settings
-                .as_ref()
-                .and_then(SettingsStore::battery_full_charge_watts)
-            {
-                state.full_charge_watts = full_watts;
-            }
-            let program = program_for_battery(
-                state,
-                led_count_for_target(output.target()),
-                360,
-                output.brightness(),
-            );
-            return output.sync_program(&program).map(Some);
-        }
-        if let Some(store) = settings.as_ref() {
-            let (style, custom) = store.animation_for_mode(mode)?;
-            let program = program_for_style(
-                mode,
-                led_count_for_target(output.target()),
-                output.brightness(),
-                &style,
-                &custom,
-            )?;
-            output.sync_program(&program).map(Some)
-        } else {
-            output.sync(mode).map(Some)
-        }
+        Ok(Some(changed))
     }
 
     /// Rebuild monitor state from the durable provider log after a restart.
@@ -1514,6 +1649,9 @@ impl Service {
             | RequestKind::SetSessionTerminal { .. }
             | RequestKind::SetHistoryTimeframe { .. }
             | RequestKind::SetVirtualDisplay { .. }
+            | RequestKind::SetDeviceBrightness { .. }
+            | RequestKind::SetDeviceDisplayMode { .. }
+            | RequestKind::RemoveRememberedDevice { .. }
             | RequestKind::SetTrayVisibility { .. }
             | RequestKind::SetBatterySettings { .. }
             | RequestKind::SetAgentListSettings { .. }
@@ -1544,6 +1682,15 @@ impl Service {
                         self.set_history_timeframe(seconds)
                     }
                     RequestKind::SetVirtualDisplay { patch } => self.set_virtual_display(&patch),
+                    RequestKind::SetDeviceBrightness { root, brightness } => {
+                        self.set_device_brightness(&root, brightness)
+                    }
+                    RequestKind::SetDeviceDisplayMode { root, mode } => {
+                        self.set_device_display_mode(&root, &mode)
+                    }
+                    RequestKind::RemoveRememberedDevice { root } => {
+                        self.remove_remembered_device(&root)
+                    }
                     RequestKind::SetAgentAnimation {
                         mode,
                         style,
@@ -2228,13 +2375,19 @@ pub fn run_with_shutdown(
         workers.threads.push(std::thread::spawn(move || {
             let mut last_error = None;
             while output_service.running() {
-                if let Some(output) = output_service.device.lock().ok().and_then(|mut device| {
-                    device
-                        .as_mut()
-                        .map(|output| output.poke_keepalive(Instant::now()))
-                }) && let Err(error) = output
+                let now = Instant::now();
+                if let Ok(mut device) = output_service.device.lock()
+                    && let Some(output) = device.as_mut()
+                    && let Err(error) = output.poke_keepalive(now)
                 {
                     eprintln!("sidepulse-next-service: device keepalive: {error}");
+                }
+                if let Ok(mut extras) = output_service.extra_devices.lock() {
+                    for output in extras.iter_mut() {
+                        if let Err(error) = output.poke_keepalive(now) {
+                            eprintln!("sidepulse-next-service: device keepalive: {error}");
+                        }
+                    }
                 }
                 match output_service.sync_device() {
                     Ok(_) => last_error = None,
@@ -2427,6 +2580,63 @@ mod tests {
         assert_eq!(
             service.settings_snapshot().unwrap().unwrap().brightness,
             Some(64)
+        );
+    }
+
+    #[test]
+    fn discovered_devices_render_and_update_independently() {
+        let directory = tempfile::tempdir().unwrap();
+        let mounts = directory.path().join("mounts");
+        let dot = mounts.join("SidePulse Dot");
+        let pro = mounts.join("SidePulse Pro");
+        std::fs::create_dir_all(&dot).unwrap();
+        std::fs::create_dir_all(&pro).unwrap();
+        let settings_path = directory.path().join("settings.json");
+        std::fs::write(&settings_path, "{}").unwrap();
+        let service = Service::new();
+        service.configure_settings(&settings_path).unwrap();
+        assert!(
+            service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+        assert_eq!(service.extra_devices.lock().unwrap().len(), 1);
+        let remembered = service.settings_snapshot().unwrap().unwrap().document;
+        assert_eq!(remembered["devices"].as_array().unwrap().len(), 2);
+        assert_eq!(service.sync_device().unwrap(), Some(true));
+        assert!(dot.join("LEDS.LED").is_file());
+        assert!(pro.join("LEDS.LED").is_file());
+        let original_dot = std::fs::read_to_string(dot.join("LEDS.LED")).unwrap();
+
+        service
+            .set_device_brightness(&pro.to_string_lossy(), 73)
+            .unwrap();
+        assert_eq!(service.sync_device().unwrap(), Some(true));
+        assert!(
+            std::fs::read_to_string(pro.join("LEDS.LED"))
+                .unwrap()
+                .starts_with("brightness 73\n")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dot.join("LEDS.LED")).unwrap(),
+            original_dot
+        );
+        assert!(
+            !service
+                .auto_select_device(std::slice::from_ref(&mounts))
+                .unwrap()
+        );
+
+        std::fs::remove_dir_all(&dot).unwrap();
+        assert!(service.auto_select_device(&[mounts]).unwrap());
+        assert_eq!(service.extra_devices.lock().unwrap().len(), 0);
+        let remembered = service.settings_snapshot().unwrap().unwrap().document;
+        assert_eq!(remembered["devices"].as_array().unwrap().len(), 2);
+        assert_eq!(service.sync_device().unwrap(), Some(true));
+        assert_eq!(service.sync_device().unwrap(), Some(false));
+        assert_eq!(
+            service.settings_snapshot().unwrap().unwrap().brightness,
+            Some(73)
         );
     }
 
@@ -2666,6 +2876,39 @@ mod tests {
         );
         assert_eq!(service.sync_device().unwrap(), Some(false));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn tray_device_actions_update_only_the_named_saved_device() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, serde_json::json!({
+            "devices": [
+                {"id":"one","path":"/tmp/sidepulse-tray-one","name":"One","brightness":12,"led_display":"agent"},
+                {"id":"two","path":"/tmp/sidepulse-tray-two","name":"Two","brightness":34,"led_display":"battery"}
+            ],
+            "unrelated": {"keep": true}
+        }).to_string()).unwrap();
+        let service = Service::new();
+        service.configure_settings(&path).unwrap();
+        service
+            .set_device_brightness("/tmp/sidepulse-tray-one", 200)
+            .unwrap();
+        service
+            .set_device_display_mode("/tmp/sidepulse-tray-two", "custom")
+            .unwrap();
+        let saved = service.settings_snapshot().unwrap().unwrap().document;
+        assert_eq!(saved["devices"][0]["brightness"], 200);
+        assert_eq!(saved["devices"][0]["led_display"], "agent");
+        assert_eq!(saved["devices"][1]["brightness"], 34);
+        assert_eq!(saved["devices"][1]["led_display"], "custom");
+        service
+            .remove_remembered_device("/tmp/sidepulse-tray-one")
+            .unwrap();
+        let saved = service.settings_snapshot().unwrap().unwrap().document;
+        assert_eq!(saved["devices"].as_array().unwrap().len(), 1);
+        assert_eq!(saved["devices"][0]["id"], "two");
+        assert_eq!(saved["unrelated"]["keep"], true);
     }
 
     #[test]

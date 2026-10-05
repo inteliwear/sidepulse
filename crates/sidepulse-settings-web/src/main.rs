@@ -29,7 +29,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next();
     if matches!(first.as_deref(), Some("--help" | "-h")) {
-        println!("usage: sidepulse-next-settings [ENDPOINT | --check-runtime]");
+        println!("usage: sidepulse-next-settings [--setup] [ENDPOINT | --check-runtime]");
         return;
     }
     if first.as_deref() == Some("--check-runtime") {
@@ -48,6 +48,8 @@ fn main() {
         }
         return;
     }
+    let setup = first.as_deref() == Some("--setup");
+    let first = if setup { args.next() } else { first };
     let endpoint = match (first, args.next()) {
         (Some(endpoint), None) => Some(endpoint),
         (None, None) => std::env::var("SIDEPULSE_NEXT_ENDPOINT").ok().or_else(|| {
@@ -58,21 +60,35 @@ fn main() {
         _ => None,
     };
     let Some(endpoint) = endpoint.filter(|endpoint| !endpoint.trim().is_empty()) else {
-        eprintln!("usage: sidepulse-next-settings ENDPOINT");
+        eprintln!("usage: sidepulse-next-settings [--setup] ENDPOINT");
         std::process::exit(2);
     };
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Mutex::new(Bridge::new(endpoint)))
         .invoke_handler(tauri::generate_handler![settings_poll, settings_action])
-        .setup(|app| {
+        .setup(move |app| {
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
-                tauri::WebviewUrl::App("index.html".into()),
+                tauri::WebviewUrl::App(
+                    if setup {
+                        "index.html?page=setup"
+                    } else {
+                        "index.html"
+                    }
+                    .into(),
+                ),
             )
-            .title("SidePulse Settings")
-            .inner_size(680.0, 560.0)
+            .title(if setup {
+                "SidePulse Setup"
+            } else {
+                "SidePulse Settings"
+            })
+            .inner_size(
+                if setup { 620.0 } else { 680.0 },
+                if setup { 330.0 } else { 560.0 },
+            )
             .min_inner_size(580.0, 420.0)
             .on_navigation(|url| {
                 (url.scheme() == "tauri" && url.host_str() == Some("localhost"))

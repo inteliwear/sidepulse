@@ -4,6 +4,8 @@
       "visible": true,
       "brightness": 128,
       "display_mode": "agent",
+      "default_display": "agent",
+      "saved_devices": [],
       "codex_transcripts": false,
       "claude_transcripts": true,
       "sleep_policy": "agents",
@@ -101,6 +103,8 @@
     "rows": [
       {
         "id": "codex:session:fixture",
+        "provider": "codex",
+        "origin": "Codex CLI",
         "title": "<img src=x onerror=alert(1)>",
         "subtitle": "Working \u00b7 Codex CLI",
         "icon": "working",
@@ -111,6 +115,8 @@
     "stale_rows": [
       {
         "id": "codex:session:recent",
+        "provider": "codex",
+        "origin": "Codex CLI",
         "title": "Recent fixture session",
         "subtitle": "Completed \u00b7 Codex CLI",
         "icon": "completed",

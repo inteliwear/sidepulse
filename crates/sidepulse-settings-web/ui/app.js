@@ -7,7 +7,7 @@ const modes = [['idle_ready','Idle / Ready'],['working','Working'],['tool_runnin
   ['waiting_for_input','Waiting for input'],['long_task_progress','Long task progress'],
   ['blocked_error','Blocked / Error'],['completed','Completed'],['unknown','Unknown']];
 const displays = [['agent','Agent status'],['battery','Battery level'],['custom','Manual output']];
-const model = {page:'agents', settingsPage:'agents', editor:null, profileId:'', submittedRequest:null, previews:{}, revision:0, state:null, setup:null, connected:false, busy:false, pendingAction:false,
+const model = {page:new URLSearchParams(window.location.search).get('page')==='setup'?'setup':'agents', settingsPage:'agents', editor:null, profileId:'', submittedRequest:null, previews:{}, revision:0, state:null, setup:null, connected:false, busy:false, pendingAction:false,
   platform:'', drafts:{}, message:'', error:false, lastExport:null, animationMode:'working',
   profileName:'', profileJSON:'', assetId:null, assetState:null, assetName:'', assetProgram:'#00E5FF',
   phoneName:'iPhone', phoneToken:'', openDetails:new Set(), composing:false};

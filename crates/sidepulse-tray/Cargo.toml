@@ -22,3 +22,8 @@ tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] 
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tao = { version = "0.37.0", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSButton", "NSImage", "NSMenu", "NSMenuItem", "NSSlider", "NSControl", "NSView", "NSStatusItem", "NSStatusBar", "NSStatusBarButton", "NSWorkspace", "NSColor", "NSGraphics", "NSGraphicsContext", "NSAffineTransform", "NSAccessibility"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSObject", "NSGeometry", "NSAffineTransform", "NSTimer", "NSRunLoop", "NSDate"] }

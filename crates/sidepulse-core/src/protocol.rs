@@ -124,8 +124,19 @@ pub enum RequestKind {
     SetBrightness {
         brightness: u8,
     },
+    SetDeviceBrightness {
+        root: String,
+        brightness: u8,
+    },
     SetDisplayMode {
         mode: String,
+    },
+    SetDeviceDisplayMode {
+        root: String,
+        mode: String,
+    },
+    RemoveRememberedDevice {
+        root: String,
     },
     SetTrayVisibility {
         visible: bool,
@@ -426,7 +437,8 @@ impl ClientRequest {
         {
             return Err("invalid relay event");
         }
-        if let RequestKind::SetDisplayMode { mode } = &self.kind
+        if let RequestKind::SetDisplayMode { mode } | RequestKind::SetDeviceDisplayMode { mode, .. } =
+            &self.kind
             && !matches!(mode.as_str(), "agent" | "battery" | "custom")
         {
             return Err("invalid display mode");
@@ -545,8 +557,11 @@ impl ClientRequest {
         {
             return Err("invalid transcript provider");
         }
-        if let RequestKind::SelectDevice { root } = &self.kind
-            && root.is_empty()
+        if let RequestKind::SelectDevice { root }
+        | RequestKind::SetDeviceBrightness { root, .. }
+        | RequestKind::SetDeviceDisplayMode { root, .. }
+        | RequestKind::RemoveRememberedDevice { root } = &self.kind
+            && (root.is_empty() || root.len() > 4096 || root.contains('\0'))
         {
             return Err("invalid device root");
         }

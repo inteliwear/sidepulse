@@ -3,16 +3,38 @@
 //! writes device output, or imports a GUI toolkit.
 
 use serde::{Deserialize, Serialize};
-use sidepulse_core::{AgentMode, AgentStatus, DeviceInfo, MonitorSnapshot, ServerPayload};
+use sidepulse_core::{
+    AgentMode, AgentStatus, DeviceInfo, MonitorSnapshot, PhoneLinkSummary, ServerPayload,
+};
 
 pub fn device_display_name(device: &DeviceInfo) -> String {
-    if let Some(label) = device.label.as_deref().filter(|label| !label.is_empty()) {
-        return label.to_owned();
+    let name = device
+        .label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .map_or_else(
+            || {
+                std::path::Path::new(&device.root).file_name().map_or_else(
+                    || device.root.clone(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            },
+            str::to_owned,
+        );
+    let normalized = name
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    if normalized.contains("sidepulsedot") || normalized.contains("pulsedot") {
+        "SidePulse Dot".into()
+    } else if normalized.contains("sidepulsepro") {
+        "SidePulse Pro".into()
+    } else if name.is_empty() {
+        "SidePulse Device".into()
+    } else {
+        name
     }
-    std::path::Path::new(&device.root).file_name().map_or_else(
-        || device.root.clone(),
-        |name| name.to_string_lossy().into_owned(),
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +68,8 @@ impl From<AgentMode> for StatusIcon {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRow {
     pub id: String,
+    pub provider: String,
+    pub origin: Option<String>,
     pub title: String,
     pub subtitle: String,
     pub icon: StatusIcon,
@@ -68,12 +92,116 @@ pub struct TrayControls {
     pub visible: bool,
     pub brightness: Option<u8>,
     pub display_mode: Option<String>,
+    pub default_display: String,
     pub codex_transcripts: bool,
     pub claude_transcripts: bool,
     pub sleep_policy: Option<String>,
     pub battery_power_preview: bool,
     pub virtual_display_enabled: bool,
     pub recent_session_retention_seconds: f64,
+    pub saved_devices: Vec<TrayDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrayDevice {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub connected: bool,
+    pub display: String,
+    pub brightness: u8,
+    pub linked_phone: bool,
+    pub virtual_device: bool,
+    pub phone_id: Option<String>,
+    pub phone_server: Option<String>,
+}
+
+pub fn tray_devices(
+    connected: &[DeviceInfo],
+    links: &[PhoneLinkSummary],
+    controls: &TrayControls,
+) -> Vec<TrayDevice> {
+    let mut devices = controls
+        .saved_devices
+        .iter()
+        .filter(|device| !device.linked_phone)
+        .cloned()
+        .collect::<Vec<_>>();
+    for device in connected {
+        let saved = devices.iter_mut().find(|saved| saved.path == device.root);
+        if let Some(saved) = saved {
+            saved.connected = true;
+            saved.name = device_display_name(device);
+        } else {
+            devices.push(TrayDevice {
+                id: device.root.clone(),
+                name: device_display_name(device),
+                path: device.root.clone(),
+                connected: true,
+                display: controls.default_display.clone(),
+                brightness: 255,
+                linked_phone: false,
+                virtual_device: false,
+                phone_id: None,
+                phone_server: None,
+            });
+        }
+    }
+    devices.retain(|device| !device.virtual_device || controls.virtual_display_enabled);
+    if controls.virtual_display_enabled && !devices.iter().any(|device| device.virtual_device) {
+        devices.push(TrayDevice {
+            id: "virtual:status-bar".into(),
+            name: "SidePulse Notch".into(),
+            path: "virtual:status-bar".into(),
+            connected: true,
+            display: "agent".into(),
+            brightness: 255,
+            linked_phone: false,
+            virtual_device: true,
+            phone_id: None,
+            phone_server: None,
+        });
+    }
+    for link in links {
+        devices.push(TrayDevice {
+            id: format!("ios/{}", link.id),
+            name: link.name.clone(),
+            path: format!("ios/{}", link.id),
+            connected: true,
+            display: link.display.clone(),
+            brightness: 255,
+            linked_phone: true,
+            virtual_device: false,
+            phone_id: Some(link.id.clone()),
+            phone_server: Some(link.server.clone()),
+        });
+    }
+    devices.sort_by(|a, b| {
+        (!a.connected, a.name.to_lowercase(), &a.path).cmp(&(
+            !b.connected,
+            b.name.to_lowercase(),
+            &b.path,
+        ))
+    });
+    let mut counts = std::collections::HashMap::new();
+    for device in &devices {
+        *counts.entry(device.name.clone()).or_insert(0_usize) += 1;
+    }
+    for device in &mut devices {
+        if counts.get(&device.name).copied().unwrap_or(0) > 1 {
+            let root_name = std::path::Path::new(&device.path)
+                .file_name()
+                .map_or(device.path.as_str().into(), |name| name.to_string_lossy());
+            let suffix = root_name
+                .strip_prefix(&device.name)
+                .unwrap_or(&root_name)
+                .trim();
+            if !suffix.is_empty() {
+                device.name = format!("{} {suffix}", device.name);
+            }
+        }
+    }
+    devices
 }
 
 impl TrayControls {
@@ -103,8 +231,58 @@ impl TrayControls {
                 "recent_session_retention_seconds",
                 48.0 * 3600.0,
             ),
+            saved_devices: settings
+                .get("devices")
+                .and_then(|value| value.as_array())
+                .map_or_else(Vec::new, |devices| {
+                    devices
+                        .iter()
+                        .filter_map(|device| {
+                            let path = device.get("path")?.as_str()?.to_owned();
+                            let id = device
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(&path)
+                                .to_owned();
+                            let virtual_device = id == "virtual:status-bar";
+                            let linked_phone = id.starts_with("ios/");
+                            Some(TrayDevice {
+                                name: device
+                                    .get("name")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or(&id)
+                                    .to_owned(),
+                                id,
+                                path,
+                                connected: virtual_device || linked_phone,
+                                display: device
+                                    .get("led_display")
+                                    .and_then(|value| value.as_str())
+                                    .or_else(|| {
+                                        settings.get("led_display").and_then(|value| value.as_str())
+                                    })
+                                    .unwrap_or("agent")
+                                    .to_owned(),
+                                brightness: device
+                                    .get("brightness")
+                                    .and_then(|value| value.as_u64())
+                                    .and_then(|value| u8::try_from(value).ok())
+                                    .unwrap_or(255),
+                                linked_phone,
+                                virtual_device,
+                                phone_id: None,
+                                phone_server: None,
+                            })
+                        })
+                        .collect()
+                }),
             brightness: active_device.as_ref().and(*brightness),
             display_mode: active_device.as_ref().and(display_mode.clone()),
+            default_display: settings
+                .get("led_display")
+                .and_then(|value| value.as_str())
+                .unwrap_or("agent")
+                .into(),
             codex_transcripts: monitoring
                 .and_then(|value| value.get("codex"))
                 .and_then(|value| value.as_bool())
@@ -288,15 +466,15 @@ pub struct DisplayChoice {
 
 pub const DISPLAY_CHOICES: [DisplayChoice; 3] = [
     DisplayChoice {
-        label: "Agent status",
+        label: "Agent Status",
         value: "agent",
     },
     DisplayChoice {
-        label: "Battery level",
+        label: "Battery Level",
         value: "battery",
     },
     DisplayChoice {
-        label: "Manual output",
+        label: "Manual",
         value: "custom",
     },
 ];
@@ -313,7 +491,7 @@ pub const SLEEP_CHOICES: [SleepChoice; 3] = [
         value: "never",
     },
     SleepChoice {
-        label: "While agents work",
+        label: "When Agents Work",
         value: "agents",
     },
     SleepChoice {
@@ -375,26 +553,72 @@ impl TrayState {
                 }
             )
         };
+        let mut statuses = snapshot
+            .statuses
+            .iter()
+            .chain(snapshot.stale_statuses.iter().filter(|status| {
+                status.mode == AgentMode::Completed
+                    && status.age_seconds(snapshot.collected_at) <= retention_seconds
+            }))
+            .collect::<Vec<_>>();
+        statuses.sort_by(|left, right| {
+            (
+                left.mode.priority(),
+                left.agent_id.contains(":agent:"),
+                std::cmp::Reverse(left.updated_at),
+            )
+                .cmp(&(
+                    right.mode.priority(),
+                    right.agent_id.contains(":agent:"),
+                    std::cmp::Reverse(right.updated_at),
+                ))
+        });
+        let mut seen = std::collections::HashSet::new();
+        statuses.retain(|status| {
+            status
+                .session_id
+                .as_ref()
+                .is_none_or(|id| seen.insert((status.provider.to_lowercase(), id.clone())))
+        });
+        statuses.truncate(10);
+        let mut titles = std::collections::HashMap::new();
+        for status in &statuses {
+            *titles
+                .entry((
+                    status.provider.to_lowercase(),
+                    normalize_menu_part(&python_session_title(status, false)),
+                ))
+                .or_insert(0_usize) += 1;
+        }
+        let mut rows = Vec::new();
+        let mut stale_rows = Vec::new();
+        for status in statuses {
+            let collision = titles
+                .get(&(
+                    status.provider.to_lowercase(),
+                    normalize_menu_part(&python_session_title(status, false)),
+                ))
+                .copied()
+                .unwrap_or(0)
+                > 1;
+            let row = agent_row(status, collision);
+            if status.stale {
+                stale_rows.push(row.clone());
+            }
+            rows.push(row);
+        }
         Self {
             icon: mode.into(),
             title,
             tooltip,
             active_count: aggregate.active_count,
-            rows: snapshot.statuses.iter().map(agent_row).collect(),
-            stale_rows: snapshot
-                .stale_statuses
-                .iter()
-                .filter(|status| {
-                    status.mode == AgentMode::Completed
-                        && status.age_seconds(snapshot.collected_at) <= retention_seconds
-                })
-                .map(agent_row)
-                .collect(),
+            rows,
+            stale_rows,
         }
     }
 }
 
-fn agent_row(status: &AgentStatus) -> AgentRow {
+fn agent_row(status: &AgentStatus, disambiguate: bool) -> AgentRow {
     let mut parts = vec![status.mode.label().to_owned()];
     if let Some(origin) = status.origin.as_deref().filter(|origin| !origin.is_empty()) {
         parts.push(origin.to_owned());
@@ -404,11 +628,72 @@ fn agent_row(status: &AgentStatus) -> AgentRow {
     }
     AgentRow {
         id: status.agent_id.clone(),
-        title: status.display_name.clone(),
+        provider: status.provider.clone(),
+        origin: status.origin.clone(),
+        title: python_session_title(status, disambiguate),
         subtitle: parts.join(" · "),
         icon: status.mode.into(),
         stale: status.stale,
         can_open: !sidepulse_core::session_open_options(status, "").is_empty(),
+    }
+}
+
+fn normalize_menu_part(text: &str) -> String {
+    text.replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn python_session_title(status: &AgentStatus, disambiguate: bool) -> String {
+    let mut title = status.display_name.trim().to_owned();
+    if let Some(id) = status.session_id.as_deref() {
+        let suffix = format!(" ({})", id.chars().take(8).collect::<String>());
+        if title.ends_with(&suffix) {
+            title.truncate(title.len() - suffix.len());
+        }
+    }
+    if title.ends_with(')')
+        && let Some((prefix, suffix)) = title.rsplit_once(" (")
+    {
+        let token = &suffix[..suffix.len() - 1];
+        if (6..=12).contains(&token.len())
+            && token
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        {
+            title = prefix.trim().to_owned();
+        }
+    }
+    let mut project = status.cwd.as_deref().and_then(|cwd| {
+        let path = std::path::Path::new(cwd);
+        path.ancestors()
+            .find(|candidate| candidate.join(".git").exists())
+            .unwrap_or(path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    if let Some(project) = project.as_deref() {
+        if let Some(rest) = title.strip_prefix(&format!("{project}: ")) {
+            title = rest.to_owned();
+        }
+    } else if let Some((maybe_project, rest)) = title.split_once(": ") {
+        project = Some(maybe_project.to_owned());
+        title = rest.to_owned();
+    }
+    if title.is_empty() {
+        title = status.display_name.clone();
+    }
+    if disambiguate && let Some(id) = &status.session_id {
+        title = format!("{title} ({})", id.chars().take(8).collect::<String>());
+    }
+    if let Some(project) =
+        project.filter(|project| normalize_menu_part(project) != normalize_menu_part(&title))
+    {
+        format!("{title}  {project}")
+    } else {
+        title
     }
 }
 
@@ -522,5 +807,108 @@ mod tests {
                 .stale_rows
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn tray_sessions_match_python_order_coalescing_and_collision_titles() {
+        let now = Utc::now();
+        let status = |id: &str, mode: AgentMode, updated_at| AgentStatus {
+            provider: "claude".into(),
+            agent_id: format!("claude:session:{id}"),
+            display_name: "project: Fix build".into(),
+            mode,
+            updated_at,
+            event_name: "Stop".into(),
+            session_id: Some(id.into()),
+            cwd: Some("/tmp/project".into()),
+            tool_name: None,
+            message: None,
+            origin: None,
+            stale: false,
+        };
+        let older = now - chrono::Duration::seconds(30);
+        let mut snapshot = MonitorSnapshot {
+            aggregate: sidepulse_core::AggregateStatus {
+                mode: AgentMode::WaitingForInput,
+                active_count: 2,
+                stale_count: 0,
+                representative: None,
+            },
+            statuses: vec![
+                status("aaaaaaaa111", AgentMode::Working, older),
+                status("bbbbbbbb222", AgentMode::WaitingForInput, now),
+                status("aaaaaaaa111", AgentMode::Completed, now),
+            ],
+            stale_statuses: Vec::new(),
+            collected_at: now,
+        };
+        let state = TrayState::from_snapshot(&snapshot);
+        assert_eq!(state.rows.len(), 2);
+        assert_eq!(state.rows[0].title, "Fix build (bbbbbbbb)  project");
+        assert_eq!(state.rows[1].title, "Fix build (aaaaaaaa)  project");
+        snapshot.statuses.clear();
+        let empty = TrayState::from_snapshot(&snapshot);
+        assert!(empty.rows.is_empty());
+    }
+
+    #[test]
+    fn tray_devices_include_saved_disconnected_phone_and_virtual_entries() {
+        let payload = ServerPayload::Settings {
+            settings: json!({
+                "virtual_status_device_enabled": true,
+                "devices": [
+                    {"id":"one","name":"SidePulse Dot","path":"/tmp/one","led_display":"battery","brightness":64},
+                    {"id":"two","name":"Old Dot","path":"/tmp/two","led_display":"custom","brightness":128},
+                    {"id":"virtual:status-bar","name":"SidePulse Notch","path":"virtual:status-bar","led_display":"agent","brightness":255}
+                ]
+            }),
+            active_device: None,
+            brightness: None,
+            display_mode: None,
+        };
+        let controls = TrayControls::from_service_payload(&payload).unwrap();
+        let connected = [DeviceInfo {
+            root: "/tmp/one".into(),
+            target: "/tmp/one/LEDS.LED".into(),
+            reason: "test".into(),
+            label: Some("SidePulse Dot".into()),
+        }];
+        let links = [PhoneLinkSummary {
+            id: "abc123".into(),
+            name: "Peter's iPhone".into(),
+            server: "https://example.test".into(),
+            linked_at: "".into(),
+            display: "custom".into(),
+            last_sent_at: None,
+            delivery_error: None,
+        }];
+        let devices = tray_devices(&connected, &links, &controls);
+        assert_eq!(devices.len(), 4);
+        assert!(devices[0].connected);
+        assert_eq!(
+            devices
+                .iter()
+                .find(|device| device.path == "/tmp/one")
+                .unwrap()
+                .brightness,
+            64
+        );
+        assert!(
+            !devices
+                .iter()
+                .find(|device| device.path == "/tmp/two")
+                .unwrap()
+                .connected
+        );
+        assert_eq!(
+            devices
+                .iter()
+                .find(|device| device.linked_phone)
+                .unwrap()
+                .phone_id
+                .as_deref(),
+            Some("abc123")
+        );
+        assert!(devices.iter().any(|device| device.virtual_device));
     }
 }

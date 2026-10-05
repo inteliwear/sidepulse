@@ -855,6 +855,49 @@ impl SettingsStore {
         Ok(())
     }
 
+    pub fn remember_connected_devices(&mut self, devices: &[(String, String)]) -> io::Result<()> {
+        let mut updated = self.document.clone();
+        let list = updated
+            .entry("devices")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "settings.devices must be an array",
+                )
+            })?;
+        let mut changed = false;
+        for (path, name) in devices {
+            let target = target_from_device_path(Path::new(path));
+            if list.iter().any(|device| {
+                device
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|saved| target_from_device_path(Path::new(saved)) == target)
+            }) {
+                continue;
+            }
+            list.push(json!({
+                "id": path,
+                "name": name,
+                "path": path,
+                "led_display": self.display_for_device(Path::new(path)),
+                "brightness": self.brightness_for_device(Path::new(path)),
+            }));
+            changed = true;
+        }
+        if changed {
+            self.original = Some(write_atomic(
+                &self.path,
+                &Value::Object(updated.clone()),
+                self.original.as_deref(),
+            )?);
+            self.document = updated;
+        }
+        Ok(())
+    }
+
     pub fn set_display_for_device(
         &mut self,
         path: &Path,
@@ -899,6 +942,27 @@ impl SettingsStore {
                 "brightness": brightness,
             }));
         }
+        self.original = Some(write_atomic(
+            &self.path,
+            &Value::Object(updated.clone()),
+            self.original.as_deref(),
+        )?);
+        self.document = updated;
+        Ok(())
+    }
+
+    pub fn remove_remembered_device(&mut self, path: &Path) -> io::Result<()> {
+        let mut updated = self.document.clone();
+        let Some(devices) = updated.get_mut("devices").and_then(Value::as_array_mut) else {
+            return Ok(());
+        };
+        let target = target_from_device_path(path);
+        devices.retain(|device| {
+            device
+                .get("path")
+                .and_then(Value::as_str)
+                .is_none_or(|value| target_from_device_path(Path::new(value)) != target)
+        });
         self.original = Some(write_atomic(
             &self.path,
             &Value::Object(updated.clone()),
