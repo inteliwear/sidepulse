@@ -341,7 +341,11 @@ impl Service {
             .map_err(poisoned)?
             .as_mut()
             .ok_or_else(unavailable)?
-            .remove(id)
+            .remove(id)?;
+        if let Some(settings) = self.settings.lock().map_err(poisoned)?.as_mut() {
+            settings.remove_remembered_device(Path::new(&format!("ios/{id}")))?;
+        }
+        Ok(())
     }
     pub fn cancel_phone_pairing(&self) -> io::Result<()> {
         if let Some(pairing) = self.phone_pairing.lock().map_err(poisoned)?.as_mut() {
@@ -809,6 +813,10 @@ mod tests {
         assert_eq!(settings["devices"][0]["extra"], true);
         assert_eq!(settings["devices"][0]["led_display"], "battery");
         service.remove_phone("abababababab").unwrap();
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("settings.json")).unwrap())
+                .unwrap();
+        assert!(settings["devices"].as_array().unwrap().is_empty());
         service.sync_phone_outputs().unwrap();
         assert!(service.phone_output.lock().unwrap().targets.is_empty());
     }

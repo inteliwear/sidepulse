@@ -21,11 +21,7 @@ pub fn device_display_name(device: &DeviceInfo) -> String {
             },
             str::to_owned,
         );
-    let normalized = name
-        .to_lowercase()
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect::<String>();
+    let normalized = normalized_device_name(&name);
     if normalized.contains("sidepulsedot") || normalized.contains("pulsedot") {
         "SidePulse Dot".into()
     } else if normalized.contains("sidepulsepro") {
@@ -35,6 +31,13 @@ pub fn device_display_name(device: &DeviceInfo) -> String {
     } else {
         name
     }
+}
+
+fn normalized_device_name(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,10 +195,18 @@ pub fn tray_devices(
             let root_name = std::path::Path::new(&device.path)
                 .file_name()
                 .map_or(device.path.as_str().into(), |name| name.to_string_lossy());
-            let suffix = root_name
-                .strip_prefix(&device.name)
-                .unwrap_or(&root_name)
-                .trim();
+            let suffix = if normalized_device_name(&root_name)
+                .starts_with(&normalized_device_name(&device.name))
+            {
+                root_name
+                    .chars()
+                    .skip(device.name.chars().count())
+                    .collect::<String>()
+                    .trim()
+                    .to_owned()
+            } else {
+                root_name.trim().to_owned()
+            };
             if !suffix.is_empty() {
                 device.name = format!("{} {suffix}", device.name);
             }
@@ -910,5 +921,25 @@ mod tests {
             Some("abc123")
         );
         assert!(devices.iter().any(|device| device.virtual_device));
+    }
+
+    #[test]
+    fn duplicate_device_names_use_the_python_mount_suffix() {
+        let controls = TrayControls::from_service_payload(&ServerPayload::Settings {
+            settings: json!({}),
+            active_device: None,
+            brightness: None,
+            display_mode: None,
+        })
+        .unwrap();
+        let connected = ["SidePulse Dot", "SidePulse Dot 2"].map(|name| DeviceInfo {
+            root: format!("/Volumes/{name}"),
+            target: format!("/Volumes/{name}/LEDS.LED"),
+            reason: "test".into(),
+            label: None,
+        });
+        let devices = tray_devices(&connected, &[], &controls);
+        assert_eq!(devices[0].name, "SidePulse Dot");
+        assert_eq!(devices[1].name, "SidePulse Dot 2");
     }
 }
