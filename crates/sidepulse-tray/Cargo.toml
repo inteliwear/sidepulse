@@ -20,6 +20,9 @@ tray-icon = { version = "0.25.1", default-features = false }
 [build-dependencies]
 chrono.workspace = true
 
+[dev-dependencies]
+interprocess = "2.4.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 
@@ -30,3 +33,6 @@ tao = { version = "0.37.0", default-features = false }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSButton", "NSImage", "NSMenu", "NSMenuItem", "NSSlider", "NSControl", "NSView", "NSStatusItem", "NSStatusBar", "NSStatusBarButton", "NSWorkspace", "NSColor", "NSGraphics", "NSGraphicsContext", "NSAffineTransform", "NSAccessibility"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSObject", "NSGeometry", "NSAffineTransform", "NSTimer", "NSRunLoop", "NSDate"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] }

@@ -8,6 +8,8 @@ use sidepulse_core::{
     ClientRequest, DeviceInfo, MonitorSnapshot, PROTOCOL_VERSION, PhoneLinkSummary, RequestKind,
     ServerMessage, ServerPayload,
 };
+use sidepulse_installer::management;
+use sidepulse_installer::startup::{Job, Operation};
 #[cfg(not(target_os = "macos"))]
 use sidepulse_ui_model::BRIGHTNESS_CHOICES;
 #[cfg(target_os = "macos")]
@@ -577,6 +579,139 @@ fn confirm_remove_phone(_name: &str) -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuitChoice {
+    TrayOnly,
+    TrayAndMonitor,
+    Cancel,
+}
+
+#[cfg(target_os = "macos")]
+fn confirm_quit() -> QuitChoice {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn};
+    use objc2_foundation::NSString;
+    let Some(marker) = MainThreadMarker::new() else {
+        return QuitChoice::Cancel;
+    };
+    let alert = NSAlert::new(marker);
+    alert.setMessageText(&NSString::from_str("Quit SidePulse?"));
+    alert.setInformativeText(&NSString::from_str(
+        "The Agent Monitor runs in the background and updates your SidePulse devices. Stop it too?",
+    ));
+    alert.addButtonWithTitle(&NSString::from_str("Quit Tray Only"));
+    alert.addButtonWithTitle(&NSString::from_str("Quit Tray and Monitor"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let choice = alert.runModal();
+    if choice == NSAlertFirstButtonReturn {
+        QuitChoice::TrayOnly
+    } else if choice == NSAlertSecondButtonReturn {
+        QuitChoice::TrayAndMonitor
+    } else {
+        QuitChoice::Cancel
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn confirm_quit() -> QuitChoice {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IDNO, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNOCANCEL, MessageBoxW,
+    };
+    let title = "Quit SidePulse?\0".encode_utf16().collect::<Vec<_>>();
+    let message = "The Agent Monitor runs in the background and updates your SidePulse devices.\n\nStop it too?\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    match unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND,
+        )
+    } {
+        IDYES => QuitChoice::TrayAndMonitor,
+        IDNO => QuitChoice::TrayOnly,
+        _ => QuitChoice::Cancel,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn confirm_quit() -> QuitChoice {
+    use std::process::Command;
+    let message =
+        "The Agent Monitor runs in the background and updates your SidePulse devices. Stop it too?";
+    let zenity = Command::new("zenity")
+        .args([
+            "--question",
+            "--title=Quit SidePulse?",
+            "--text",
+            message,
+            "--ok-label=Quit Tray and Monitor",
+            "--cancel-label=Cancel",
+            "--extra-button=Quit Tray Only",
+        ])
+        .output();
+    if let Ok(result) = zenity {
+        return if result.status.success() {
+            if String::from_utf8_lossy(&result.stdout).trim() == "Quit Tray Only" {
+                QuitChoice::TrayOnly
+            } else {
+                QuitChoice::TrayAndMonitor
+            }
+        } else {
+            QuitChoice::Cancel
+        };
+    }
+    let kdialog = Command::new("kdialog")
+        .args(["--yesnocancel", message, "--title", "Quit SidePulse?"])
+        .status();
+    match kdialog.ok().and_then(|status| status.code()) {
+        Some(0) => QuitChoice::TrayAndMonitor,
+        Some(1) => QuitChoice::TrayOnly,
+        _ => QuitChoice::Cancel,
+    }
+}
+
+fn quit_with_choice(endpoint: &str, choice: QuitChoice) -> Result<bool, Box<dyn Error>> {
+    if choice == QuitChoice::Cancel {
+        return Ok(false);
+    }
+    let executable = env::current_exe()?;
+    let context = management::context_from_executable(&executable, endpoint)?;
+    if choice == QuitChoice::TrayAndMonitor {
+        if let Some(context) = &context {
+            management::manage_startup(context, endpoint, Job::Service, Operation::Stop, false)?;
+        }
+        let request = ClientRequest {
+            version: PROTOCOL_VERSION,
+            request_id: 15,
+            kind: RequestKind::Shutdown,
+        };
+        match sidepulse_ipc::request::<_, ServerMessage>(endpoint, &request, Duration::from_secs(2))
+        {
+            Ok(ServerMessage {
+                version: PROTOCOL_VERSION,
+                request_id: Some(15),
+                payload: ServerPayload::Ack,
+            }) => {}
+            Ok(_) => return Err("Agent Monitor did not acknowledge shutdown".into()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                ) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if let Some(context) = &context {
+        management::manage_startup(context, endpoint, Job::Tray, Operation::Stop, false)?;
+    }
+    Ok(true)
+}
+
 fn execute_action(
     view: &mut TrayView,
     action: TrayAction,
@@ -627,7 +762,7 @@ fn execute_action(
         TrayAction::Settings => {
             view.open_settings(endpoint, false)?;
         }
-        TrayAction::Quit => return Ok(true),
+        TrayAction::Quit => return quit_with_choice(endpoint, confirm_quit()),
     }
     Ok(false)
 }
@@ -843,4 +978,49 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(target_os = "macos")]
     mac_menu::set_endpoint(&endpoint);
     run(endpoint)
+}
+
+#[cfg(all(test, unix))]
+mod quit_tests {
+    use super::*;
+    use interprocess::local_socket::traits::Listener;
+    use std::io::BufReader;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn quitting_tray_and_monitor_sends_shutdown() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let endpoint = format!(
+            "/tmp/sidepulse-tray-quit-{}-{unique}.sock",
+            std::process::id()
+        );
+        let listener = sidepulse_ipc::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let request: ClientRequest =
+                sidepulse_ipc::read_message(&mut BufReader::new(&mut stream)).unwrap();
+            assert_eq!(request.kind, RequestKind::Shutdown);
+            sidepulse_ipc::write_message(
+                &mut stream,
+                &ServerMessage {
+                    version: PROTOCOL_VERSION,
+                    request_id: Some(request.request_id),
+                    payload: ServerPayload::Ack,
+                },
+            )
+            .unwrap();
+        });
+        assert!(quit_with_choice(&endpoint, QuitChoice::TrayAndMonitor).unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cancel_does_not_need_a_running_service() {
+        assert!(
+            !quit_with_choice("/tmp/nonexistent-sidepulse-service", QuitChoice::Cancel).unwrap()
+        );
+    }
 }

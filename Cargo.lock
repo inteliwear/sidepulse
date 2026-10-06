@@ -5585,6 +5585,7 @@ name = "sidepulse-tray"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "interprocess",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -5595,6 +5596,7 @@ dependencies = [
  "sidepulse-ui-model",
  "tao",
  "tray-icon",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

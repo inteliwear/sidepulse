@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
 fn main() {
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     let built_at = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
