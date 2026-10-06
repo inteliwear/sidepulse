@@ -284,7 +284,10 @@ pub fn set_status_symbol(tray: &TrayIcon, state: StatusIcon) {
         image.setTemplate(true);
         button.setImage(Some(&image));
         button.setTitle(&NSString::from_str(""));
-        let label = NSString::from_str(&format!("SidePulse Agent Monitor: {description}"));
+        let label = NSString::from_str(&format!(
+            "SidePulse Rust v{}: {description}",
+            super::VERSION
+        ));
         let _: () = unsafe { msg_send![&*button, setAccessibilityLabel: &*label] };
     }
 }

@@ -17,6 +17,9 @@ sidepulse-ipc = { path = "../sidepulse-ipc" }
 sidepulse-ui-model = { path = "../sidepulse-ui-model" }
 tray-icon = { version = "0.25.1", default-features = false }
 
+[build-dependencies]
+chrono.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 

@@ -24,6 +24,19 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 #[cfg(target_os = "macos")]
 mod mac_menu;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD_TIME: &str = env!("SIDEPULSE_TRAY_BUILD_TIME");
+
+fn append_build_identity(menu: &Menu) -> Result<(), Box<dyn Error>> {
+    menu.append(&MenuItem::new("SidePulse Rust", false, None))?;
+    menu.append(&MenuItem::new(
+        format!("v{VERSION} · built {BUILD_TIME}"),
+        false,
+        None,
+    ))?;
+    Ok(())
+}
+
 struct TrayView {
     tray: TrayIcon,
     icon_visible: bool,
@@ -56,12 +69,12 @@ enum TrayAction {
 impl TrayView {
     fn new() -> Result<Self, Box<dyn Error>> {
         let menu = Menu::new();
-        menu.append(&MenuItem::new("SidePulse", false, None))?;
+        append_build_identity(&menu)?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon(StatusIcon::Unknown)?)
             .with_icon_as_template(cfg!(target_os = "macos"))
-            .with_tooltip("SidePulse Agent Monitor: Idle")
+            .with_tooltip(format!("SidePulse Rust v{VERSION}: Idle"))
             .build()?;
         let mut view = Self {
             tray,
@@ -100,14 +113,14 @@ impl TrayView {
             _ => "Idle",
         };
         self.tray
-            .set_tooltip(Some(format!("SidePulse Agent Monitor: {label}")))?;
+            .set_tooltip(Some(format!("SidePulse Rust v{VERSION}: {label}")))?;
         self.tray.set_icon(Some(icon(state.icon)?))?;
         #[cfg(target_os = "macos")]
         mac_menu::set_status_symbol(&self.tray, state.icon);
         self.tray.set_title(None::<&str>);
         let menu = Menu::new();
         let mut actions = Vec::new();
-        menu.append(&MenuItem::new("SidePulse", false, None))?;
+        append_build_identity(&menu)?;
         menu.append(&PredefinedMenuItem::separator())?;
         menu.append(&MenuItem::new("Agents", false, None))?;
         let mut rows = state.rows.iter().collect::<Vec<_>>();
