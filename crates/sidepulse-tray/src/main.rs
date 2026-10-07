@@ -63,7 +63,6 @@ enum TrayAction {
     ToggleVirtual(bool),
     #[cfg(target_os = "macos")]
     Sleep(&'static str),
-    Setup,
     Settings,
     Quit,
 }
@@ -174,7 +173,6 @@ impl TrayView {
             Modifiers::CONTROL
         };
         for (label, action, key) in [
-            ("Setup...", TrayAction::Setup, None),
             ("Settings...", TrayAction::Settings, Some(Code::Comma)),
             ("Quit", TrayAction::Quit, Some(Code::KeyQ)),
         ] {
@@ -359,12 +357,11 @@ impl TrayView {
         Ok(())
     }
 
-    fn open_settings(&mut self, endpoint: &str, setup: bool) -> Result<(), Box<dyn Error>> {
-        if !setup
-            && self
-                .settings_child
-                .as_mut()
-                .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+    fn open_settings(&mut self, endpoint: &str) -> Result<(), Box<dyn Error>> {
+        if self
+            .settings_child
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
         {
             return Ok(());
         }
@@ -377,11 +374,7 @@ impl TrayView {
         } else {
             "sidepulse-next-settings"
         }));
-        let mut command = std::process::Command::new(executable);
-        if setup {
-            command.arg("--setup");
-        }
-        self.settings_child = Some(command.arg(endpoint).spawn()?);
+        self.settings_child = Some(std::process::Command::new(executable).arg(endpoint).spawn()?);
         Ok(())
     }
 }
@@ -756,11 +749,8 @@ fn execute_action(
         TrayAction::Sleep(policy) => {
             send_sleep_policy(endpoint, policy)?;
         }
-        TrayAction::Setup => {
-            view.open_settings(endpoint, true)?;
-        }
         TrayAction::Settings => {
-            view.open_settings(endpoint, false)?;
+            view.open_settings(endpoint)?;
         }
         TrayAction::Quit => return quit_with_choice(endpoint, confirm_quit()),
     }
