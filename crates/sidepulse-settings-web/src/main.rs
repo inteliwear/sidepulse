@@ -10,11 +10,16 @@ fn settings_poll(
     state: tauri::State<'_, Mutex<Bridge>>,
     after_revision: u64,
     preview_program: Option<String>,
+    preview_frames: Option<bool>,
 ) -> Result<Poll, String> {
     state
         .lock()
         .map_err(|_| "Settings client is unavailable.".to_string())?
-        .poll_with_previews(after_revision, preview_program.as_deref())
+        .poll_with_previews(
+            after_revision,
+            preview_program.as_deref(),
+            preview_frames.unwrap_or(false),
+        )
 }
 
 #[tauri::command]

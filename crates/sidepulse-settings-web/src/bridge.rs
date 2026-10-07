@@ -32,7 +32,7 @@ pub struct Poll {
     pub state: Option<Value>,
     pub setup: Option<sidepulse_core::HookSetupStatus>,
     pub events: Vec<Value>,
-    pub previews: std::collections::BTreeMap<String, crate::previews::Frame>,
+    pub previews: std::collections::BTreeMap<String, crate::previews::FrameBatch>,
 }
 
 pub struct Bridge {
@@ -120,10 +120,11 @@ impl Bridge {
         &mut self,
         after_revision: u64,
         editor: Option<&str>,
+        include_previews: bool,
     ) -> Result<Poll, String> {
         let mut poll = self.poll(after_revision)?;
-        if let Some(state) = &self.state {
-            poll.previews = self.previews.frames(state, editor);
+        if include_previews && let Some(state) = &self.state {
+            poll.previews = self.previews.batches(state, editor);
         }
         Ok(poll)
     }

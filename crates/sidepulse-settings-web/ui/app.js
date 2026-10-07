@@ -13,6 +13,7 @@ const model = {page:new URLSearchParams(window.location.search).get('page')==='s
   phoneName:'iPhone', phoneToken:'', openDetails:new Set(), composing:false};
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const pageRoot = document.querySelector('#page');
+const previewPlayback = {entries:new Map(),pausedAt:null};
 let fieldNumber = 0;
 
 function el(tag, attrs={}, ...children) {
@@ -190,17 +191,65 @@ function advanced() {
       note('Reopen settings anytime: run sidepulse settings in Terminal.'))];
 }
 function ledPreview(id) { return el('div',{class:'led-preview','data-preview':id,role:'img','aria-label':`${id==='editor'?'Custom animation':animationRows.find(([state])=>state===id)?.[1]??id} live preview`},...Array.from({length:8},()=>el('span',{}))); }
-function paintPreviews() {
+function editorPreviewProgram() {
+  return model.editor==='asset'?model.assetProgram:model.editor==='animation' && draft('animation')?.value.style==='custom'?draft('animation').value.program:null;
+}
+function previewPosition(entry,now) { return entry.originIndex+Math.floor((now-entry.startedAt)*entry.sampleRate/1000); }
+function needsPreviewBatch() {
+  if(model.page!=='animations' || !model.state || document.hidden)return false;
+  const now=performance.now(),ids=animationRows.map(([id])=>id);
+  const editor=editorPreviewProgram();if(editor!==null)ids.push('editor');
+  return ids.some(id=>{
+    const entry=previewPlayback.entries.get(id);
+    if(!entry || (id==='editor' && entry.program!==editor))return true;
+    if(entry.error)return false;
+    return entry.startIndex+entry.frames.length-previewPosition(entry,now)<120;
+  });
+}
+function acceptPreviewBatches(batches) {
+  const now=performance.now(),editor=editorPreviewProgram();
+  for(const [id,batch] of Object.entries(batches)) {
+    if(id==='editor' && batch.program!==editor)continue;
+    let entry=previewPlayback.entries.get(id);
+    if(!entry || entry.program!==batch.program || batch.start_index===0) {
+      entry={program:batch.program,error:batch.error,sampleRate:batch.sample_rate,originIndex:batch.start_index,startIndex:batch.start_index,startedAt:now,frames:[]};
+      previewPlayback.entries.set(id,entry);
+    }
+    if(batch.start_index!==entry.startIndex+entry.frames.length)continue;
+    entry.error=batch.error;
+    entry.frames.push(...batch.frames);
+    const consumed=previewPosition(entry,now)-entry.startIndex;
+    if(consumed>240) {const trim=Math.min(consumed-120,entry.frames.length);entry.frames.splice(0,trim);entry.startIndex+=trim;}
+  }
+  model.previews=batches;
+}
+function paintPreviews(now=performance.now()) {
   for(const node of pageRoot.querySelectorAll('[data-preview]')) {
-    const frame=model.previews[node.dataset.preview];
-    if(!frame)continue;
-    node.title=frame.error??'';
+    const entry=previewPlayback.entries.get(node.dataset.preview);
+    if(!entry)continue;
+    node.title=entry.error??'';
+    const position=Math.max(0,Math.min(entry.frames.length-1,previewPosition(entry,now)-entry.startIndex));
+    const frame=entry.frames[position];
     for(const [index,light] of [...node.children].entries()) {
-      const color=frame.colors?.[index]??[0,0,0];
-      light.style.backgroundColor=`rgb(${color.join(',')})`;light.style.color=light.style.backgroundColor;
+      const color=frame?.[index]??0;
+      const css=`rgb(${color>>16&255},${color>>8&255},${color&255})`;
+      if(light.dataset.color!==css){light.style.backgroundColor=css;light.style.color=css;light.dataset.color=css;}
     }
   }
-  const error=pageRoot.querySelector('#editor-preview-status');if(error)error.textContent=model.previews.editor?.error??'Updates as you type';
+  const error=pageRoot.querySelector('#editor-preview-status');if(error)error.textContent=previewPlayback.entries.get('editor')?.error??'Updates as you type';
+}
+function drawPreviews(now) {
+  if(model.page==='animations' && !document.hidden) {
+    if(previewPlayback.pausedAt!==null){const pause=now-previewPlayback.pausedAt;for(const entry of previewPlayback.entries.values())entry.startedAt+=pause;previewPlayback.pausedAt=null;}
+    paintPreviews(now);
+  } else if(previewPlayback.pausedAt===null)previewPlayback.pausedAt=now;
+  schedulePreviewFrame();
+}
+function schedulePreviewFrame() {
+  let drawn=false;
+  const delay=model.page==='animations' && !document.hidden?16:250;
+  const timeout=setTimeout(()=>{if(drawn)return;drawn=true;cancelAnimationFrame(handle);drawPreviews(performance.now());},delay);
+  const handle=requestAnimationFrame(now=>{if(drawn)return;drawn=true;clearTimeout(timeout);drawPreviews(now);});
 }
 function openEditor(type,state=null) {
   model.editor=type;
@@ -209,6 +258,7 @@ function openEditor(type,state=null) {
   }
   render();
   pageRoot.querySelector('[role=dialog] input,[role=dialog] textarea')?.focus();
+  requestPreviewRefresh();
 }
 function openCustomEditor(state) {
   const selected=model.state.animation_library.current[state],asset=model.state.animation_library.custom_animations[selected];
@@ -226,13 +276,13 @@ function editorDialog() {
     try{library({operation:'import_profile',document:JSON.parse(model.profileJSON)});}catch(error){announce(`Invalid profile JSON: ${error.message}`,true);}
   },!model.profileJSON.trim(),'primary'))];}
   else if(model.editor==='asset') {title=model.assetId?'Edit Custom Animation':'Add Custom Animation';content=[field('Name',input('asset-name',model.assetName,value=>{model.assetName=value;})),row(el('span',{},'Live Preview'),ledPreview('editor'),el('span',{id:'editor-preview-status',class:'muted'},'Updates as you type')),
-    field('LED program',textArea('asset-program',model.assetProgram,value=>{model.assetProgram=value;},9,false)),
+    field('LED program',textArea('asset-program',model.assetProgram,value=>{model.assetProgram=value;previewPlayback.entries.delete('editor');requestPreviewRefresh();},9,false)),
     actions(button('Show on Device',()=>request('preview_animation',{state:model.assetState??'working',program:model.assetProgram,seconds:10})),model.assetId?button('Delete animation',()=>library({operation:'delete_animation',id:model.assetId}),false,'danger'):null,close,
       button('Save',()=>library({operation:'save_animation',state:model.assetState,id:model.assetId,name:model.assetName,program:model.assetProgram}),!model.assetName.trim(),'primary'))];}
   else {const d=draft('animation').value;title=`Edit ${animationRows.find(([id])=>id===model.animationMode)?.[1]??model.animationMode}`;
     content=[field('Animation',select('animation-style',d.style,model.state.animation_choices.map(c=>[c.id,c.name]),value=>{edit('animation','style',value);render();})),
       row(el('span',{},'Live Preview'),ledPreview('editor'),el('span',{id:'editor-preview-status',class:'muted'},'Updates as you type')),
-      field('Custom LED program',textArea('animation-program',d.program||'#00E5FF',value=>{edit('animation','program',value);edit('animation','style','custom');},9,false)),
+      field('Custom LED program',textArea('animation-program',d.program||'#00E5FF',value=>{edit('animation','program',value);edit('animation','style','custom');previewPlayback.entries.delete('editor');requestPreviewRefresh();},9,false)),
       note('Enter a LEDS.LED program (maximum 512 bytes and 20 lines).'),
       actions(button('Show on Device',()=>request('preview_animation',{state:model.animationMode,program:d.style==='custom'?d.program:null,seconds:10})),close,
         button('Save animation',()=>request('set_animation_state',{state:model.animationMode,style:d.style,custom_program:d.style==='custom'?d.program:null}),!draft('animation').dirty,'primary'))];}
@@ -435,6 +485,7 @@ function navigate(id) {
   model.page=id;if(pages.some(([page])=>page===id))model.settingsPage=id;
   document.querySelector('#controls-menu').hidden=true;document.querySelector('#controls-toggle').setAttribute('aria-expanded','false');
   render();window.scrollTo(0,0);
+  if(id==='animations')requestPreviewRefresh();
 }
 for(const [id,label] of pages)document.querySelector('#navigation').append(el('button',{id:`tab-${id}`,'data-page':id,role:'tab',type:'button','aria-controls':'page',onclick:()=>navigate(id)},label));
 for(const [id,label] of auxiliaryPages)document.querySelector('#controls-menu').append(button(label,()=>navigate(id)));
@@ -472,13 +523,21 @@ function applyPoll(result) {
     else if(event.type==='message')announce(event.message,event.error);
   }
   model.busy=result.busy || model.pendingAction;
-  if(result.state){model.state=result.state;model.revision=result.revision;syncDrafts();}
-  if(result.previews)model.previews=result.previews;
+  if(result.state){model.state=result.state;model.revision=result.revision;syncDrafts();if(stateChanged)previewPlayback.entries.clear();}
+  if(result.previews && Object.keys(result.previews).length)acceptPreviewBatches(result.previews);
   if(changed)render();else paintPreviews();
 }
-async function poll() {
-  try { applyPoll(await invoke('settings_poll',{afterRevision:model.revision,previewProgram:model.editor==='asset'?model.assetProgram:model.editor==='animation' && draft('animation').value.style==='custom'?draft('animation').value.program:null})); }
-  catch(error) {model.connected=false;model.busy=false;model.pendingAction=false;announce(`Settings client unavailable: ${error}`,true);render();}
-  setTimeout(poll,model.page==='animations' && !document.hidden?16:500);
+let pollTimer=null,polling=false,pollAgain=false;
+function requestPreviewRefresh() {
+  if(polling){pollAgain=true;return;}
+  clearTimeout(pollTimer);pollTimer=setTimeout(poll,0);
 }
-render();poll();
+async function poll() {
+  if(polling){pollAgain=true;return;}
+  polling=true;
+  try { applyPoll(await invoke('settings_poll',{afterRevision:model.revision,previewProgram:editorPreviewProgram(),previewFrames:needsPreviewBatch()})); }
+  catch(error) {model.connected=false;model.busy=false;model.pendingAction=false;announce(`Settings client unavailable: ${error}`,true);render();}
+  polling=false;
+  clearTimeout(pollTimer);pollTimer=setTimeout(poll,pollAgain?0:model.page==='animations'?250:500);pollAgain=false;
+}
+render();poll();schedulePreviewFrame();

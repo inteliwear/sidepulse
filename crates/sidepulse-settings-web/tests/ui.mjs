@@ -30,7 +30,7 @@ try {
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     try {
       await page.addInitScript(({state})=>{
-        window.fixture={state,revision:1,connected:true,busy:false,events:[],calls:[],pollTimes:[],fail:null};
+        window.fixture={state,revision:1,connected:true,busy:false,events:[],calls:[],pollTimes:[],previewIndex:{},previewSources:{},fail:null};
         const classify=command=>({set_battery_settings:'battery',set_agent_list_settings:'monitoring',set_sleep_settings:'sleep',set_agent_animation:'animation',set_session_terminal:'terminal',set_lid_animation_timing:'lid_timing',set_relay_settings:'relay',edit_animation_library:'library',set_animation_state:'library',preview_animation:'none',register_phone:'phone',remove_phone:'phone',begin_phone_pairing:'phone',cancel_phone_pairing:'phone',reload_phone_links:'phone',set_phone_display:'phone'}[command]??'none');
         window.__TAURI__={clipboardManager:{writeText:async text=>{window.fixture.clipboard=text;}},core:{invoke:async(command,args)=>{
           const f=window.fixture;
@@ -38,7 +38,13 @@ try {
             f.pollTimes.push(Date.now());
             f.lastPreviewProgram=args.previewProgram;
             const events=f.events.splice(0);f.busy=false;
-            const previews=Object.fromEntries(['idle_ready','working','waiting_for_input','blocked_error','completed','unknown','lid_open','lid_closed','editor'].map(id=>[id,{colors:Array.from({length:8},()=>[0,229,255]),program:'#00E5FF',error:null}]));
+            const previews=Object.fromEntries(args.previewFrames?['idle_ready','working','waiting_for_input','blocked_error','completed','unknown','lid_open','lid_closed',...(args.previewProgram===null?[]:['editor'])].map(id=>{
+              const program=id==='editor'?args.previewProgram:'#00E5FF';
+              if(f.previewSources[id]!==program){f.previewSources[id]=program;f.previewIndex[id]=0;}
+              const start_index=f.previewIndex[id];f.previewIndex[id]+=240;
+              const frames=Array.from({length:240},(_,offset)=>Array.from({length:8},()=>((start_index+offset)%256)<<16));
+              return [id,{program,start_index,sample_rate:120,frames,error:null}];
+            }):[]);
             return {previews,revision:f.revision,connected:f.connected,busy:f.busy,platform:'macos',setup:f.state.setup,state:args.afterRevision!==f.revision?structuredClone(f.state):null,events};
           }
           if(command!=='settings_action')throw new Error('Unknown host command');
@@ -72,6 +78,21 @@ try {
       assert.deepEqual(await page.locator('.hook-row strong').allTextContents(),reference.hooks);
       assert.deepEqual(await page.locator('main h2').allTextContents(),reference.sections.agents);
       assert.equal(await page.locator('main img').count(),0,'provider titles must be text, not HTML');
+      await page.getByRole('tab',{name:'Animations',exact:true}).click();
+      await waitFor(page,()=>page.locator('[data-preview="idle_ready"] span').first().evaluate(node=>Boolean(node.dataset.color)),'animation frames did not arrive');
+      await page.evaluate(()=>{
+        window.fixture.pollTimes=[];window.fixture.ledColors=new Set();
+        window.fixture.ledObserver=new MutationObserver(()=>{
+          const color=document.querySelector('[data-preview="idle_ready"] span')?.dataset.color;
+          if(color)window.fixture.ledColors.add(color);
+        });
+        window.fixture.ledObserver.observe(document.querySelector('#page'),{subtree:true,attributes:true,attributeFilter:['data-color']});
+      });
+      await page.waitForTimeout(700);
+      const playback=await page.evaluate(()=>({colors:window.fixture.ledColors.size,polls:window.fixture.pollTimes.length}));
+      assert.ok(playback.colors>=10,`animation frames did not advance at display speed: ${JSON.stringify(playback)}`);
+      assert.ok(playback.polls<=6,'animation playback still depends on per-frame IPC');
+      await page.getByRole('tab',{name:'Agents',exact:true}).click();
       const nav=async label=>{if(await page.locator('#navigation').isHidden())await page.locator('#back-settings').click();
         if(reference.tabs.some(tab=>tab[1]===label))await page.getByRole('tab',{name:label,exact:true}).click();
         else if(label==='Setup')await page.locator('#setup-open').click();
@@ -113,8 +134,6 @@ try {
       await nav('Agents');await page.locator('#opener-codex').selectOption('terminal');await page.waitForTimeout(600);await last('set_session_open_preference');
       await page.locator('#terminal-app').selectOption('custom');await page.locator('#terminal-path').fill('/fixture/terminal');await click('Save terminal preference');assert.equal((await last('set_session_terminal')).custom_path,'/fixture/terminal');
       await nav('Agents');await page.getByRole('tab',{name:'Agents',exact:true}).focus();await page.keyboard.press('ArrowRight');assert.equal(await page.getByRole('tab',{name:'Animations',exact:true}).getAttribute('aria-selected'),'true');
-      await page.evaluate(()=>{window.fixture.pollTimes=[];});await page.waitForTimeout(700);
-      assert.ok((await page.evaluate(()=>window.fixture.pollTimes.length))>=8,'animation preview refresh is too slow');
       assert.deepEqual(await page.locator('.animation-table th').allTextContents(),reference.columns);
       assert.deepEqual(await page.locator('.animation-table tbody tr').evaluateAll(rows=>rows.map(row=>[row.dataset.animationState,row.cells[0].textContent])),reference.animations);
       assert.equal(await page.locator('.animation-table .led-preview span').count(),64);
