@@ -242,19 +242,32 @@ fn codex_event(
                 path,
                 json!({"prompt": content_text(payload.get("content"))}),
             ),
-            "assistant" => event(
-                "codex",
-                "Stop",
-                session,
-                turn,
-                cwd,
-                timestamp,
-                path,
-                json!({"last_assistant_message": content_text(payload.get("content"))}),
-            ),
+            "assistant" => match payload.get("phase").and_then(Value::as_str) {
+                Some("commentary") => event(
+                    "codex",
+                    "Notification",
+                    session,
+                    turn,
+                    cwd,
+                    timestamp,
+                    path,
+                    json!({"notification_type": "assistant_progress"}),
+                ),
+                Some("final" | "final_answer") | None => event(
+                    "codex",
+                    "Stop",
+                    session,
+                    turn,
+                    cwd,
+                    timestamp,
+                    path,
+                    json!({"last_assistant_message": content_text(payload.get("content"))}),
+                ),
+                _ => None,
+            },
             _ => None,
         },
-        "function_call" => event(
+        "function_call" | "custom_tool_call" => event(
             "codex",
             "PreToolUse",
             session,
@@ -263,10 +276,10 @@ fn codex_event(
             timestamp,
             path,
             json!({
-                "tool_name": payload.get("name"), "tool_input": payload.get("arguments"), "tool_use_id": payload.get("call_id")
+                "tool_name": payload.get("name"), "tool_input": payload.get("arguments").or_else(|| payload.get("input")), "tool_use_id": payload.get("call_id")
             }),
         ),
-        "function_call_output" => event(
+        "function_call_output" | "custom_tool_call_output" => event(
             "codex",
             "PostToolUse",
             session,
@@ -560,6 +573,46 @@ mod tests {
         let mut updates = Vec::new();
         cursor.poll(&mut updates).unwrap();
         assert_eq!(updates.last().unwrap().event_name, "Stop");
+    }
+
+    #[test]
+    fn codex_commentary_and_custom_tools_keep_the_turn_active_until_final_answer() {
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-12345678-1234-1234-1234-123456789abc.jsonl");
+        let rows = [
+            json!({"timestamp":"2026-10-07T12:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"check status"}]}}),
+            json!({"timestamp":"2026-10-07T12:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking now."}]}}),
+            json!({"timestamp":"2026-10-07T12:00:02Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"call-1","input":"status"}}),
+            json!({"timestamp":"2026-10-07T12:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"running"}}),
+            json!({"timestamp":"2026-10-07T12:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}}),
+        ];
+        fs::write(
+            &path,
+            rows.iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let events = load_file("codex-transcripts", &path).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "UserPromptSubmit",
+                "Notification",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop"
+            ]
+        );
+        assert_eq!(events[1].raw["notification_type"], "assistant_progress");
+        assert_eq!(events[2].tool_name.as_deref(), Some("exec"));
+        assert_eq!(events[2].raw["tool_input"], "status");
     }
 
     #[test]

@@ -374,7 +374,11 @@ impl TrayView {
         } else {
             "sidepulse-next-settings"
         }));
-        self.settings_child = Some(std::process::Command::new(executable).arg(endpoint).spawn()?);
+        self.settings_child = Some(
+            std::process::Command::new(executable)
+                .arg(endpoint)
+                .spawn()?,
+        );
         Ok(())
     }
 }
