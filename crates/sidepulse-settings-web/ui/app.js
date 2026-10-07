@@ -42,8 +42,8 @@ function input(id,value,change,{type='text',...attrs}={}) {
   const node=el('input',{id,type,...(type==='number'?{step:'any'}:{}),...attrs,required:type==='number',oninput:event=>{change(type==='number' || type==='range' ? Number(event.target.value) : event.target.value);if(type==='text'||type==='password')render();}});
   node.value=String(value ?? ''); return node;
 }
-function textArea(id,value,change,rows=6) {
-  const node=el('textarea',{id,rows,spellcheck:'false',oninput:event=>{change(event.target.value);render();}});
+function textArea(id,value,change,rows=6,renderOnInput=true) {
+  const node=el('textarea',{id,rows,spellcheck:'false',oninput:event=>{change(event.target.value);if(renderOnInput)render();}});
   node.value=value??''; return node;
 }
 function select(id,value,choices,change,disabled=false) {
@@ -226,13 +226,13 @@ function editorDialog() {
     try{library({operation:'import_profile',document:JSON.parse(model.profileJSON)});}catch(error){announce(`Invalid profile JSON: ${error.message}`,true);}
   },!model.profileJSON.trim(),'primary'))];}
   else if(model.editor==='asset') {title=model.assetId?'Edit Custom Animation':'Add Custom Animation';content=[field('Name',input('asset-name',model.assetName,value=>{model.assetName=value;})),row(el('span',{},'Live Preview'),ledPreview('editor'),el('span',{id:'editor-preview-status',class:'muted'},'Updates as you type')),
-    field('LED program',textArea('asset-program',model.assetProgram,value=>{model.assetProgram=value;},9)),
+    field('LED program',textArea('asset-program',model.assetProgram,value=>{model.assetProgram=value;},9,false)),
     actions(button('Show on Device',()=>request('preview_animation',{state:model.assetState??'working',program:model.assetProgram,seconds:10})),model.assetId?button('Delete animation',()=>library({operation:'delete_animation',id:model.assetId}),false,'danger'):null,close,
       button('Save',()=>library({operation:'save_animation',state:model.assetState,id:model.assetId,name:model.assetName,program:model.assetProgram}),!model.assetName.trim(),'primary'))];}
   else {const d=draft('animation').value;title=`Edit ${animationRows.find(([id])=>id===model.animationMode)?.[1]??model.animationMode}`;
     content=[field('Animation',select('animation-style',d.style,model.state.animation_choices.map(c=>[c.id,c.name]),value=>{edit('animation','style',value);render();})),
       row(el('span',{},'Live Preview'),ledPreview('editor'),el('span',{id:'editor-preview-status',class:'muted'},'Updates as you type')),
-      field('Custom LED program',textArea('animation-program',d.program||'#00E5FF',value=>{edit('animation','program',value);edit('animation','style','custom');},9)),
+      field('Custom LED program',textArea('animation-program',d.program||'#00E5FF',value=>{edit('animation','program',value);edit('animation','style','custom');},9,false)),
       note('Enter a LEDS.LED program (maximum 512 bytes and 20 lines).'),
       actions(button('Show on Device',()=>request('preview_animation',{state:model.animationMode,program:d.style==='custom'?d.program:null,seconds:10})),close,
         button('Save animation',()=>request('set_animation_state',{state:model.animationMode,style:d.style,custom_program:d.style==='custom'?d.program:null}),!draft('animation').dirty,'primary'))];}
@@ -455,7 +455,9 @@ document.addEventListener('keydown',event=>{
 pageRoot.addEventListener('compositionstart',()=>{model.composing=true;});
 pageRoot.addEventListener('compositionend',()=>{model.composing=false;render();});
 function applyPoll(result) {
-  const changed=Boolean(result.state) || result.events.length>0 || model.connected!==result.connected || model.busy!==result.busy || JSON.stringify(model.setup)!==JSON.stringify(result.setup);
+  const animationState=state=>JSON.stringify([state?.animation_library,state?.animation_states,state?.animation_choices,state?.lid_durations]);
+  const stateChanged=Boolean(result.state) && (model.page!=='animations' || animationState(model.state)!==animationState(result.state));
+  const changed=stateChanged || result.events.length>0 || model.connected!==result.connected || model.busy!==result.busy || JSON.stringify(model.setup)!==JSON.stringify(result.setup);
   model.connected=result.connected;model.platform=result.platform;model.setup=result.setup;
   for(const event of result.events) {
     if(['saved','export','profile_export'].includes(event.type) || event.completed)model.pendingAction=false;
@@ -477,6 +479,6 @@ function applyPoll(result) {
 async function poll() {
   try { applyPoll(await invoke('settings_poll',{afterRevision:model.revision,previewProgram:model.editor==='asset'?model.assetProgram:model.editor==='animation' && draft('animation').value.style==='custom'?draft('animation').value.program:null})); }
   catch(error) {model.connected=false;model.busy=false;model.pendingAction=false;announce(`Settings client unavailable: ${error}`,true);render();}
-  setTimeout(poll,model.page==='animations'?120:500);
+  setTimeout(poll,model.page==='animations' && !document.hidden?16:500);
 }
 render();poll();

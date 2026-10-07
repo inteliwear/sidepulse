@@ -30,11 +30,13 @@ try {
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     try {
       await page.addInitScript(({state})=>{
-        window.fixture={state,revision:1,connected:true,busy:false,events:[],calls:[],fail:null};
+        window.fixture={state,revision:1,connected:true,busy:false,events:[],calls:[],pollTimes:[],fail:null};
         const classify=command=>({set_battery_settings:'battery',set_agent_list_settings:'monitoring',set_sleep_settings:'sleep',set_agent_animation:'animation',set_session_terminal:'terminal',set_lid_animation_timing:'lid_timing',set_relay_settings:'relay',edit_animation_library:'library',set_animation_state:'library',preview_animation:'none',register_phone:'phone',remove_phone:'phone',begin_phone_pairing:'phone',cancel_phone_pairing:'phone',reload_phone_links:'phone',set_phone_display:'phone'}[command]??'none');
         window.__TAURI__={clipboardManager:{writeText:async text=>{window.fixture.clipboard=text;}},core:{invoke:async(command,args)=>{
           const f=window.fixture;
           if(command==='settings_poll'){
+            f.pollTimes.push(Date.now());
+            f.lastPreviewProgram=args.previewProgram;
             const events=f.events.splice(0);f.busy=false;
             const previews=Object.fromEntries(['idle_ready','working','waiting_for_input','blocked_error','completed','unknown','lid_open','lid_closed','editor'].map(id=>[id,{colors:Array.from({length:8},()=>[0,229,255]),program:'#00E5FF',error:null}]));
             return {previews,revision:f.revision,connected:f.connected,busy:f.busy,platform:'macos',setup:f.state.setup,state:args.afterRevision!==f.revision?structuredClone(f.state):null,events};
@@ -111,13 +113,20 @@ try {
       await nav('Agents');await page.locator('#opener-codex').selectOption('terminal');await page.waitForTimeout(600);await last('set_session_open_preference');
       await page.locator('#terminal-app').selectOption('custom');await page.locator('#terminal-path').fill('/fixture/terminal');await click('Save terminal preference');assert.equal((await last('set_session_terminal')).custom_path,'/fixture/terminal');
       await nav('Agents');await page.getByRole('tab',{name:'Agents',exact:true}).focus();await page.keyboard.press('ArrowRight');assert.equal(await page.getByRole('tab',{name:'Animations',exact:true}).getAttribute('aria-selected'),'true');
+      await page.evaluate(()=>{window.fixture.pollTimes=[];});await page.waitForTimeout(700);
+      assert.ok((await page.evaluate(()=>window.fixture.pollTimes.length))>=8,'animation preview refresh is too slow');
       assert.deepEqual(await page.locator('.animation-table th').allTextContents(),reference.columns);
       assert.deepEqual(await page.locator('.animation-table tbody tr').evaluateAll(rows=>rows.map(row=>[row.dataset.animationState,row.cells[0].textContent])),reference.animations);
       assert.equal(await page.locator('.animation-table .led-preview span').count(),64);
       await page.locator('[data-animation-state="working"] select').selectOption('amber-pulse');assert.equal((await last('set_animation_state')).state,'working');await page.waitForTimeout(600);
       await page.locator('[data-animation-state="working"]').getByRole('button',{name:'Show',exact:true}).click();await page.waitForTimeout(600);assert.equal((await last('preview_animation')).seconds,reference.durations.AGENT_ANIMATION_DEVICE_PREVIEW_SECONDS);
       await page.locator('[data-animation-state="working"]').getByRole('button',{name:'Edit',exact:true}).click();
-      assert.equal(await page.getByRole('dialog').count(),1);await page.locator('#asset-name').fill('Working clone');await page.locator('#asset-program').fill('#00E5FF 500ms pulse\nrepeat');
+      assert.equal(await page.getByRole('dialog').count(),1);await page.locator('#asset-name').fill('Working clone');
+      await page.locator('#asset-program').evaluate(node=>{window.fixture.editorInput=node;});
+      await page.locator('#asset-program').fill('#00E5FF 500ms pulse\nrepeat');
+      await page.evaluate(()=>{window.fixture.revision++;});await page.waitForTimeout(600);
+      assert.equal(await page.evaluate(()=>document.querySelector('#asset-program')===window.fixture.editorInput),true,'status refresh replaced the LED editor');
+      assert.equal(await page.evaluate(()=>window.fixture.lastPreviewProgram),'#00E5FF 500ms pulse\nrepeat');
       await click('Show on Device');assert.equal((await last('preview_animation')).seconds,reference.durations.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS);
       await click('Save');assert.equal((await last('edit_animation_library')).edit.state,'working');assert.equal(await page.getByRole('dialog').count(),0);
       await click('Save Profile…');await page.locator('#profile-name').fill('Portable profile');await click('Save');assert.equal((await last('edit_animation_library')).edit.name,'Portable profile');
