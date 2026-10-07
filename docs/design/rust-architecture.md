@@ -605,6 +605,12 @@ sidepulse-next service uninstall --stage-dir DIR
 sidepulse-next status-bar install --stage-dir DIR --dry-run
 ```
 
+Add `--auto-device` to `setup` only when live output to mounted SidePulse
+devices is wanted. The staged service then discovers devices and updates their
+LEDs; the default stage leaves physical output off. A device-enabled stage is
+excluded from the automatic smoke check because that check must never write to
+hardware.
+
 Startup registration lives in `sidepulse-installer`, separately from UI and
 monitor policy. Each preview has a unique label derived from its path. macOS
 uses user LaunchAgents, Linux uses user systemd units, and Windows uses a

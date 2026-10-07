@@ -14,6 +14,7 @@ fn fail(error: impl std::fmt::Display) -> ExitCode {
 pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
     let mut import_config = None;
     let mut import_logs = None;
+    let mut auto_device = false;
     let mut source = None;
     let mut stage = None;
     let mut dry_run = false;
@@ -21,11 +22,12 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: sidepulse setup --stage-dir DIR [--source-dir DIR] [--import-config DIR] [--import-logs DIR] [--dry-run]"
+                    "Usage: sidepulse setup --stage-dir DIR [--source-dir DIR] [--import-config DIR] [--import-logs DIR] [--auto-device] [--dry-run]"
                 );
                 return ExitCode::SUCCESS;
             }
             "--dry-run" => dry_run = true,
+            "--auto-device" => auto_device = true,
             "--source-dir" | "--stage-dir" | "--import-config" | "--import-logs" => {
                 let Some(value) = args.next() else {
                     return fail(format!("{arg} requires a directory"));
@@ -48,6 +50,9 @@ pub fn run_setup(mut args: impl Iterator<Item = String>) -> ExitCode {
             None => env::current_exe()?.parent().unwrap().to_path_buf(),
         };
         let mut plan = StagePlan::new(&source, &stage, Platform::current()?)?;
+        if auto_device {
+            plan = plan.with_auto_device();
+        }
         if import_config.is_some() || import_logs.is_some() {
             plan = plan.with_legacy_import(sidepulse_installer::legacy::LegacyImport::new(
                 import_config.as_deref(),

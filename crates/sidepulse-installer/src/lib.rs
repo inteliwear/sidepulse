@@ -71,6 +71,8 @@ pub struct StageManifest {
     #[serde(default)]
     pub aliases: Vec<PathBuf>,
     pub service_command: Vec<String>,
+    #[serde(default)]
+    pub auto_device: bool,
     pub tray_command: Vec<String>,
     pub launch_files: Vec<PathBuf>,
     #[serde(default)]
@@ -119,7 +121,7 @@ impl StagePlan {
             })
             .collect::<io::Result<Vec<_>>>()?;
         let endpoint = endpoint_for_stage(&stage_dir, platform);
-        let service_command = service_command_for_stage(&stage_dir, &binaries[2], &endpoint);
+        let service_command = service_command_for_stage(&stage_dir, &binaries[2], &endpoint, false);
         let tray_executable = if platform == Platform::Macos {
             stage_dir.join("applications/SidePulse Tray.app/Contents/MacOS/sidepulse-next-tray")
         } else {
@@ -168,6 +170,7 @@ impl StagePlan {
                     })
                     .collect(),
                 service_command,
+                auto_device: false,
                 tray_command,
                 launch_files,
                 application_bundles,
@@ -182,6 +185,18 @@ impl StagePlan {
 
     pub fn with_legacy_import(mut self, imported: legacy::LegacyImport) -> Self {
         self.imported = Some(imported);
+        self
+    }
+
+    /// Opt into live output for mounted SidePulse devices in this staged service.
+    pub fn with_auto_device(mut self) -> Self {
+        self.manifest.auto_device = true;
+        self.manifest.service_command = service_command_for_stage(
+            &self.manifest.stage_dir,
+            &self.manifest.binaries[2],
+            &self.manifest.endpoint,
+            true,
+        );
         self
     }
     pub fn imported_files(&self) -> &[PathBuf] {
@@ -335,8 +350,12 @@ fn read_stage_at(storage: &Path, identity: &Path) -> io::Result<StageManifest> {
                 .join(format!("{name}{}", platform.executable_suffix()))
         })
         .collect::<Vec<_>>();
-    let expected_command =
-        service_command_for_stage(&stage_dir, &expected_binaries[2], &expected_endpoint);
+    let expected_command = service_command_for_stage(
+        &stage_dir,
+        &expected_binaries[2],
+        &expected_endpoint,
+        manifest.auto_device,
+    );
     if manifest.stage_dir != stage_dir
         || manifest.platform != platform
         || manifest.binaries != expected_binaries
@@ -407,6 +426,11 @@ pub fn endpoint_from_executable(executable: &Path) -> io::Result<Option<String>>
 
 pub fn smoke_stage(stage_dir: &Path) -> io::Result<()> {
     let manifest = read_stage(stage_dir)?;
+    if manifest.auto_device {
+        return Err(io::Error::other(
+            "smoke check is unavailable for a stage with physical device output enabled",
+        ));
+    }
     for alias in &manifest.aliases {
         let help = alias
             .file_stem()
@@ -580,7 +604,12 @@ fn endpoint_for_stage(stage: &Path, platform: Platform) -> String {
     }
 }
 
-fn service_command_for_stage(stage: &Path, executable: &Path, endpoint: &str) -> Vec<String> {
+fn service_command_for_stage(
+    stage: &Path,
+    executable: &Path,
+    endpoint: &str,
+    auto_device: bool,
+) -> Vec<String> {
     let mut command = vec![
         executable.to_string_lossy().into_owned(),
         endpoint.to_owned(),
@@ -605,6 +634,9 @@ fn service_command_for_stage(stage: &Path, executable: &Path, endpoint: &str) ->
                 .to_string_lossy()
                 .into_owned(),
         );
+    }
+    if auto_device {
+        command.push("--auto-device".into());
     }
     command
 }
@@ -731,6 +763,7 @@ mod tests {
             assert!(!destination.exists());
             assert!(!plan.manifest().enabled);
             let manifest = plan.stage().unwrap();
+            assert!(!manifest.auto_device);
             assert_eq!(manifest.binaries.len(), 9);
             assert_eq!(manifest.launch_files.len(), 2);
             assert_eq!(manifest.service_command.len(), 25);
@@ -792,6 +825,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn physical_device_output_requires_explicit_stage_option() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let platform = Platform::current().unwrap();
+        dummy_binaries(&source, platform);
+        let destination = directory.path().join("live-preview");
+        let plan = StagePlan::new(&source, &destination, platform)
+            .unwrap()
+            .with_auto_device();
+        assert!(plan.manifest().auto_device);
+        plan.stage().unwrap();
+        let manifest = read_stage(&destination).unwrap();
+        assert_eq!(manifest.service_command.last().unwrap(), "--auto-device");
+        assert!(smoke_stage(&destination).is_err());
     }
 
     #[test]
