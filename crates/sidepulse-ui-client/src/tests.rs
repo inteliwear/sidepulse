@@ -204,3 +204,59 @@ fn shared_client_rejects_mismatched_responses_and_preserves_service_errors() {
         server.join().unwrap();
     }
 }
+
+#[test]
+fn preview_command_is_not_delayed_by_a_settings_refresh() {
+    let root = scratch();
+    let endpoint = endpoint(root.path());
+    let listener = sidepulse_ipc::bind(&endpoint).unwrap();
+    let (refresh_started, refresh_seen) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut refresh = listener.accept().unwrap();
+        let request: ClientRequest =
+            sidepulse_ipc::read_message(&mut BufReader::new(&mut refresh)).unwrap();
+        assert!(matches!(request.kind, RequestKind::Settings));
+        refresh_started.send(()).unwrap();
+        let delayed = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            let _ = sidepulse_ipc::write_message(
+                &mut refresh,
+                &ServerMessage {
+                    version: PROTOCOL_VERSION,
+                    request_id: Some(request.request_id),
+                    payload: fixture(RequestKind::Settings),
+                },
+            );
+        });
+        let mut preview = listener.accept().unwrap();
+        let request: ClientRequest =
+            sidepulse_ipc::read_message(&mut BufReader::new(&mut preview)).unwrap();
+        assert!(matches!(request.kind, RequestKind::PreviewAnimation { .. }));
+        sidepulse_ipc::write_message(
+            &mut preview,
+            &ServerMessage {
+                version: PROTOCOL_VERSION,
+                request_id: Some(request.request_id),
+                payload: ServerPayload::Ack,
+            },
+        )
+        .unwrap();
+        delayed.join().unwrap();
+    });
+    let (commands, updates) = start_worker(endpoint);
+    refresh_seen.recv_timeout(Duration::from_secs(1)).unwrap();
+    let started = std::time::Instant::now();
+    commands
+        .send(WorkerCommand::Request(RequestKind::PreviewAnimation {
+            state: "working".into(),
+            program: None,
+            seconds: 3,
+        }))
+        .unwrap();
+    let update = updates.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert!(matches!(update, Update::Saved { result: Ok(()), .. }));
+    assert!(started.elapsed() < Duration::from_millis(500));
+    drop(commands);
+    drop(updates);
+    server.join().unwrap();
+}

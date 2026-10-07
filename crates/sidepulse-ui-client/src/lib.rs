@@ -8,6 +8,7 @@ use sidepulse_core::{
 use sidepulse_installer::startup::{Job, Operation};
 use sidepulse_ui_model::{SettingsView, TrayState};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub enum WorkerCommand {
@@ -219,230 +220,243 @@ pub fn fetch_state(endpoint: &str) -> Result<ServiceState, String> {
     })
 }
 
-/// Poll and execute commands off the renderer thread. Drop both returned channels
-/// when the host closes; the worker exits after its bounded pending operation.
+/// Refresh state and execute commands on separate threads so a slow refresh
+/// cannot delay a Settings action. Drop both channels when the host closes.
 pub fn start_worker(endpoint: String) -> (Sender<WorkerCommand>, Receiver<Update>) {
     let (commands, pending) = mpsc::channel();
     let (updates, received) = mpsc::sync_channel(2);
-    std::thread::spawn(move || {
-        let mut setup = std::env::current_exe().ok().and_then(|executable| {
+    let setup = Arc::new(Mutex::new(std::env::current_exe().ok().and_then(
+        |executable| {
             sidepulse_installer::management::context_from_executable(&executable, &endpoint)
                 .ok()
                 .flatten()
-        });
-        if let Some(status) = &setup {
-            let _ = updates.send(Update::Setup(status.clone()));
+        },
+    )));
+    let state_setup = Arc::clone(&setup);
+    let state_updates = updates.clone();
+    let state_endpoint = endpoint.clone();
+    std::thread::spawn(move || {
+        if let Ok(guard) = state_setup.lock()
+            && let Some(status) = guard.as_ref()
+        {
+            let _ = state_updates.send(Update::Setup(status.clone()));
         }
         loop {
-            let state = fetch_state(&endpoint);
-            if let Ok(state) = &state {
-                setup = Some(state.setup.clone());
+            let state = fetch_state(&state_endpoint);
+            if let Ok(state) = &state
+                && let Ok(mut guard) = state_setup.lock()
+            {
+                *guard = Some(state.setup.clone());
             }
-            if updates.send(Update::State(state.map(Box::new))).is_err() {
+            if state_updates
+                .send(Update::State(state.map(Box::new)))
+                .is_err()
+            {
                 break;
             }
-            match pending.recv_timeout(Duration::from_secs(1)) {
-                Ok(command) => {
-                    let kind = match command {
-                        WorkerCommand::Request(kind) => kind,
-                        command => {
-                            let result = (|| -> Result<String, String> {
-                                if let WorkerCommand::OpenFile { path } = command {
-                                    sidepulse_platform::open_file(std::path::Path::new(&path))
-                                        .map_err(|error| error.to_string())?;
-                                    return Ok("Opened report".into());
-                                }
-                                let status = setup.as_ref().ok_or("Setup status is unavailable. Open the staged settings application.")?;
-                                match command {
-                                    WorkerCommand::Startup {
-                                        job,
-                                        operation,
-                                        dry_run,
-                                    } => sidepulse_installer::management::manage_startup(
-                                        status, &endpoint, job, operation, dry_run,
-                                    )
-                                    .map_err(|error| error.to_string()),
-                                    #[cfg(target_os = "macos")]
-                                    WorkerCommand::SleepHelper { install } => {
-                                        let user = std::env::var("USER")
-                                            .or_else(|_| std::env::var("USERNAME"))
-                                            .map_err(|_| "Setup user is unavailable.")?;
-                                        let target =
-                                            sidepulse_installer::management::sleep_helper_target(
-                                                status, &endpoint, install, &user,
-                                            )
-                                            .map_err(|error| error.to_string())?;
-                                        sidepulse_platform::open_session(&target, "terminal", "")
-                                            .map_err(|error| error.to_string())?;
-                                        Ok("Administrator setup opened in Terminal".into())
-                                    }
-                                    #[cfg(target_os = "macos")]
-                                    WorkerCommand::SleepHelperStatus => {
-                                        let user = std::env::var("USER")
-                                            .or_else(|_| std::env::var("USERNAME"))
-                                            .map_err(|_| "Setup user is unavailable.")?;
-                                        sidepulse_installer::management::sleep_helper_status(&user)
-                                            .map(|installed| {
-                                                if installed {
-                                                    "Closed-lid setup is installed"
-                                                } else {
-                                                    "Closed-lid setup is not installed"
-                                                }
-                                                .into()
-                                            })
-                                            .map_err(|error| error.to_string())
-                                    }
-                                    _ => unreachable!(),
-                                }
-                            })();
-                            if updates.send(Update::Managed(result)).is_err() {
-                                break;
-                            }
-                            continue;
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+    std::thread::spawn(move || {
+        while let Ok(command) = pending.recv() {
+            let kind = match command {
+                WorkerCommand::Request(kind) => kind,
+                command => {
+                    let result = (|| -> Result<String, String> {
+                        if let WorkerCommand::OpenFile { path } = command {
+                            sidepulse_platform::open_file(std::path::Path::new(&path))
+                                .map_err(|error| error.to_string())?;
+                            return Ok("Opened report".into());
                         }
-                    };
-                    if matches!(kind, RequestKind::ConfigureHooks { .. }) {
-                        let result = request(&endpoint, kind).and_then(|payload| {
-                            let ServerPayload::HooksConfigured {
-                                provider,
-                                install,
-                                changed,
-                                trust_review_required,
+                        let setup = setup
+                            .lock()
+                            .map_err(|_| "Setup status is unavailable.")?
+                            .clone();
+                        let status = setup.as_ref().ok_or(
+                            "Setup status is unavailable. Open the staged settings application.",
+                        )?;
+                        match command {
+                            WorkerCommand::Startup {
+                                job,
+                                operation,
                                 dry_run,
-                                ..
-                            } = payload
-                            else {
-                                return Err("The service did not confirm the hook change.".into());
-                            };
-                            Ok(format!(
-                                "{provider}: {}{}",
-                                if dry_run {
-                                    if changed {
-                                        "Change available"
-                                    } else {
-                                        "Already configured"
-                                    }
-                                } else if install {
-                                    "Hooks installed"
-                                } else {
-                                    "Hooks removed"
-                                },
-                                if trust_review_required && !dry_run {
-                                    ". Review and trust these hooks in Codex using /hooks."
-                                } else {
-                                    ""
-                                }
-                            ))
-                        });
-                        if updates.send(Update::Managed(result)).is_err() {
-                            break;
-                        }
-                        continue;
-                    }
-                    if matches!(kind, RequestKind::ExportDiagnostics { .. }) {
-                        let result = request(&endpoint, kind).and_then(|payload| {
-                            let ServerPayload::DiagnosticsExported { path, events } = payload
-                            else {
-                                return Err("The service did not return an export.".into());
-                            };
-                            Ok((path, events))
-                        });
-                        if updates.send(Update::Exported(result)).is_err() {
-                            break;
-                        }
-                        continue;
-                    }
-                    if matches!(kind, RequestKind::SessionTargets { .. }) {
-                        let result = request(&endpoint, kind).and_then(|payload| {
-                            let ServerPayload::SessionTargets {
-                                options,
-                                selected,
-                                terminal,
-                                custom_terminal_path,
-                            } = payload
-                            else {
-                                return Err("The service did not return session actions.".into());
-                            };
-                            let option = options
-                                .iter()
-                                .find(|option| Some(option.action) == selected)
-                                .ok_or("No opener is available for this session.")?;
-                            sidepulse_platform::open_session(
-                                &option.target,
-                                &terminal,
-                                &custom_terminal_path,
+                            } => sidepulse_installer::management::manage_startup(
+                                status, &endpoint, job, operation, dry_run,
                             )
-                            .map_err(|error| error.to_string())
-                        });
-                        if updates.send(Update::Opened(result)).is_err() {
-                            break;
+                            .map_err(|error| error.to_string()),
+                            #[cfg(target_os = "macos")]
+                            WorkerCommand::SleepHelper { install } => {
+                                let user = std::env::var("USER")
+                                    .or_else(|_| std::env::var("USERNAME"))
+                                    .map_err(|_| "Setup user is unavailable.")?;
+                                let target = sidepulse_installer::management::sleep_helper_target(
+                                    status, &endpoint, install, &user,
+                                )
+                                .map_err(|error| error.to_string())?;
+                                sidepulse_platform::open_session(&target, "terminal", "")
+                                    .map_err(|error| error.to_string())?;
+                                Ok("Administrator setup opened in Terminal".into())
+                            }
+                            #[cfg(target_os = "macos")]
+                            WorkerCommand::SleepHelperStatus => {
+                                let user = std::env::var("USER")
+                                    .or_else(|_| std::env::var("USERNAME"))
+                                    .map_err(|_| "Setup user is unavailable.")?;
+                                sidepulse_installer::management::sleep_helper_status(&user)
+                                    .map(|installed| {
+                                        if installed {
+                                            "Closed-lid setup is installed"
+                                        } else {
+                                            "Closed-lid setup is not installed"
+                                        }
+                                        .into()
+                                    })
+                                    .map_err(|error| error.to_string())
+                            }
+                            _ => unreachable!(),
                         }
-                        continue;
-                    }
-                    if matches!(kind, RequestKind::ExportAnimationProfile { .. }) {
-                        let result = request(&endpoint, kind).and_then(|payload| {
-                            let ServerPayload::AnimationProfileDocument { document } = payload
-                            else {
-                                return Err("The service did not return a profile.".into());
-                            };
-                            serde_json::to_string_pretty(&document)
-                                .map_err(|error| error.to_string())
-                        });
-                        if updates.send(Update::ProfileExport(result)).is_err() {
-                            break;
-                        }
-                        continue;
-                    }
-                    let draft = match kind {
-                        RequestKind::SetPhoneDisplay { .. }
-                        | RequestKind::RegisterPhone { .. }
-                        | RequestKind::RemovePhone { .. }
-                        | RequestKind::BeginPhonePairing { .. }
-                        | RequestKind::CancelPhonePairing
-                        | RequestKind::ReloadPhoneLinks => DraftKind::Phone,
-                        RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
-                        RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
-                        RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
-                        RequestKind::SetAgentAnimation { .. } => DraftKind::Animation,
-                        RequestKind::SetSessionTerminal { .. } => DraftKind::Terminal,
-                        RequestKind::EditAnimationLibrary { .. }
-                        | RequestKind::SetAnimationState { .. } => DraftKind::Library,
-                        RequestKind::SetLidAnimationTiming { .. } => DraftKind::LidTiming,
-                        RequestKind::SetRelaySettings { ref patch }
-                            if patch.server.is_none()
-                                && patch.machine_name.is_none()
-                                && patch.outbound_code.is_some() =>
-                        {
-                            DraftKind::RelayControl
-                        }
-                        RequestKind::SetRelaySettings { ref patch }
-                            if patch.server.is_some()
-                                || patch.machine_name.is_some()
-                                || patch.outbound_code.is_some() =>
-                        {
-                            DraftKind::Relay
-                        }
-                        RequestKind::SetRelaySettings { .. } | RequestKind::ReloadRelaySettings => {
-                            DraftKind::RelayControl
-                        }
-                        _ => DraftKind::None,
-                    };
-                    let preview = matches!(kind, RequestKind::PreviewAnimation { .. });
-                    let result = request(&endpoint, kind).and_then(|payload| match payload {
-                        ServerPayload::Ack if preview => Ok(()),
-                        ServerPayload::Settings { .. }
-                        | ServerPayload::Devices { .. }
-                        | ServerPayload::RelaySettings { .. }
-                        | ServerPayload::PhoneLinks { .. }
-                        | ServerPayload::PowerControl { .. } => Ok(()),
-                        _ => Err("The service did not confirm the change.".into()),
-                    });
-                    if updates.send(Update::Saved { result, draft }).is_err() {
+                    })();
+                    if updates.send(Update::Managed(result)).is_err() {
                         break;
                     }
+                    continue;
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if matches!(kind, RequestKind::ConfigureHooks { .. }) {
+                let result = request(&endpoint, kind).and_then(|payload| {
+                    let ServerPayload::HooksConfigured {
+                        provider,
+                        install,
+                        changed,
+                        trust_review_required,
+                        dry_run,
+                        ..
+                    } = payload
+                    else {
+                        return Err("The service did not confirm the hook change.".into());
+                    };
+                    Ok(format!(
+                        "{provider}: {}{}",
+                        if dry_run {
+                            if changed {
+                                "Change available"
+                            } else {
+                                "Already configured"
+                            }
+                        } else if install {
+                            "Hooks installed"
+                        } else {
+                            "Hooks removed"
+                        },
+                        if trust_review_required && !dry_run {
+                            ". Review and trust these hooks in Codex using /hooks."
+                        } else {
+                            ""
+                        }
+                    ))
+                });
+                if updates.send(Update::Managed(result)).is_err() {
+                    break;
+                }
+                continue;
+            }
+            if matches!(kind, RequestKind::ExportDiagnostics { .. }) {
+                let result = request(&endpoint, kind).and_then(|payload| {
+                    let ServerPayload::DiagnosticsExported { path, events } = payload else {
+                        return Err("The service did not return an export.".into());
+                    };
+                    Ok((path, events))
+                });
+                if updates.send(Update::Exported(result)).is_err() {
+                    break;
+                }
+                continue;
+            }
+            if matches!(kind, RequestKind::SessionTargets { .. }) {
+                let result = request(&endpoint, kind).and_then(|payload| {
+                    let ServerPayload::SessionTargets {
+                        options,
+                        selected,
+                        terminal,
+                        custom_terminal_path,
+                    } = payload
+                    else {
+                        return Err("The service did not return session actions.".into());
+                    };
+                    let option = options
+                        .iter()
+                        .find(|option| Some(option.action) == selected)
+                        .ok_or("No opener is available for this session.")?;
+                    sidepulse_platform::open_session(
+                        &option.target,
+                        &terminal,
+                        &custom_terminal_path,
+                    )
+                    .map_err(|error| error.to_string())
+                });
+                if updates.send(Update::Opened(result)).is_err() {
+                    break;
+                }
+                continue;
+            }
+            if matches!(kind, RequestKind::ExportAnimationProfile { .. }) {
+                let result = request(&endpoint, kind).and_then(|payload| {
+                    let ServerPayload::AnimationProfileDocument { document } = payload else {
+                        return Err("The service did not return a profile.".into());
+                    };
+                    serde_json::to_string_pretty(&document).map_err(|error| error.to_string())
+                });
+                if updates.send(Update::ProfileExport(result)).is_err() {
+                    break;
+                }
+                continue;
+            }
+            let draft = match kind {
+                RequestKind::SetPhoneDisplay { .. }
+                | RequestKind::RegisterPhone { .. }
+                | RequestKind::RemovePhone { .. }
+                | RequestKind::BeginPhonePairing { .. }
+                | RequestKind::CancelPhonePairing
+                | RequestKind::ReloadPhoneLinks => DraftKind::Phone,
+                RequestKind::SetBatterySettings { .. } => DraftKind::Battery,
+                RequestKind::SetAgentListSettings { .. } => DraftKind::Monitoring,
+                RequestKind::SetSleepSettings { .. } => DraftKind::Sleep,
+                RequestKind::SetAgentAnimation { .. } => DraftKind::Animation,
+                RequestKind::SetSessionTerminal { .. } => DraftKind::Terminal,
+                RequestKind::EditAnimationLibrary { .. }
+                | RequestKind::SetAnimationState { .. } => DraftKind::Library,
+                RequestKind::SetLidAnimationTiming { .. } => DraftKind::LidTiming,
+                RequestKind::SetRelaySettings { ref patch }
+                    if patch.server.is_none()
+                        && patch.machine_name.is_none()
+                        && patch.outbound_code.is_some() =>
+                {
+                    DraftKind::RelayControl
+                }
+                RequestKind::SetRelaySettings { ref patch }
+                    if patch.server.is_some()
+                        || patch.machine_name.is_some()
+                        || patch.outbound_code.is_some() =>
+                {
+                    DraftKind::Relay
+                }
+                RequestKind::SetRelaySettings { .. } | RequestKind::ReloadRelaySettings => {
+                    DraftKind::RelayControl
+                }
+                _ => DraftKind::None,
+            };
+            let preview = matches!(kind, RequestKind::PreviewAnimation { .. });
+            let result = request(&endpoint, kind).and_then(|payload| match payload {
+                ServerPayload::Ack if preview => Ok(()),
+                ServerPayload::Settings { .. }
+                | ServerPayload::Devices { .. }
+                | ServerPayload::RelaySettings { .. }
+                | ServerPayload::PhoneLinks { .. }
+                | ServerPayload::PowerControl { .. } => Ok(()),
+                _ => Err("The service did not confirm the change.".into()),
+            });
+            if updates.send(Update::Saved { result, draft }).is_err() {
+                break;
             }
         }
     });

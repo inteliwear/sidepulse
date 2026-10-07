@@ -188,29 +188,27 @@ pub fn discover_devices(roots: &[PathBuf]) -> Vec<DeviceCandidate> {
                 .map(|name| name.to_string_lossy().to_lowercase())
         });
         for volume in volumes {
-            if !volume.is_dir() || !seen.insert(volume.clone()) {
+            let name = volume.file_name().unwrap_or_default().to_string_lossy();
+            // Probing files on unrelated removable volumes can trigger a macOS
+            // privacy prompt. Explicit roots above still support other names.
+            if !is_device_name(&name) {
                 continue;
             }
-            let name = volume.file_name().unwrap_or_default().to_string_lossy();
-            if name == ".timemachine" || name == "Macintosh HD" {
+            if !volume.is_dir() || !seen.insert(volume.clone()) {
                 continue;
             }
             let target = target_from_device_path(&volume);
             let reason = if target.exists() {
-                Some(format!("contains {DEFAULT_FILE_NAME}"))
-            } else if is_device_name(&name) {
-                Some("name matches device".to_owned())
+                format!("contains {DEFAULT_FILE_NAME}")
             } else {
-                None
+                "name matches device".to_owned()
             };
-            if let Some(reason) = reason {
-                candidates.push(DeviceCandidate {
-                    root: volume,
-                    target,
-                    reason,
-                    label: None,
-                });
-            }
+            candidates.push(DeviceCandidate {
+                root: volume,
+                target,
+                reason,
+                label: None,
+            });
         }
     }
     candidates
@@ -249,7 +247,7 @@ pub fn default_mount_roots() -> Vec<PathBuf> {
 
 pub fn is_device_name(name: &str) -> bool {
     let name = normalized_name(name);
-    ["sidepulsepro", "sidepulsedot", "pulsedot"]
+    ["sidepulse", "pulsedot"]
         .iter()
         .any(|hint| name.contains(hint))
 }
@@ -455,6 +453,7 @@ mod tests {
         ));
         fs::create_dir_all(root.join("SidePulseDot")).unwrap();
         fs::create_dir_all(root.join("Unrelated Disk")).unwrap();
+        fs::write(root.join("Unrelated Disk/LEDS.LED"), "off\n").unwrap();
         let found = discover_devices(std::slice::from_ref(&root));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].target, root.join("SidePulseDot/LEDS.LED"));
@@ -478,6 +477,14 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].root, drive);
         fs::remove_dir_all(parent).unwrap();
+    }
+    #[test]
+    fn discovers_plain_sidepulse_volume_without_an_existing_program() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("SidePulse")).unwrap();
+        let found = discover_devices(&[root.path().to_path_buf()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, root.path().join("SidePulse/LEDS.LED"));
     }
     #[test]
     fn keepalive_preserves_content_and_respects_the_saved_interval() {

@@ -26,6 +26,22 @@ Extract the full ZIP, then stage it at a chosen permanent path:
 ./bin/sidepulse service install --stage-dir /chosen/preview --dry-run
 ```
 
+For repeated local macOS builds that write to SidePulse removable volumes, sign
+the service with the same development certificate before staging or updating it:
+
+```sh
+cargo build --release -p sidepulse-daemon --bin sidepulse-next-service
+packaging/sign_macos_preview_service.sh target/release/sidepulse-next-service \
+  'Apple Development: Your Name (TEAMID)'
+```
+
+Stop the running preview before replacing its service binary. Keep the signing
+identity and `io.sidepulse.next.service` identifier stable for subsequent builds.
+The first signed run may still need one macOS removable-volume permission grant;
+subsequent builds with the same identity should retain it. Ad hoc signed rebuilds
+change the service's privacy identity and can cause repeated prompts. The local
+development certificate is for testing; use Developer ID signing for distribution.
+
 On Windows use `.\bin\sidepulse.exe` and absolute Windows paths. Registration is
 an explicit operation. Review the emitted plan, then run the same command without
 `--dry-run`. Status bar startup uses `status-bar install`. The native Settings Setup page also

@@ -937,27 +937,47 @@ impl Service {
             store.map_or(1300, |store| store.lid_animation_duration_ms("lid_closed")),
         );
         let mut preview = self.animation_preview.lock().map_err(poisoned)?;
-        if preview.as_ref().is_some_and(|active| now >= active.until) {
-            *preview = None;
-        }
+        let expired_preview = if preview.as_ref().is_some_and(|active| now >= active.until) {
+            preview.take()
+        } else {
+            None
+        };
         let battery_preview = self.battery_preview.lock().map_err(poisoned)?;
         let mut changed = false;
         for output in device.as_mut().into_iter().chain(extras.iter_mut()) {
             let configured =
                 store.map_or("agent", |store| store.display_for_device(output.target()));
-            if let Some(active) = preview.as_ref()
-                && configured == "agent"
-                && active.target == output.target()
+            if let Some((_, program)) =
+                preview
+                    .as_ref()
+                    .filter(|_| configured == "agent")
+                    .and_then(|active| {
+                        active
+                            .programs
+                            .iter()
+                            .find(|(target, _)| target == output.target())
+                    })
             {
-                changed |= output.sync_program(&active.program)?;
+                changed |= output.sync_program(program)?;
                 continue;
             }
             let display = battery_preview.display(configured, now);
             if display == "custom" {
                 continue;
             }
+            if matches!(action, sidepulse_core::LidOutputAction::Hold) {
+                if let Some((_, program)) = expired_preview.as_ref().and_then(|expired| {
+                    expired
+                        .previous_programs
+                        .iter()
+                        .find(|(target, _)| target == output.target())
+                }) {
+                    changed |= output.sync_program(program)?;
+                }
+                continue;
+            }
             match action {
-                sidepulse_core::LidOutputAction::Hold => continue,
+                sidepulse_core::LidOutputAction::Hold => unreachable!(),
                 sidepulse_core::LidOutputAction::Transition { state } => {
                     let (style, custom) = if let Some(store) = store {
                         store.animation_for_state(state)?
