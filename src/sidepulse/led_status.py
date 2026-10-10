@@ -15,6 +15,7 @@ from .device_writer import (
     write_led_program,
 )
 from .models import AgentMode
+from .status_reader import read_status_bytes
 
 
 class LedDisplayState(str, Enum):
@@ -356,7 +357,7 @@ class AgentLedController:
         if self.last_target is None or self.last_program is None:
             return False
         try:
-            return self.last_target.read_text(encoding="utf-8") == self.last_program
+            return read_status_bytes(self.last_target, max_bytes=512).decode("utf-8") == self.last_program
         except (OSError, UnicodeError):
             return False
 

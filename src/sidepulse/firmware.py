@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .device_writer import discover_devices, sync_directory
+from .status_reader import read_status_bytes
 
 
 RELEASES_URL = "https://api.github.com/repos/inteliwear/sidepulse/contents/firmware?ref=main"
@@ -62,8 +63,7 @@ def version_key(value: str) -> tuple[int, ...]:
 def read_device(root: Path) -> FirmwareDevice:
     root = root.expanduser().resolve()
     try:
-        with (root / "STATUS.TXT").open("rb") as stream:
-            text = stream.read(65536).decode("utf-8", errors="replace")
+        text = read_status_bytes(root / "STATUS.TXT", max_bytes=65536).decode("utf-8", errors="replace")
     except OSError as exc:
         raise FirmwareError(f"Cannot read {root / 'STATUS.TXT'}: {exc}") from exc
     fields = {}

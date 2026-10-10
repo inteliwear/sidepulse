@@ -51,6 +51,7 @@ class SidePulseService:
         self.receiver_signature: tuple[str, str] | None = None
         self.seen_event_ids: set[str] = set()
         self.last_program_by_target: dict[str, str] = {}
+        self.last_transcript_poll = 0.0
 
     def run(self) -> int:
         self.install_signal_handlers()
@@ -142,6 +143,11 @@ class SidePulseService:
         if status_bar_monitor_available():
             return
         settings = load_settings()
+        now = time.monotonic()
+        if now - self.last_transcript_poll >= 2.0:
+            self.monitor.recovery_sources = default_sources(settings)
+            self.monitor.poll_transcript_recovery()
+            self.last_transcript_poll = now
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
         battery = None

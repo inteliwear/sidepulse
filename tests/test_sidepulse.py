@@ -4746,6 +4746,17 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(repaired.changed)
             self.assertEqual(target.read_text(), first.program)
 
+    def test_agent_led_controller_checks_program_with_uncached_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+            first = controller.sync_mode(AgentMode.COMPLETED)
+            with patch("sidepulse.led_status.read_status_bytes", return_value=first.program.encode()) as read:
+                second = controller.sync_mode(AgentMode.COMPLETED)
+            self.assertFalse(second.changed)
+            read.assert_called_once_with(device / "LEDS.LED", max_bytes=512)
+
     def test_agent_led_controller_tracks_mode_and_animation_choice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             device = Path(tmp) / "SidePulsePro"
@@ -7318,6 +7329,35 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(snapshot.statuses[0].session_id, session_id)
             self.assertIn("sidepulse", snapshot.statuses[0].display_name)
             self.assertIn("it didnt catch", snapshot.statuses[0].display_name)
+
+    def test_live_transcript_fallback_tracks_current_codex_tool_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_id = "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
+            path = root / f"rollout-2026-10-07T12-00-00-{session_id}.jsonl"
+            now = datetime.now(timezone.utc).isoformat()
+            later = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+            latest = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+            rows = [
+                {"timestamp": now, "type": "turn_context", "payload": {"cwd": "/tmp/project", "turn_id": "turn-1"}},
+                {"timestamp": now, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "work on this"}]}},
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+            monitor = LiveAgentMonitor(recovery_sources=(SourceSpec("codex-transcripts", root),))
+
+            with path.open("a") as handle:
+                handle.write(json.dumps({"timestamp": later, "type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "commentary", "content": [{"type": "output_text", "text": "Working on it"}]}}) + "\n")
+                handle.write(json.dumps({"timestamp": later, "type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec", "call_id": "call-1", "input": "{}"}}) + "\n")
+
+            self.assertTrue(monitor.poll_transcript_recovery())
+            self.assertEqual(monitor.snapshot().aggregate.mode, AgentMode.TOOL_RUNNING)
+            self.assertEqual(monitor.snapshot().statuses[0].tool_name, "exec")
+
+            with path.open("a") as handle:
+                handle.write(json.dumps({"timestamp": latest, "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "call-1", "output": "done"}}) + "\n")
+
+            self.assertTrue(monitor.poll_transcript_recovery())
+            self.assertEqual(monitor.snapshot().aggregate.mode, AgentMode.WORKING)
 
     def test_transcript_records_are_cached_until_file_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

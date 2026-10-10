@@ -30,6 +30,7 @@ CODEX_TRANSCRIPT_MAX_LINES = 500
 CLAUDE_TRANSCRIPT_MAX_FILES = 24
 CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
+RECENT_LOG_MAX_BYTES = 2 * 1024 * 1024
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
 COMPLETED_VISIBLE_SECONDS = 20 * 60.0
@@ -400,6 +401,7 @@ class LiveAgentMonitor:
         self.metadata_by_session: dict[str, StatusMetadata] = {}
         self.metadata_by_status: dict[str, StatusMetadata] = {}
         self.pending_permissions_by_key: dict[str, set[str]] = {}
+        self._transcript_recovery_monitor: AgentMonitor | None = None
         self.load_latest_state()
         self.reconcile_recovery_sources()
 
@@ -483,6 +485,36 @@ class LiveAgentMonitor:
 
         if changed:
             self.write_latest_state()
+
+    def poll_transcript_recovery(self) -> bool:
+        """Pick up transcript events from sessions whose hooks are not loaded yet."""
+        transcript_sources = tuple(
+            source for source in self.recovery_sources
+            if source.provider in (CODEX_TRANSCRIPT_PROVIDER, CLAUDE_TRANSCRIPT_PROVIDER)
+        )
+        if not transcript_sources:
+            return False
+        if self._transcript_recovery_monitor is None:
+            self._transcript_recovery_monitor = AgentMonitor(
+                sources=transcript_sources,
+                stale_after_seconds=self.stale_after_seconds,
+                tool_running_timeout_seconds=self.tool_running_timeout_seconds,
+                completed_visible_seconds=self.completed_visible_seconds,
+                idle_visible_seconds=self.idle_visible_seconds,
+                post_tool_working_visible_seconds=self.post_tool_working_visible_seconds,
+            )
+        recovered_statuses = self._transcript_recovery_monitor._latest_statuses()
+        changed = False
+        with self.lock:
+            for agent_id, recovered in recovered_statuses.items():
+                previous = self.statuses_by_key.get(agent_id)
+                if previous is not None and recovered.updated_at <= previous.updated_at:
+                    continue
+                self.statuses_by_key[agent_id] = recovered
+                changed = True
+            if changed:
+                self.write_latest_state()
+        return changed
 
     def write_latest_state(self) -> None:
         if self.latest_state_path is None:
@@ -650,7 +682,7 @@ def codex_transcript_event(
                 cwd=cwd,
                 message=prompt,
             )
-        if role == "assistant":
+        if role == "assistant" and payload.get("phase") in (None, "final_answer"):
             message = message_text_from_content(payload.get("content"))
             return HookEvent(
                 provider="codex",
@@ -671,7 +703,7 @@ def codex_transcript_event(
                 message=message,
             )
 
-    if payload_type == "function_call":
+    if payload_type in ("function_call", "custom_tool_call"):
         tool_name = _string_or_none(payload.get("name"))
         return HookEvent(
             provider="codex",
@@ -683,7 +715,7 @@ def codex_transcript_event(
                 "turn_id": turn_id,
                 "cwd": cwd,
                 "tool_name": tool_name,
-                "tool_input": payload.get("arguments"),
+                "tool_input": payload.get("arguments", payload.get("input")),
                 "tool_use_id": payload.get("call_id"),
                 "transcript_path": str(path),
                 "source": CODEX_TRANSCRIPT_PROVIDER,
@@ -694,7 +726,7 @@ def codex_transcript_event(
             tool_name=tool_name,
         )
 
-    if payload_type == "function_call_output":
+    if payload_type in ("function_call_output", "custom_tool_call_output"):
         return HookEvent(
             provider="codex",
             logged_at=timestamp,
@@ -1452,20 +1484,24 @@ def read_recent_lines(path: Path, max_lines: int) -> list[str]:
     chunk_size = 8192
     chunks: list[bytes] = []
     newline_count = 0
+    bytes_read = 0
 
     with path.open("rb") as handle:
         handle.seek(0, 2)
         position = handle.tell()
-        while position > 0 and newline_count <= max_lines:
-            read_size = min(chunk_size, position)
+        while position > 0 and newline_count <= max_lines and bytes_read < RECENT_LOG_MAX_BYTES:
+            read_size = min(chunk_size, position, RECENT_LOG_MAX_BYTES - bytes_read)
             position -= read_size
             handle.seek(position)
             chunk = handle.read(read_size)
             chunks.append(chunk)
             newline_count += chunk.count(b"\n")
+            bytes_read += read_size
 
     data = b"".join(reversed(chunks))
     lines = data.decode("utf-8", errors="replace").splitlines()
+    if position > 0:
+        lines = lines[1:]
     return lines[-max_lines:]
 
 

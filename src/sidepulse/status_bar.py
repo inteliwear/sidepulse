@@ -571,6 +571,8 @@ class StatusBarController(NSObject):
         self.settings = load_settings()
         self.open_settings_on_launch = False
         self.monitor = self.build_monitor()
+        self.transcript_poll_stop = threading.Event()
+        self.transcript_poll_thread = None
         self.event_server = None
         self.status_item = None
         self.status_icon_timer = None
@@ -679,6 +681,12 @@ class StatusBarController(NSObject):
             self,
             "refresh:",
         )
+        self.transcript_poll_thread = threading.Thread(
+            target=self.poll_transcripts,
+            name="sidepulse-transcript-monitor",
+            daemon=True,
+        )
+        self.transcript_poll_thread.start()
         if not self.power_source_notifier.start():
             log_status_bar(
                 "power notification unavailable: "
@@ -1142,6 +1150,7 @@ class StatusBarController(NSObject):
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
+        self.transcript_poll_stop.set()
         self.stop_status_icon_animation()
         self.power_source_notifier.stop()
         if self.battery_timer is not None:
@@ -1237,6 +1246,14 @@ class StatusBarController(NSObject):
 
     def reload_monitor(self) -> None:
         self.monitor = self.build_monitor()
+
+    def poll_transcripts(self) -> None:
+        while not self.transcript_poll_stop.wait(2.0):
+            try:
+                if self.monitor.poll_transcript_recovery():
+                    self.schedule_event_refresh()
+            except Exception as exc:
+                log_status_bar(f"transcript poll error: {exc}")
 
     def start_event_server(self) -> None:
         self.stop_event_server()
@@ -1766,7 +1783,10 @@ class StatusBarController(NSObject):
         action = "installed" if install else "removed"
         if not result.changed:
             action = "already installed" if install else "already removed"
-        self.set_settings_message(f"{provider.title()} hooks {action}.")
+        message = f"{provider.title()} hooks {action}."
+        if provider == "codex" and install and result.changed:
+            message += " Restart Codex to activate them in new sessions."
+        self.set_settings_message(message)
         self.reload_monitor()
         self.refresh_settings_window()
         self.refresh_(None)

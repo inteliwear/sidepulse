@@ -106,8 +106,7 @@ require a writable device drive.
 
 After the transfer, leave the device connected for at least 10 seconds, then
 reconnect it and run `sidepulse firmware version` to confirm the installed
-version. Reconnecting avoids a cached status file. Use `sidepulse firmware
-version --json` for machine-readable output.
+version. Use `sidepulse firmware version --json` for machine-readable output.
 
 ### Updating
 
