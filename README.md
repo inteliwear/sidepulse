@@ -362,6 +362,44 @@ sidepulse battery configure --show-on-power-change yes --power-change-preview-se
 
 ## macOS companion app
 
+### Voice rainbow on SidePulse Pro
+
+Enable **Voice Rainbow (Pro)** in the SidePulse menu. When Wispr Flow or
+OpenWhispr starts using its microphone, Pro's eight LEDs become a living rainbow
+ribbon. Syllable attacks send light ripples outward from the center. Vocal
+timbre shapes their speed and width; speech energy controls their glow. During
+pauses the rainbow breathes softly. This is motion driven by speech rhythm,
+with all eight colors present, rather than a bar that fills with volume.
+As soon as dictation releases the microphone,
+Pro resumes its current battery or agent display, including changes that
+arrived while you were talking. Other apps using a microphone do not activate it.
+
+Requires macOS 14.2 or later and the SidePulse menu-bar app running. Allow
+microphone access when requested for volume metering. Audio is processed only
+in memory and is never saved or sent by this feature. If permission is denied,
+the faint listening rainbow still indicates microphone activity. Manual display
+mode, Dot, virtual LEDs, and linked phones are not overridden. Turning the
+feature off, quitting the app, or losing helper telemetry restores automatic
+display. Hardware unplugged during dictation resumes normal control on reconnection.
+
+The feature is off initially. It observes Core Audio input activity instead of
+guessing from hotkeys or the foreground app. If a dictation app keeps its
+microphone open while idle, the listening rainbow stays on until it releases
+that input. This also applies to microphone recordings in those apps' meeting modes.
+
+From the CLI, inspect activity without opening or recording a microphone:
+
+```sh
+sidepulse voice status
+sidepulse voice enable
+sidepulse voice disable
+```
+
+CLI preference changes apply when the menu-bar app restarts; its menu toggle
+applies immediately. The packaged macOS app includes its native voice helper.
+Development and Python installs build it once with Xcode Command Line Tools
+and cache it under `~/.cache/sidepulse/voice/`.
+
 `sidepulse` includes a companion menu-bar app for macOS that controls
 SidePulse Pro and SidePulse Dot.
 

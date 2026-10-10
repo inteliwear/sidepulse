@@ -31,6 +31,7 @@ if [ -n "$SIDEPULSE_VERSION" ]; then
 fi
 "$VENV_DIR/bin/python" -m pip install 'pyinstaller>=6.10' "$ROOT_DIR"
 VERSION="$("$VENV_DIR/bin/python" -c 'from importlib.metadata import version; print(version("sidepulse"))')"
+"$VENV_DIR/bin/python" -c 'from pathlib import Path; from sidepulse.voice import build_voice_helper; import sys; build_voice_helper(Path(sys.argv[1]))' "$BUILD_DIR/voice/SidePulseVoice.app"
 OUTPUT_PKG="$DIST_DIR/SidePulse-${VERSION}-${ARCH}.pkg"
 
 "$VENV_DIR/bin/pyinstaller" \
@@ -49,6 +50,9 @@ OUTPUT_PKG="$DIST_DIR/SidePulse-${VERSION}-${ARCH}.pkg"
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_PATH/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$APP_PATH/Contents/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_PATH/Contents/Info.plist"
+mkdir -p "$APP_PATH/Contents/Helpers"
+cp -R "$BUILD_DIR/voice/SidePulseVoice.app" "$APP_PATH/Contents/Helpers/"
+/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Animate SidePulse Pro with your voice while dictating. Audio is never saved or sent." "$APP_PATH/Contents/Info.plist"
 
 if [ -n "$APP_SIGN_IDENTITY" ]; then
     codesign --force --deep --options runtime --timestamp \

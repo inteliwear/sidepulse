@@ -120,6 +120,8 @@ from .install import (
     uninstall_grok_hooks,
     uninstall_junie_hooks,
 )
+from .voice import VOICE_POLL_SECONDS, VoiceLedOverlay, VoiceMonitor, VoiceSnapshot
+from .led_status import led_count_for_target
 from .led_status import (
     AgentLedController,
     apply_brightness,
@@ -621,6 +623,11 @@ class StatusBarController(NSObject):
         self.device_errors = {}
         self.leds_enabled = True
         self.led_sync_in_flight = False
+        self.led_sync_lock = threading.RLock()
+        self.voice_monitor = VoiceMonitor()
+        self.voice_overlay = VoiceLedOverlay()
+        self.voice_timer = None
+        self.last_voice_error = ""
         self.last_led_error = None
         self.last_led_display_kind = LED_DISPLAY_AGENT
         self.last_connected_device_signature = None
@@ -708,6 +715,7 @@ class StatusBarController(NSObject):
             "pollDevices:",
         )
         self.show_setup_window_if_needed()
+        self.start_voice_visualizer()
         if SIDEPULSE_NOTCH_FEATURE_ENABLED and self.settings.virtual_status_device_enabled:
             self.virtual_status_device.show()
         else:
@@ -1150,6 +1158,7 @@ class StatusBarController(NSObject):
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
+        self.stop_voice_visualizer()
         self.transcript_poll_stop.set()
         self.stop_status_icon_animation()
         self.power_source_notifier.stop()
@@ -1160,6 +1169,44 @@ class StatusBarController(NSObject):
         self.stop_event_server()
         self.closed_lid_awake.release()
         self.keep_awake.release()
+
+    def start_voice_visualizer(self) -> None:
+        if not self.settings.voice_visualizer_enabled or self.voice_timer is not None:
+            return
+        self.voice_monitor.start()
+        self.voice_timer = schedule_status_bar_timer(VOICE_POLL_SECONDS, self, "pollVoice:")
+
+    def stop_voice_visualizer(self) -> None:
+        if self.voice_timer is not None:
+            self.voice_timer.invalidate()
+            self.voice_timer = None
+        self.voice_monitor.stop()
+        # Finish restoration before quitting, after any in-flight voice frame.
+        if self.voice_overlay.programs and self.last_snapshot is not None:
+            with self.led_sync_lock:
+                self.sync_leds_now(self.last_snapshot.aggregate.mode, self.last_battery_snapshot,
+                                   self.active_led_display_kind(self.last_battery_snapshot))
+
+    @objc.IBAction
+    def toggleVoiceVisualizer_(self, _sender):
+        self.settings = load_settings().with_voice_visualizer(not self.settings.voice_visualizer_enabled)
+        save_settings(self.settings)
+        if self.settings.voice_visualizer_enabled:
+            self.start_voice_visualizer()
+        else:
+            self.stop_voice_visualizer()
+        self.refresh_(None)
+
+    @objc.IBAction
+    def pollVoice_(self, _sender):
+        snapshot = self.voice_monitor.snapshot()
+        if snapshot.error != self.last_voice_error:
+            self.last_voice_error = snapshot.error
+            if snapshot.error:
+                log_status_bar(f"voice: {snapshot.error}")
+        if (snapshot.active or self.voice_overlay.programs) and self.last_snapshot is not None:
+            self.sync_leds(self.last_snapshot.aggregate.mode, self.last_battery_snapshot,
+                           self.active_led_display_kind(self.last_battery_snapshot))
 
     def set_status(self, state: StatusBarState) -> None:
         previous = self.current_state
@@ -3095,7 +3142,8 @@ class StatusBarController(NSObject):
         display_kind: str,
     ) -> None:
         try:
-            self.sync_leds_now(mode, battery_snapshot, display_kind)
+            with self.led_sync_lock:
+                self.sync_leds_now(mode, battery_snapshot, display_kind)
         finally:
             self.led_sync_in_flight = False
 
@@ -3117,9 +3165,11 @@ class StatusBarController(NSObject):
                 if device.connected and device.device_id != VIRTUAL_DEVICE_ID
             ]
         if not devices:
+            self.voice_overlay.forget_disconnected(set())
             self.last_led_error = None
             return
 
+        self.voice_overlay.forget_disconnected({device.target for device in devices if device.target is not None})
         active_errors: dict[str, str] = {}
         for device in devices:
             device_display_kind = self.active_led_display_kind_for_device(
@@ -3129,6 +3179,20 @@ class StatusBarController(NSObject):
             if self.last_led_display_kind_by_device.get(device.device_id) != device_display_kind:
                 self.reset_led_controllers_for_device(device.device_id)
                 self.last_led_display_kind_by_device[device.device_id] = device_display_kind
+
+            # A voice display never takes over manual output, Dot, virtual LEDs, or phones.
+            if device.remote_link is None and device.target is not None:
+                voice = self.voice_monitor.snapshot() if self.settings.voice_visualizer_enabled else VoiceSnapshot()
+                if device_display_kind != LED_DISPLAY_CUSTOM and led_count_for_target(device.target) == 8:
+                    try:
+                        if self.voice_overlay.sync(device.target, voice, device.brightness):
+                            self.device_errors.pop(device.device_id, None)
+                            continue
+                    except Exception as exc:
+                        active_errors[device.device_id] = str(exc)
+                        continue
+                if self.voice_overlay.release(device.target):
+                    self.reset_led_controllers_for_device(device.device_id)
 
             if device_display_kind == LED_DISPLAY_CUSTOM:
                 self.device_errors.pop(device.device_id, None)
@@ -3675,6 +3739,17 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         virtual_toggle.setTarget_(target)
         menu.addItem_(virtual_toggle)
 
+    menu.addItem_(NSMenuItem.separatorItem())
+    voice = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Voice Rainbow (Pro)", "toggleVoiceVisualizer:", "",
+    )
+    voice.setTarget_(target)
+    voice.setState_(1 if target.settings.voice_visualizer_enabled else 0)
+    menu.addItem_(voice)
+    if target.settings.voice_visualizer_enabled:
+        voice_snapshot = target.voice_monitor.snapshot()
+        label = voice_snapshot.error or (f"Listening: {voice_snapshot.app}" if voice_snapshot.active else "Waiting for dictation")
+        menu.addItem_(disabled_menu_item(label))
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Closed-Lid Sleep Prevention"))
     for policy in SLEEP_PREVENTION_CHOICES:

@@ -174,6 +174,7 @@ class SidePulseServiceTests(unittest.TestCase):
     def test_manual_linked_phone_is_not_updated(self) -> None:
         service = SidePulseService()
         service.monitor = SimpleNamespace(
+            poll_transcript_recovery=lambda: None,
             snapshot=lambda include_stale=False: SimpleNamespace(
                 aggregate=SimpleNamespace(mode=AgentMode.WORKING)
             )
@@ -201,6 +202,7 @@ class SidePulseServiceTests(unittest.TestCase):
             target = root / "LEDS.LED"
             service = SidePulseService()
             service.monitor = SimpleNamespace(
+                poll_transcript_recovery=lambda: None,
                 snapshot=lambda include_stale=False: SimpleNamespace(
                     aggregate=SimpleNamespace(mode=AgentMode.WORKING)
                 )

@@ -203,6 +203,10 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     unlink.add_argument("link_id", nargs="?", help="Exact linked phone ID to remove.")
     unlink.set_defaults(func=cmd_sidepulse_unlink)
 
+    voice = subparsers.add_parser("voice", help="Configure the Pro voice rainbow or inspect dictation activity.")
+    voice.add_argument("voice_command", choices=("status", "enable", "disable"), nargs="?", default="status")
+    voice.set_defaults(func=cmd_sidepulse_voice)
+
     service = subparsers.add_parser(
         "service",
         help="Manage the headless SidePulse background service.",
@@ -388,6 +392,29 @@ def add_sidepulse_battery_parser(subparsers: argparse._SubParsersAction) -> None
         help="Seconds to show battery LEDs after plug/unplug.",
     )
     configure.set_defaults(func=cmd_sidepulse_battery_configure)
+
+
+def cmd_sidepulse_voice(args: argparse.Namespace) -> int:
+    from .voice import build_voice_helper, probe_voice
+
+    try:
+        if args.voice_command == "status":
+            snapshot = probe_voice()
+            print(f"Voice rainbow: {'enabled' if load_settings().voice_visualizer_enabled else 'disabled'}")
+            print(f"Listening: {snapshot.app}" if snapshot.active else "Waiting for dictation")
+            if snapshot.error:
+                print(snapshot.error, file=sys.stderr)
+                return 1
+        else:
+            enabled = args.voice_command == "enable"
+            if enabled:
+                build_voice_helper()
+            save_settings(load_settings().with_voice_visualizer(enabled))
+            print(f"Voice rainbow {'enabled' if enabled else 'disabled'}. Restart the SidePulse menu-bar app to apply.")
+    except Exception as exc:
+        print(f"sidepulse voice: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_sidepulse_write(args: argparse.Namespace) -> int:
