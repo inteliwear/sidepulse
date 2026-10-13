@@ -538,6 +538,11 @@ macOS hibernate or lock-screen mount refusals. By default setup installs it
 system-wide when already running with system permissions, otherwise as a
 per-user LaunchAgent:
 
+The guard checks whether macOS restarted Disk Arbitration. If it did, the
+guard exits and launchd starts it again with a fresh disk session. KeepAlive
+must remain enabled for this recovery; an interactive guard run needs a manual
+restart after a Disk Arbitration restart.
+
 ```sh
 sidepulse setup --sd-eject-guard-scope auto
 sidepulse setup --sd-eject-guard-scope user
