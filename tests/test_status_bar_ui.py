@@ -1116,6 +1116,16 @@ class IconTests(StatusBarTestCase):
                     sb.provider_icon_for_provider(provider)
                 self.assertIn(bundle, looked_up)
 
+    def test_opencode_uses_generic_app_resolution(self):
+        """OpenCode may be registered outside the system Applications directory."""
+        expected = NSImage.alloc().initWithSize_((18, 18))
+        sb._provider_icon_cache.pop("opencode", None)
+        self.addCleanup(sb._provider_icon_cache.pop, "opencode", None)
+        with patch.object(sb, "provider_app_icon", return_value=expected) as resolve:
+            image = sb.provider_icon_for_provider("opencode")
+        resolve.assert_called_once_with("opencode")
+        self.assertIs(image, expected)
+
     def test_unmapped_provider_tries_its_own_app_before_the_glyph(self):
         """The terminal glyph always returns an image, so it hides a missing lookup.
 

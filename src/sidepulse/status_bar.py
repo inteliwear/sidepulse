@@ -6075,11 +6075,6 @@ def provider_icon_for_provider(provider: str):
     elif provider == "grok":
         image = app_icon("/Applications/Grok.app")
         image = image or grok_badge_icon()
-    elif provider == "opencode":
-        image = app_icon("/Applications/OpenCode.app")
-        image = image or image_for_symbol(
-            "chevron.left.forwardslash.chevron.right", "opencode"
-        )
     else:
         # Any other provider resolves its own app by name, so a new agent needs no branch
         # here. Only providers with an alias or a custom glyph need one.
