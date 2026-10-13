@@ -6,6 +6,8 @@
 // mechanism, so a registered client can dissent it right back. This tool does
 // that, then retries the mount every few seconds; the retries are dissented
 // while locked and succeed after unlock.
+// A Disk Arbitration daemon restart can leave this session registered only
+// with the old daemon. Exit when its PID changes so launchd starts a fresh one.
 //
 // Build: clang -o "SidePulse Pro Eject Prevention" sd_eject_guard.c \
 //          -framework DiskArbitration -framework CoreFoundation
@@ -15,15 +17,44 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #define MOUNT_RETRY_SECONDS 5.0
+#define DA_PID_CHECK_SECONDS 0.5
 #define LOG_TRUNCATE_BYTES (10 * 1024 * 1024)
+#ifndef SD_EJECT_GUARD_DA_PIDFILE
+#define SD_EJECT_GUARD_DA_PIDFILE "/var/run/diskarbitrationd.pid"
+#endif
 
 static DASessionRef g_session;
 static bool g_no_mount = false;
+static long g_da_pid = 0;
+
+static long disk_arbitration_pid(void) {
+    FILE *file = fopen(SD_EJECT_GUARD_DA_PIDFILE, "r");
+    if (!file) return 0;
+    long pid = 0;
+    if (fscanf(file, "%ld", &pid) != 1 || pid <= 0) pid = 0;
+    fclose(file);
+    return pid;
+}
+
+static void check_disk_arbitration(CFRunLoopTimerRef timer, void *ctx) {
+    (void)timer;
+    (void)ctx;
+    long pid = disk_arbitration_pid();
+    if (g_da_pid > 0 && pid > 0 && pid != g_da_pid) {
+        fprintf(stderr, "diskarbitrationd changed from %ld to %ld; restarting guard\n",
+                g_da_pid, pid);
+        fflush(stderr);
+        // launchd KeepAlive starts a new process with fresh DA callbacks.
+        exit(0);
+    }
+    if (g_da_pid == 0) g_da_pid = pid;
+}
 
 static void truncate_stdout_if_large(void) {
     fflush(stdout);
@@ -120,6 +151,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+    g_da_pid = disk_arbitration_pid();
     g_session = DASessionCreate(kCFAllocatorDefault);
     if (!g_session) {
         fprintf(stderr, "DASessionCreate failed\n");
@@ -127,6 +159,14 @@ int main(int argc, char **argv) {
     }
     DARegisterDiskEjectApprovalCallback(g_session, NULL, eject_approval, NULL);
     DASessionScheduleWithRunLoop(g_session, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    check_disk_arbitration(NULL, NULL);
+    CFRunLoopTimerRef daemon_timer = CFRunLoopTimerCreate(
+        kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + DA_PID_CHECK_SECONDS,
+        DA_PID_CHECK_SECONDS, 0, 0, check_disk_arbitration, NULL);
+    CFRunLoopAddTimer(CFRunLoopGetCurrent(), daemon_timer, kCFRunLoopDefaultMode);
+    CFRelease(daemon_timer);
+    printf("SidePulse Pro Eject Prevention: watching Disk Arbitration PID %ld\n", g_da_pid);
+    fflush(stdout);
     CFRunLoopRun();
     return 0;
 }
