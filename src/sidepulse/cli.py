@@ -1456,6 +1456,8 @@ def print_install_results(results, *, dry_run: bool) -> None:
         print(f"  log: {result.log_path}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
+        if result.provider == "codex" and result.changed and not dry_run:
+            print("  Restart Codex to activate these hooks in new sessions.")
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:

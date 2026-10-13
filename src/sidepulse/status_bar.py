@@ -1766,7 +1766,10 @@ class StatusBarController(NSObject):
         action = "installed" if install else "removed"
         if not result.changed:
             action = "already installed" if install else "already removed"
-        self.set_settings_message(f"{provider.title()} hooks {action}.")
+        message = f"{provider.title()} hooks {action}."
+        if provider == "codex" and install and result.changed:
+            message += " Restart Codex to activate them in new sessions."
+        self.set_settings_message(message)
         self.reload_monitor()
         self.refresh_settings_window()
         self.refresh_(None)
