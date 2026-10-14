@@ -116,6 +116,30 @@ class CursorProviderTests(unittest.TestCase):
             self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
             self.assertEqual(snapshot.statuses[0].origin, "Cursor")
 
+    def test_stop_with_error_status_maps_to_stop_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "cursor.jsonl"
+            now = datetime.now(timezone.utc).isoformat()
+            prompt = normalize_payload(
+                "beforeSubmitPrompt",
+                {"conversation_id": "cursor-conversation", "prompt": "fix the test"},
+            )
+            prompt["logged_at"] = now
+            stopped = normalize_payload(
+                "stop",
+                {"conversation_id": "cursor-conversation", "status": "error"},
+            )
+            stopped["logged_at"] = now
+            log.write_text(json.dumps(prompt) + "\n" + json.dumps(stopped) + "\n")
+
+            snapshot = AgentMonitor(
+                sources=(SourceSpec("cursor", log),),
+                stale_after_seconds=3600,
+            ).snapshot()
+
+            self.assertEqual(stopped["hook_event_name"], "StopFailure")
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.BLOCKED_ERROR)
+
     def test_shell_hook_maps_to_tool_activity(self) -> None:
         normalized = normalize_payload(
             "beforeShellExecution",

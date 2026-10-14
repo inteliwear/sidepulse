@@ -629,6 +629,13 @@ interrupted. The session returns to Idle / Ready without being marked completed;
 the next prompt makes it active again. Reinstall the Codex hooks after upgrading
 to register this event. Transcript monitoring is not required.
 
+Claude's `StopFailure` hook fires instead of `Stop` when an API error ends the
+turn: a session, weekly or rate limit, an overloaded API, a failed login and
+the like. The session shows as Blocked / Error with the error message, instead
+of staying on Working or turning Done. Reinstall the Claude hooks after
+upgrading to register this event. Cursor has no separate hook for this; its
+`stop` hook reports the status `error`, which SidePulse treats the same way.
+
 `PostToolUse` means the tool returned, not that the whole turn is finished. The
 monitor keeps it as Working for a short settling window while the assistant
 writes the response, then treats it as Done if no newer hook event arrives. This

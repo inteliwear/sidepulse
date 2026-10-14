@@ -42,6 +42,7 @@ CLAUDE_EVENTS = (
     "PostCompact",
     "SubagentStop",
     "Stop",
+    "StopFailure",
     "SessionEnd",
 )
 

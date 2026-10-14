@@ -71,6 +71,10 @@ def normalize_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any
     status = payload.get("status")
     if event_name == "stop" and isinstance(status, str):
         normalized["message"] = f"Cursor stopped: {status}"
+        if status == "error":
+            # Cursor has no separate failure hook; an agent loop that ended in
+            # an error reports it as the stop status.
+            normalized["hook_event_name"] = "StopFailure"
 
     return normalized
 

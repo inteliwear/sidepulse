@@ -433,6 +433,26 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIsNotNone(status)
         self.assertEqual(status.mode, AgentMode.WAITING_FOR_INPUT)
 
+    def test_claude_stop_failure_marks_session_blocked(self) -> None:
+        record = parse_log_line(
+            "claude",
+            json.dumps(
+                {
+                    "hook_event_name": "StopFailure",
+                    "session_id": "claude-session",
+                    "error": "rate_limit",
+                    "last_assistant_message": "You've hit your session limit",
+                    "logged_at": "2026-07-18T21:55:14Z",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        status = collector_module.status_from_event(record)
+        self.assertIsNotNone(status)
+        self.assertEqual(status.mode, AgentMode.BLOCKED_ERROR)
+        self.assertEqual(status.message, "You've hit your session limit")
+
     def test_claude_compat_grok_payload_routes_to_grok_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -3486,6 +3506,18 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertTrue(any("hook_entry.py" in command for command in commands))
             self.assertFalse(any(command.startswith("jq -c") for command in commands))
             self.assertEqual(data["permissions"]["allow"], ["Bash(date)"])
+
+    def test_claude_installer_registers_stop_failure_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "settings.json"
+            log = base / "claude.jsonl"
+
+            install_claude_hooks(log_path=log, config_path=config, python_executable="python3")
+
+            entries = json.loads(config.read_text())["hooks"]["StopFailure"]
+            self.assertEqual(entries[0]["matcher"], "*")
+            self.assertIn("hook_entry.py", entries[0]["hooks"][0]["command"])
 
     def test_grok_installer_writes_global_hook_file_without_lifecycle_matchers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
