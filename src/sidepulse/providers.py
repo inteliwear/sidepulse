@@ -90,7 +90,21 @@ JUNIE_MONITOR_EVENTS = tuple(
     event for event in JUNIE_EVENTS if event != "PermissionRequest"
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
+COPILOT_EVENTS = (
+    "sessionStart",
+    "sessionEnd",
+    "userPromptSubmitted",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "agentStop",
+    "errorOccurred",
+    "notification",
+    "preCompact",
+)
+# permissionRequest fires before automatic approval rules are evaluated. Use
+# permission_prompt notifications and ask_user tool starts to signal real waits.
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie", "copilot")
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
 )
@@ -153,6 +167,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_grok_config(home),
         detect_cursor_config(home),
         detect_junie_config(home),
+        detect_copilot_config(home),
     ]
 
 
@@ -346,6 +361,63 @@ def default_junie_hook_config_path(home: Path | None = None) -> Path:
     return base / ".junie" / "config.json"
 
 
+def default_copilot_hook_config_path(home: Path | None = None) -> Path:
+    configured_home = os.environ.get("COPILOT_HOME") if home is None else None
+    base = Path(configured_home).expanduser() if configured_home else (home or Path.home()) / ".copilot"
+    return base / "hooks" / "sidepulse.json"
+
+
+def is_copilot_sidepulse_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    command = entry.get("bash") or entry.get("command")
+    if not isinstance(command, str):
+        return False
+    try:
+        parts = shlex.split(command)
+        provider = parts[parts.index("--provider") + 1]
+    except (ValueError, IndexError):
+        return False
+    entry_point = any(
+        Path(part).parts[-2:] == ("sidepulse", "hook_entry.py")
+        for part in parts
+    )
+    cli_entry = any(
+        Path(part).name in {"sidepulse", "agent-monitor"}
+        and parts[index + 1] == "hook-log"
+        for index, part in enumerate(parts[:-1])
+    )
+    return provider == "copilot" and (entry_point or cli_entry)
+
+
+def detect_copilot_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_copilot_hook_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("copilot", config_path, False, False, (), ())
+    try:
+        data = json.loads(config_path.read_text())
+        if not isinstance(data, dict) or data.get("version", 1) != 1:
+            return ProviderConfig("copilot", config_path, True, False, (), ())
+        hooks = data.get("hooks", {})
+        settings_path = config_path.parent.parent / "settings.json"
+        settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        disabled = data.get("disableAllHooks", False) or settings.get("disableAllHooks", False)
+    except (OSError, ValueError, AttributeError):
+        return ProviderConfig("copilot", config_path, True, False, (), ())
+    events: list[str] = []
+    paths: list[Path] = []
+    if isinstance(hooks, dict):
+        for name, entries in hooks.items():
+            if name not in COPILOT_EVENTS or not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if is_copilot_sidepulse_entry(entry):
+                    events.append(name)
+                    paths.extend(extract_log_paths_from_command(entry.get("bash") or entry["command"]))
+    return ProviderConfig("copilot", config_path, True, bool(events) and not disabled,
+                          tuple(sorted(set(events))), _dedupe_paths(paths))
+
+
 def detect_junie_config(home: Path | None = None) -> ProviderConfig:
     config_path = default_junie_hook_config_path(home)
     if not config_path.exists():
@@ -423,6 +495,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_cursor_config(home)
     elif provider == "junie":
         config = detect_junie_config(home)
+    elif provider == "copilot":
+        config = detect_copilot_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:

@@ -96,6 +96,13 @@ def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigi
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
         if provider == "junie" and "jetbrains" in bundle_id:
             return surface_origin(provider, "ide", "env:__CFBundleIdentifier")
+        if provider == "copilot" and bundle_id == "com.github.githubapp":
+            return surface_origin(provider, "app", "env:__CFBundleIdentifier")
+        if provider == "copilot" and "jetbrains" in bundle_id:
+            return surface_origin(provider, "ide", "env:__CFBundleIdentifier")
+
+    if provider == "copilot" and env.get("COPILOT_PORT"):
+        return surface_origin(provider, "app", "env:COPILOT_PORT")
 
     return None
 
@@ -121,7 +128,9 @@ def origin_from_processes(
         return surface_origin(provider, "app", "process:Claude.app")
     if provider == "grok" and "grok.app" in haystack:
         return surface_origin(provider, "app", "process:Grok.app")
-    if provider == "junie" and any(
+    if provider == "copilot" and "github copilot.app" in haystack:
+        return surface_origin(provider, "app", "process:GitHub Copilot.app")
+    if provider in {"junie", "copilot"} and any(
         token in haystack
         for token in (
             "intellij idea.app",
@@ -147,6 +156,8 @@ def origin_from_processes(
             return surface_origin(provider, "cli", "process:grok")
         if provider == "junie" and basename == "junie":
             return surface_origin(provider, "cli", "process:junie")
+        if provider == "copilot" and basename == "copilot":
+            return surface_origin(provider, "cli", "process:copilot")
 
     return None
 
@@ -174,6 +185,10 @@ def surface_origin(provider: str, surface: str, source: str) -> AgentOrigin:
         ("junie", "cli"): "Junie CLI",
         ("junie", "ide"): "Junie in JetBrains IDE",
         ("junie", "transcript"): "Junie Transcript",
+        ("copilot", "app"): "GitHub Copilot App",
+        ("copilot", "cli"): "GitHub Copilot CLI",
+        ("copilot", "ide"): "Copilot in JetBrains IDE",
+        ("copilot", "vscode"): "Copilot in VS Code",
     }
     label = labels.get((provider, surface), provider_label(provider))
     return AgentOrigin(

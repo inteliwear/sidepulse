@@ -35,7 +35,7 @@ from sidepulse.install import fail_open_command, hook_command
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 
-PROVIDERS = ("claude", "codex", "grok")
+PROVIDERS = ("claude", "codex", "grok", "copilot")
 
 # Payloads a hook can plausibly be handed, including the ones nobody plans for.
 HOSTILE_PAYLOADS = {
