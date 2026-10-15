@@ -43,6 +43,53 @@ def request_settings_window(*, socket_path: Path | None = None) -> bool:
     return False
 
 
+def request_program_show(
+    program: str,
+    seconds: float | None,
+    *,
+    socket_path: Path | None = None,
+) -> str | None:
+    """Ask a running UI to play an LED program, then restore live status.
+
+    With seconds=None, the program stays until request_program_clear() or the
+    next show. Returns the reply, "ok" or "error: <reason>", or None when no UI
+    answers.
+    """
+    message: dict[str, object] = {"command": "show", "program": program}
+    if seconds is None:
+        message["hold"] = True
+    else:
+        message["seconds"] = seconds
+    return _request_reply(message, socket_path)
+
+
+def request_program_clear(*, socket_path: Path | None = None) -> str | None:
+    """Ask a running UI to end any show at once and restore live status."""
+    return _request_reply({"command": "clear"}, socket_path)
+
+
+def _request_reply(message: dict[str, object], socket_path: Path | None) -> str | None:
+    payload = json.dumps(
+        message,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    targets = (socket_path,) if socket_path is not None else candidate_event_socket_paths()
+    for target in targets:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.5)
+            try:
+                client.connect(str(target.expanduser()))
+                client.sendall(payload)
+                client.shutdown(socket.SHUT_WR)
+                reply = b"".join(iter(lambda: client.recv(1024), b""))
+            except OSError:
+                continue
+            if reply:
+                return reply.decode("utf-8", "replace")
+    return None
+
+
 def send_hook_event(
     provider: str,
     line: dict,
@@ -88,9 +135,13 @@ class HookEventServer:
         *,
         socket_path: Path | None = None,
         on_open_settings: Callable[[], None] | None = None,
+        on_show: Callable[[str, float | None], None] | None = None,
+        on_clear: Callable[[], None] | None = None,
     ) -> None:
         self.on_event = on_event
         self.on_open_settings = on_open_settings
+        self.on_show = on_show
+        self.on_clear = on_clear
         self.socket_path = (socket_path or default_event_socket_path()).expanduser()
         self.socket: socket.socket | None = None
         self.thread: threading.Thread | None = None
@@ -173,6 +224,39 @@ class HookEventServer:
                     connection.sendall(b"ok")
                 except OSError:
                     pass
+            return
+        if message.get("command") == "clear":
+            if self.on_clear is not None:
+                self.on_clear()
+                try:
+                    connection.sendall(b"ok")
+                except OSError:
+                    pass
+            return
+        if message.get("command") == "show":
+            if self.on_show is None:
+                return
+            program = message.get("program")
+            seconds = message.get("seconds")
+            hold = message.get("hold") is True
+            # Catch every handler error and report it to the client.
+            # An uncaught error stops the accept loop.
+            try:
+                if not isinstance(program, str):
+                    raise ValueError("show needs a string program")
+                if hold:
+                    if seconds is not None:
+                        raise ValueError("show takes seconds or hold, not both")
+                elif isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+                    raise ValueError("show needs a number of seconds, or hold")
+                self.on_show(program, None if hold else float(seconds))
+                reply = b"ok"
+            except Exception as exc:
+                reply = f"error: {exc}".encode("utf-8")
+            try:
+                connection.sendall(reply)
+            except OSError:
+                pass
             return
         provider = message.get("provider")
         line = message.get("line")
