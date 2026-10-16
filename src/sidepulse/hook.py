@@ -227,6 +227,14 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
             pass
         try:
             if not hook_event_socket_disabled():
+                from .program_adapter import hook_reports
+                from .program_transport import durable_submit
+                reports = hook_reports(actual_provider, line)
+                if reports:
+                    try:
+                        durable_submit({'v': 1, 'type': 'program_status_batch', 'reports': reports}, timeout=0.2)
+                    except Exception:
+                        pass  # Keep existing UI and relay delivery available on failure.
                 send_hook_event(actual_provider, line)
                 from .relay import candidate_relay_event_socket_paths
 

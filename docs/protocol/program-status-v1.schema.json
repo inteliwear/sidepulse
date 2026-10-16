@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SidePulse program status v1 producer contract",
+  "description": "A report is at most 65536 UTF-8 bytes. A snapshot has at most 256 records across all scopes; IDs are unique within each scope. Text rejects C0/C1 controls. See the protocol for receiver normalization.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "scope",
+        "status"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "program_status"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "context": {
+          "$ref": "#/$defs/presentationContext"
+        },
+        "unless_state": {
+          "const": "done"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "scope"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "enum": [
+            "scope_end",
+            "scope_reset"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "publisher",
+        "revision",
+        "scopes"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "program_status_snapshot"
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "scopes": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "seq",
+              "records"
+            ],
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "updated_at"
+                  ],
+                  "properties": {
+                    "status": {
+                      "$ref": "#/$defs/snapshotStatus"
+                    },
+                    "updated_at": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 253402300799999
+                    },
+                    "context": {
+                      "$ref": "#/$defs/presentationContext"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "reports"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "program_status_batch"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "reports": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/oneOf/0"
+              },
+              {
+                "$ref": "#/oneOf/1"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "status": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "error",
+            "clear"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}(/[A-Za-z0-9_.+-]{1,32}){0,7}$"
+        },
+        "app": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 192
+        },
+        "msg": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "kind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth"
+          ]
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "description": "Limits on strings are UTF-8 byte limits in receivers. Unknown fields are ignored."
+    },
+    "snapshotStatus": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "error"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}(/[A-Za-z0-9_.+-]{1,32}){0,7}$"
+        },
+        "app": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 192
+        },
+        "msg": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "kind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth"
+          ]
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "description": "Limits on strings are UTF-8 byte limits in receivers. Unknown fields are ignored."
+    },
+    "presentationContext": {
+      "type": "object",
+      "description": "Optional bounded desktop presentation metadata outside OSC status fields; omitted from combined phone snapshots. Limits are UTF-8 bytes in receivers.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "legacy_key": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "agent_id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "origin": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "tool_name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "mode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "event_name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "source_name": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}

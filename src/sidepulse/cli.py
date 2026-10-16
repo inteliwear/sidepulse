@@ -129,6 +129,19 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     )
     add_version_argument(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    report = subparsers.add_parser("report", help="Report OSC 7501-compatible program status.")
+    report.add_argument("--scope")
+    report_input = report.add_mutually_exclusive_group()
+    report_input.add_argument("--state", choices=["idle", "working", "blocked", "done", "error", "clear"])
+    for field in ("app", "id", "title", "msg", "kind", "request-id"):
+        report.add_argument("--" + field)
+    report.add_argument("--progress", type=int)
+    report_input.add_argument("--json", action="store_true", help="Read a complete JSON report from stdin.")
+    report_input.add_argument("--osc", nargs="?", const="-", metavar="LINE",
+                              help="Decode one OSC 7501 line (terminator optional); omit LINE or use - to read stdin. Requires --scope.")
+    report_input.add_argument("--end", action="store_true", help="End the scope, retaining done/error records.")
+    report.set_defaults(func=cmd_report)
+
     version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
     version.set_defaults(func=cmd_version)
     update = subparsers.add_parser("update", help="Update using the one-command setup installer.")
@@ -1765,3 +1778,38 @@ def mode_color(mode) -> str:
         "completed": "32;1",
         "idle_ready": "37",
     }.get(getattr(mode, "value", str(mode)), "37")
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from .program_transport import durable_submit
+    from .program_status import StatusError, MAX_BYTES
+    try:
+        if args.json:
+            raw = sys.stdin.read(MAX_BYTES + 1)
+            if len(raw.encode()) > MAX_BYTES:
+                raise StatusError("Report too large")
+            report = json.loads(raw)
+            if not isinstance(report, dict):
+                raise StatusError("Report must be an object")
+        elif args.osc is not None:
+            from .osc7501 import MAX_OSC_BYTES, parse_osc7501
+            if not args.scope:
+                raise StatusError("Supply --scope with --osc")
+            if any(getattr(args, key) is not None for key in ("app", "id", "title", "msg", "kind", "progress")):
+                raise StatusError("Put status fields inside the OSC sequence when using --osc")
+            raw = sys.stdin.read(MAX_OSC_BYTES + 3) if args.osc == "-" else args.osc
+            report = {"v": 1, "type": "program_status", "scope": args.scope,
+                      "status": parse_osc7501(raw)}
+        else:
+            if not args.scope or (not args.state and not args.end):
+                raise StatusError("Supply --scope and --state (or --end)")
+            status = {key: getattr(args, key) for key in ("state", "app", "id", "title", "msg", "kind", "progress") if getattr(args, key) is not None}
+            report = {"v": 1, "type": "scope_end" if args.end else "program_status", "scope": args.scope}
+            if not args.end:
+                report["status"] = status
+        report.setdefault("request_id", args.request_id or str(uuid.uuid4()))
+        print(json.dumps(durable_submit(report)))
+        return 0
+    except (ValueError, OSError) as exc:
+        print(f"Could not submit status: {exc}. Check sidepulse service status.", file=sys.stderr)
+        return 1

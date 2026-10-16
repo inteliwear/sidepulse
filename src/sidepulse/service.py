@@ -18,7 +18,6 @@ from .ipc import (
     send_hook_event,
 )
 from .led_status import led_count_for_target, program_for_agent_mode
-from .links import load_ios_links, send_ios_program
 from .providers import detect_log_path, parse_log_line
 from .relay import (
     RelayConfig,
@@ -31,7 +30,6 @@ from .settings import LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM, load_settings
 
 
 SERVICE_POLL_SECONDS = 1.0
-LINKED_PHONE_DEVICE_PREFIX = "ios/"
 
 
 class SidePulseService:
@@ -42,10 +40,17 @@ class SidePulseService:
             self.handle_local_event,
             socket_path=default_relay_event_socket_path(),
         )
+        from .program_status import ProgramStore
+        from .program_transport import ProgramServer, ProgramRelay
+        from .program_presentation import ProgramMonitor
+        self.program_store = ProgramStore()
+        self.program_server = ProgramServer(self.program_store)
         self.monitor = LiveAgentMonitor(
             recovery_sources=default_sources(),
             latest_state_path=default_latest_state_path(),
         )
+        self.monitor = ProgramMonitor(self.monitor, self.program_store)
+        self.program_relay = ProgramRelay(self.program_store)
         self.receiver_stop: threading.Event | None = None
         self.receiver_thread: threading.Thread | None = None
         self.receiver_signature: tuple[str, str] | None = None
@@ -54,8 +59,10 @@ class SidePulseService:
 
     def run(self) -> int:
         self.install_signal_handlers()
-        self.local_server.start()
+        self.program_server.start()
+        self.program_relay.start()
         try:
+            self.local_server.start()
             while not self.stop_event.is_set():
                 config = load_relay_config()
                 self.sync_receiver(config)
@@ -64,6 +71,8 @@ class SidePulseService:
         finally:
             self.stop_receiver()
             self.local_server.stop()
+            self.program_server.stop()
+            self.program_relay.stop()
         return 0
 
     def stop(self) -> None:
@@ -100,6 +109,7 @@ class SidePulseService:
         thread = threading.Thread(
             target=listen_for_relay_events,
             args=(config, stop, self.handle_remote_event),
+            kwargs={'on_status': lambda snapshot: self.handle_remote_status(config, snapshot)},
             daemon=True,
         )
         self.receiver_stop = stop
@@ -127,6 +137,13 @@ class SidePulseService:
         self.ingest_event(provider, line)
         send_hook_event(provider, line)
 
+    def handle_remote_status(self, config: RelayConfig, snapshot: dict) -> None:
+        from .program_transport import sender_identity
+        # A retiring listener must not restore state after the link is changed.
+        if self.receiver_signature != (config.server, config.receiver_channel):
+            return
+        self.program_store.receive(sender_identity(config.server, config.receiver_channel), snapshot)
+
     def ingest_event(self, provider: str, line: dict) -> None:
         try:
             record = parse_log_line(
@@ -142,6 +159,7 @@ class SidePulseService:
         if status_bar_monitor_available():
             return
         settings = load_settings()
+        getattr(self.monitor, 'monitor', self.monitor).stale_after_seconds = settings.idle_timeout_seconds
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
         battery = None
@@ -184,32 +202,6 @@ class SidePulseService:
                 write_led_program(program, device_path=candidate.target)
             except Exception as exc:
                 print(f"sidepulse service: device write failed: {exc}", file=sys.stderr)
-                continue
-            self.last_program_by_target[key] = program
-
-        for link in load_ios_links():
-            device_id = f"{LINKED_PHONE_DEVICE_PREFIX}{link.link_id}"
-            if settings.display_for_device(device_id) == LED_DISPLAY_CUSTOM:
-                continue
-            animation = settings.agent_animation(mode)
-            try:
-                program = program_for_agent_mode(
-                    mode,
-                    led_count=8,
-                    animation_style=animation.style,
-                    custom_program=animation.custom_program,
-                )
-            except DeviceWriteError:
-                continue
-            key = f"phone:{link.link_id}"
-            active_targets.add(key)
-            if self.last_program_by_target.get(key) == program:
-                continue
-            data: dict[str, object] = {"source": {"name": socket.gethostname()}}
-            try:
-                send_ios_program(link, program, data=data)
-            except Exception as exc:
-                print(f"sidepulse service: phone push failed: {exc}", file=sys.stderr)
                 continue
             self.last_program_by_target[key] = program
 

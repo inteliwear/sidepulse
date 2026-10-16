@@ -356,6 +356,8 @@ under `$XDG_CONFIG_HOME/sidepulse/agent-monitor/links.json`). Pair with the
 updated iOS build by scanning the QR code or pasting its current push token.
 Do not add or remove `dev_` by hand; the token determines the bridge route.
 
+Linked phones receive session state through the existing bridge. In the tray, open the phone submenu and use **Sync session states** (enabled by default for supported links). Choose session LED patterns in the phone app. Mac animations and battery display never automatically control phone colors; explicit `sidepulse push` commands still work. Turning sync off leaves the last received sessions on the phone.
+
 Linked phones are stored locally. Remote LED-only `write` commands are silent;
 LED-only `push` commands use the notification title `Update`. Adding
 `--title` or `--message` produces one visible notification containing the same
@@ -386,6 +388,25 @@ service on either computer with:
 ```sh
 sidepulse service status
 ```
+
+## Third-party program status
+
+Report application state with OSC 7501-compatible JSON fields:
+
+```sh
+sidepulse report --scope my-build --state working --app build
+sidepulse report --scope my-build --state blocked --kind permission --msg 'Approve release?'
+sidepulse report --scope my-build --state done
+```
+
+You can also pass one raw OSC 7501 line directly or through stdin (Bash/Zsh):
+
+```sh
+sidepulse report --scope my-build --osc $'\e]7501;state=working:app=build\e\\'
+printf '\033]7501;state=done:app=build\007' | sidepulse report --scope my-build --osc
+```
+
+The hook adapter or CLI decoder translates input into JSON; the daemon persists it and handles remote delivery. Complete snapshots travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. No bridge update is required. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md). Automatic terminal OSC capture is a later phase; explicit CLI ingestion is supported now.
 
 ## Battery LEDs
 

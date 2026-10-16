@@ -21,7 +21,7 @@ EVENT_ALIASES = {
     "afterShellExecution": "PostToolUse",
     "afterFileEdit": "PostToolUse",
     "postToolUse": "PostToolUse",
-    "postToolUseFailure": "StopFailure",
+    "postToolUseFailure": "PostToolUseFailure",
     "stop": "Stop",
 }
 
@@ -96,6 +96,14 @@ def main(argv: list[str] | None = None) -> int:
             pass
         try:
             write_hook_status_audit(provider, line)
+        except Exception:
+            pass
+        try:
+            from .program_adapter import hook_reports
+            from .program_transport import durable_submit
+            reports = hook_reports(provider, line)
+            if reports:
+                durable_submit({'v': 1, 'type': 'program_status_batch', 'reports': reports}, timeout=0.2)
         except Exception:
             pass
         try:

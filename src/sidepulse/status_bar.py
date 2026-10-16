@@ -1173,6 +1173,22 @@ class StatusBarController(NSObject):
         return True
 
     @objc.IBAction
+    def togglePhoneSessionSync_(self, sender):
+        self.toggle_phone_session_sync(str(sender.representedObject()))
+
+    def toggle_phone_session_sync(self, link_id: str) -> None:
+        enabled = not self.settings.sync_sessions_to_phone(link_id)
+        try:
+            self.settings = self.settings.with_phone_session_sync(link_id, enabled)
+            save_settings(self.settings)
+        except Exception as exc:
+            self.settings = load_settings()
+            self.set_settings_message(f"Could not save session sync: {exc}")
+            return
+        self.set_settings_message("Session syncing enabled." if enabled else "Session syncing paused. The phone keeps its last received sessions.")
+        self.refresh_(None)
+
+    @objc.IBAction
     def setDeviceDisplayAgent_(self, sender):
         self.set_device_display(sender.representedObject(), LED_DISPLAY_AGENT)
 
@@ -1323,12 +1339,17 @@ class StatusBarController(NSObject):
 
     def build_monitor(self) -> LiveAgentMonitor:
         socket_path = default_event_socket_path()
-        return LiveAgentMonitor(
+        from .program_status import ProgramStore
+        from .program_presentation import ProgramMonitor
+        self.program_store = getattr(self, "program_store", None) or ProgramStore()
+        monitor = LiveAgentMonitor(
             sources=(SourceSpec("event-bus", socket_path),),
             recovery_sources=default_sources(self.settings),
             stale_after_seconds=self.settings.idle_timeout_seconds,
             latest_state_path=default_latest_state_path(),
         )
+
+        return ProgramMonitor(monitor, self.program_store)
 
     def reload_monitor(self) -> None:
         self.monitor = self.build_monitor()
@@ -3203,6 +3224,12 @@ class StatusBarController(NSObject):
 
         active_errors: dict[str, str] = {}
         for device in devices:
+            if device.remote_link is not None:
+                # Session forwarding belongs to ProgramRelay; the phone owns its LEDs.
+                self.remote_led_program_by_device.pop(device.device_id, None)
+                self.device_errors.pop(device.device_id, None)
+                continue
+
             device_display_kind = self.active_led_display_kind_for_device(
                 device,
                 battery_snapshot,
@@ -3213,53 +3240,6 @@ class StatusBarController(NSObject):
 
             if device_display_kind == LED_DISPLAY_CUSTOM:
                 self.device_errors.pop(device.device_id, None)
-                continue
-
-            if device.remote_link is not None:
-                if device_display_kind == LED_DISPLAY_BATTERY and battery_snapshot is not None:
-                    program = program_for_battery(
-                        battery_snapshot,
-                        led_count=8,
-                        brightness=255,
-                    )
-                    label = f"{device.name} Battery {battery_snapshot.percent}%"
-                else:
-                    animation = self.settings.agent_animation(mode)
-                    try:
-                        program = program_for_agent_mode(
-                            mode,
-                            led_count=8,
-                            brightness=255,
-                            animation_style=animation.style,
-                            custom_program=animation.custom_program,
-                        )
-                    except DeviceWriteError as exc:
-                        active_errors[device.device_id] = str(exc)
-                        continue
-                    label = f"{device.name} {MODE_LABELS[mode]}"
-
-                if self.remote_led_program_by_device.get(device.device_id) == program:
-                    self.device_errors.pop(device.device_id, None)
-                    continue
-                try:
-                    send_ios_program(
-                        device.remote_link,
-                        program,
-                        data=remote_event_data(battery_snapshot),
-                    )
-                except Exception as exc:
-                    error = str(exc)
-                    active_errors[device.device_id] = error
-                    previous_error = self.device_errors.get(device.device_id)
-                    if error != previous_error:
-                        log_status_bar(f"linked phone error {device.name}: {error}")
-                    continue
-
-                self.remote_led_program_by_device[device.device_id] = program
-                self.device_errors.pop(device.device_id, None)
-                log_status_bar(
-                    f"leds={label} target=linked phone {device.remote_link.link_id}"
-                )
                 continue
 
             if device_display_kind == LED_DISPLAY_BATTERY and battery_snapshot is not None:
@@ -3806,17 +3786,28 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
     item.setState_(1 if device.connected else 0)
     submenu = NSMenu.alloc().init()
 
-    agent = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Agent Status",
-        "setDeviceDisplayAgent:",
-        "",
-    )
-    agent.setTarget_(target)
-    agent.setRepresentedObject_(device.device_id)
-    agent.setState_(1 if device.display == LED_DISPLAY_AGENT else 0)
-    submenu.addItem_(agent)
+    if device.remote_link is not None:
+        capable = device.remote_link.status_protocol == 1
+        sync = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Sync session states", "togglePhoneSessionSync:" if capable else None, "",
+        )
+        sync.setTarget_(target)
+        sync.setRepresentedObject_(device.remote_link.link_id)
+        sync.setState_(1 if capable and target.settings.sync_sessions_to_phone(device.remote_link.link_id) else 0)
+        sync.setEnabled_(capable)
+        submenu.addItem_(sync)
+        submenu.addItem_(disabled_menu_item("Patterns are set on the phone" if capable else "Update the phone app and link again to sync"))
+    else:
+        agent = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Agent Status",
+            "setDeviceDisplayAgent:",
+            "",
+        )
+        agent.setTarget_(target)
+        agent.setRepresentedObject_(device.device_id)
+        agent.setState_(1 if device.display == LED_DISPLAY_AGENT else 0)
+        submenu.addItem_(agent)
 
-    if device.remote_link is None:
         battery = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Battery Level",
             "setDeviceDisplayBattery:",
@@ -3827,15 +3818,15 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
         battery.setState_(1 if device.display == LED_DISPLAY_BATTERY else 0)
         submenu.addItem_(battery)
 
-    custom = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Manual",
-        "setDeviceDisplayCustom:",
-        "",
-    )
-    custom.setTarget_(target)
-    custom.setRepresentedObject_(device.device_id)
-    custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
-    submenu.addItem_(custom)
+        custom = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Manual",
+            "setDeviceDisplayCustom:",
+            "",
+        )
+        custom.setTarget_(target)
+        custom.setRepresentedObject_(device.device_id)
+        custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
+        submenu.addItem_(custom)
 
     if device.device_id != VIRTUAL_DEVICE_ID and device.remote_link is None:
         submenu.addItem_(NSMenuItem.separatorItem())

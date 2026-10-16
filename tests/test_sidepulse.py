@@ -1870,7 +1870,7 @@ class AgentMonitorTests(unittest.TestCase):
             ("leds", (AgentMode.WORKING, snapshot, "battery")),
         )
 
-    def test_status_bar_syncs_agent_status_to_linked_phone_once(self) -> None:
+    def test_status_bar_never_sends_agent_colors_to_linked_phone(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
@@ -1912,11 +1912,9 @@ class AgentMonitorTests(unittest.TestCase):
                 status_bar.LED_DISPLAY_AGENT,
             )
 
-        send.assert_called_once()
-        self.assertEqual(send.call_args.args[0], link)
-        self.assertIn("source", send.call_args.kwargs["data"])
+        send.assert_not_called()
 
-    def test_status_bar_syncs_battery_level_to_linked_phone(self) -> None:
+    def test_status_bar_never_sends_battery_colors_to_linked_phone(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
@@ -1953,14 +1951,7 @@ class AgentMonitorTests(unittest.TestCase):
                 status_bar.LED_DISPLAY_BATTERY,
             )
 
-        self.assertEqual(
-            send.call_args.args[1],
-            status_bar.program_for_battery(snapshot, led_count=8, brightness=255),
-        )
-        self.assertEqual(
-            send.call_args.kwargs["data"]["source"]["battery"]["level"],
-            57,
-        )
+        send.assert_not_called()
 
     def test_status_bar_sync_skips_custom_device_display(self) -> None:
         try:

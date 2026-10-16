@@ -144,7 +144,7 @@ class CursorProviderTests(unittest.TestCase):
 
         self.assertEqual(before["hook_event_name"], "PreToolUse")
         self.assertEqual(before["tool_name"], "read_file")
-        self.assertEqual(failed["hook_event_name"], "StopFailure")
+        self.assertEqual(failed["hook_event_name"], "PostToolUseFailure")
         self.assertEqual(failed["message"], "permission denied")
 
 

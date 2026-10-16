@@ -585,13 +585,34 @@ class MenuBuildTests(StatusBarTestCase):
             for index in range(item.submenu().numberOfItems())
             if item.submenu().itemAtIndex_(index).title()
         ]
-        self.assertIn("Agent Status", submenu_titles)
-        self.assertIn("Manual", submenu_titles)
+        self.assertIn("Sync session states", submenu_titles)
+        self.assertNotIn("Agent Status", submenu_titles)
+        self.assertNotIn("Manual", submenu_titles)
         self.assertNotIn("Battery Level", submenu_titles)
         self.assertIn("Linked phone", submenu_titles)
         self.assertIn("ID aaaaaaaaaaaa", submenu_titles)
         self.assertIn("Remove phone...", submenu_titles)
         self.assertNotIn("Brightness 100%", submenu_titles)
+
+    def test_phone_sync_menu_toggle_persists_without_sending_colors(self):
+        from sidepulse.settings import load_settings, save_settings
+        link = sb.IOSLink("Session phone", "b" * 64, status_protocol=1)
+        device = sb.StatusBarDevice(device_id=sb.linked_phone_device_id(link), name=link.name,
+            root=Path("ios/phone"), target=Path("ios/phone"), connected=True,
+            display="custom", remote_link=link)
+        target = SimpleNamespace(settings=AgentMonitorSettings(), set_settings_message=Mock(), refresh_=Mock())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            with patch("sidepulse.status_bar.save_settings", side_effect=lambda settings: save_settings(settings, path)), patch("sidepulse.status_bar.send_ios_program") as send:
+                for expected in (False, True):
+                    menu = sb.build_device_menu_item(device, target).submenu()
+                    toggle = menu.itemAtIndex_(0)
+                    self.assertEqual(toggle.title(), "Sync session states")
+                    self.assertTrue(toggle.isEnabled())
+                    self.assertEqual(toggle.state(), int(not expected))
+                    sb.StatusBarController.toggle_phone_session_sync(target, str(toggle.representedObject()))
+                    self.assertEqual(load_settings(path).sync_sessions_to_phone(link.link_id), expected)
+                send.assert_not_called()
 
     def test_remove_linked_iphone_requires_confirmation_and_deletes_link(self):
         link = sb.IOSLink("Peter's iPhone", "a" * 64)

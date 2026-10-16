@@ -241,6 +241,7 @@ def listen_for_relay_events(
     config: RelayConfig,
     stop: threading.Event,
     on_event: Callable[[str, dict, str], None],
+    on_status: Callable[[dict], None] | None = None,
 ) -> None:
     channel = urllib.parse.quote(clean_channel(config.receiver_channel, required=True), safe="")
     url = f"{normalize_server(config.server)}/api/leds/{channel}"
@@ -251,8 +252,20 @@ def listen_for_relay_events(
                 for value in iter_sse_messages(response):
                     if stop.is_set():
                         return
+                    if on_status is not None:
+                        try:
+                            message = json.loads(value)
+                            if isinstance(message, dict) and message.get('type') == 'program_status_snapshot':
+                                on_status(message)
+                                if stop.is_set():
+                                    return
+                                continue
+                        except (ValueError, TypeError):
+                            continue  # One invalid update must not stop the stream.
                     parsed = parse_relay_event(value)
                     if parsed is not None:
                         on_event(*parsed)
+                        if stop.is_set():
+                            return
         except (OSError, urllib.error.URLError):
             stop.wait(1.0)

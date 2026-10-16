@@ -127,6 +127,7 @@ class RelayTransportTests(unittest.TestCase):
             with (
                 patch("sys.stdin", io.StringIO('{"hook_event_name":"Stop"}')),
                 patch("sidepulse.hook.hook_event_socket_disabled", return_value=False),
+                patch("sidepulse.program_transport.durable_submit", side_effect=OSError("unavailable")),
                 patch("sidepulse.hook.send_hook_event", return_value=True) as send,
                 patch(
                     "sidepulse.relay.candidate_relay_event_socket_paths",
@@ -187,8 +188,7 @@ class SidePulseServiceTests(unittest.TestCase):
             patch("sidepulse.service.load_settings", return_value=settings),
             patch("sidepulse.service.read_battery_snapshot", side_effect=OSError),
             patch("sidepulse.service.discover_devices", return_value=[]),
-            patch("sidepulse.service.load_ios_links", return_value=(link,)),
-            patch("sidepulse.service.send_ios_program") as send,
+            patch("sidepulse.links.send_ios_program") as send,
         ):
             service.sync_outputs()
 
@@ -213,7 +213,6 @@ class SidePulseServiceTests(unittest.TestCase):
                     "sidepulse.service.discover_devices",
                     return_value=(DeviceCandidate(root, target, "test"),),
                 ),
-                patch("sidepulse.service.load_ios_links", return_value=()),
             ):
                 service.sync_outputs()
 

@@ -108,3 +108,27 @@ class SettingsAccessTests(unittest.TestCase):
             patch("sys.stderr"),
         ):
             self.assertEqual(sidepulse_main(["settings"]), 1)
+
+
+class PhoneSessionSyncSettingsTests(unittest.TestCase):
+    def test_phone_sync_defaults_and_round_trip_are_independent_of_display(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            for display in ('agent', 'battery', 'custom'):
+                path.write_text('{"led_display": "' + display + '"}')
+                settings = load_settings(path)
+                self.assertTrue(settings.sync_sessions_to_phone('phone'))
+                settings = settings.with_phone_session_sync('phone', False)
+                save_settings(settings, path)
+                loaded = load_settings(path)
+                self.assertFalse(loaded.sync_sessions_to_phone('phone'))
+                self.assertTrue(loaded.sync_sessions_to_phone('other'))
+                self.assertEqual(loaded.led_display, display)
+
+    def test_malformed_phone_sync_settings_do_not_break_loading(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            for value in (False, [], 'bad', {'phone': 'false'}):
+                path.write_text(json.dumps({'phone_session_sync': value}))
+                self.assertTrue(load_settings(path).sync_sessions_to_phone('phone'))
