@@ -154,7 +154,7 @@ class SidePulseService:
 
         active_targets: set[str] = set()
         for candidate in discover_devices():
-            device_id = str(candidate.root.expanduser())
+            device_id = candidate.device_id or str(candidate.root.expanduser())
             display = settings.display_for_device(device_id)
             if display == LED_DISPLAY_CUSTOM:
                 continue

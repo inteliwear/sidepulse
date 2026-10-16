@@ -134,6 +134,10 @@ class KeepAwakeController:
     def poke_status_file(self, target: Path | None, *, now: float | None = None) -> Path | None:
         if not self.enabled or target is None:
             return None
+        from .usb_control import address_from_selector
+
+        if address_from_selector(target) is not None:
+            return None
 
         current = time.monotonic() if now is None else now
         status_path = keepalive_file_for_target(target)

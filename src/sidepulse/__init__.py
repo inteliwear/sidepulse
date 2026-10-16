@@ -7,6 +7,7 @@ from .battery import (
     read_battery_snapshot,
 )
 from .collector import AgentMonitor, LiveAgentMonitor, MonitorSnapshot, SourceSpec
+from .device_writer import DeviceCandidate, DeviceWriteError, discover_devices, write_led_program
 from .ipc import (
     HookEventServer,
     default_event_socket_path,
@@ -33,6 +34,10 @@ from .lid_sleep import (
 from .models import AgentMode, AgentStatus, AggregateStatus, HookEvent
 
 __all__ = [
+    "DeviceCandidate",
+    "DeviceWriteError",
+    "discover_devices",
+    "write_led_program",
     "AgentLedController",
     "AgentMode",
     "AgentStatus",

@@ -4253,7 +4253,7 @@ class AgentMonitorTests(unittest.TestCase):
             with patch(
                 "sidepulse.device_writer.default_mount_roots",
                 return_value=(first, second),
-            ):
+            ), patch("sidepulse.usb_discovery.dots", return_value=()):
                 candidates = discover_devices()
 
         self.assertEqual([candidate.root for candidate in candidates], [device])

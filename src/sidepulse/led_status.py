@@ -277,6 +277,12 @@ def write_mode_to_leds(
 
 
 def led_count_for_target(target: Path) -> int:
+    from .usb_control import address_from_selector
+    from .usb_discovery import info_for_selector
+
+    if address_from_selector(target) is not None:
+        info = info_for_selector(target)
+        return info['led_count'] if info is not None else 2
     name = normalized_device_name(target.parent.name)
     for hint, led_count in DEVICE_LED_COUNTS.items():
         if hint in name:
@@ -357,8 +363,13 @@ class AgentLedController:
         if self.last_target is None or self.last_program is None:
             return False
         try:
+            from .usb_control import address_from_selector
+            from .device_writer import usb_program_is_current
+
+            if address_from_selector(self.last_target) is not None:
+                return usb_program_is_current(self.last_target, self.last_program)
             return read_status_bytes(self.last_target, max_bytes=512).decode("utf-8") == self.last_program
-        except (OSError, UnicodeError):
+        except (OSError, ValueError, RuntimeError):
             return False
 
     def sync_mode(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shlex
 import socket
 import subprocess
@@ -100,6 +101,7 @@ from .device_writer import (
     DeviceCandidate,
     DeviceWriteError,
     discover_devices,
+    control_target_exists,
     normalize_led_text,
     path_exists,
     target_from_device_path,
@@ -2947,8 +2949,8 @@ class StatusBarController(NSObject):
             candidates = []
 
         for candidate in candidates:
-            device_id = device_id_for_root(candidate.root)
-            name = device_display_name(candidate.root.name)
+            device_id = candidate.device_id or device_id_for_root(candidate.root)
+            name = candidate.model or device_display_name(candidate.root.name)
             entries_by_id[device_id] = StatusBarDevice(
                 device_id=device_id,
                 name=name,
@@ -3451,7 +3453,7 @@ class StatusBarController(NSObject):
             target = controller.last_target or controller.device_path
             if target is None:
                 continue
-            if not path_exists(Path(target).parent):
+            if not control_target_exists(Path(target)):
                 continue
             key = str(target)
             if key in seen:
@@ -3467,7 +3469,7 @@ class StatusBarController(NSObject):
                 Path(selected),
                 DEFAULT_FILE_NAME,
             )
-            if path_exists(target.parent):
+            if control_target_exists(target):
                 self.led_controller.device_path = target
                 self.battery_led_controller.device_path = target
                 return
@@ -5938,6 +5940,8 @@ def device_mount_key(root: Path) -> str:
 
 def device_display_name(name: str) -> str:
     normalized = normalized_device_name(name)
+    if re.fullmatch(r'Dot-[0-9]{3}-[0-9]{3}', name):
+        return "SidePulse Dot"
     if "sidepulsedot" in normalized or "pulsedot" in normalized:
         return "SidePulse Dot"
     if "sidepulsepro" in normalized:

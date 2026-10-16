@@ -461,6 +461,27 @@ class MenuBuildTests(StatusBarTestCase):
         self.load_ios_links = link_patcher.start()
         self.addCleanup(link_patcher.stop)
 
+    def test_storage_disabled_dot_is_connected_and_menu_controls_use_usb(self):
+        root = Path('/dev/sidepulse-usb/Dot-002-001')
+        self.discover_devices.return_value = [sb.DeviceCandidate(
+            root, root, 'USB control; storage off', 'sidepulse-usb:SPD-000006',
+        )]
+        with patch.object(sb, 'save_settings'):
+            devices = self.controller.status_bar_devices(remember=False)
+        dot = next(device for device in devices if device.root == root)
+        self.assertTrue(dot.connected)
+        self.assertEqual(dot.name, 'SidePulse Dot')
+        self.assertEqual(dot.target, root)
+        self.assertEqual(dot.device_id, 'sidepulse-usb:SPD-000006')
+        item = sb.build_device_menu_item(dot, self.controller)
+        self.assertEqual(item.state(), 1)
+        titles = [entry.title() for entry in walk_menu(item.submenu())]
+        self.assertIn('Agent Status', titles)
+        self.assertIn('Battery Level', titles)
+        self.assertEqual(self.controller.agent_controller_for_device(dot).device_path, root)
+        self.assertEqual(self.controller.battery_controller_for_device(dot).device_path, root)
+
+
     def assert_menu_is_wired(self, menu: NSMenu):
         for item in walk_menu(menu):
             if item.submenu() is not None:

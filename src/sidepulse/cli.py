@@ -140,6 +140,12 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     from .firmware import add_firmware_parser
 
     add_firmware_parser(subparsers)
+    from .storage import add_storage_parser
+
+    add_storage_parser(subparsers)
+    from .device_list import add_list_parser
+
+    add_list_parser(subparsers)
     subparsers.add_parser(
         "agent-monitor",
         help="Install hooks and show live AI agent statuses.",
@@ -243,7 +249,7 @@ def add_sidepulse_delivery_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--device",
         type=Path,
-        help="Mounted device folder or LED program file path. Cannot be combined with --to or --all.",
+        help="Mounted device folder, LED program file, or Dot USB selector. Cannot be combined with --to or --all.",
     )
     parser.add_argument(
         "--file-name",

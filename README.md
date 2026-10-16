@@ -108,6 +108,46 @@ After the transfer, leave the device connected for at least 10 seconds, then
 reconnect it and run `sidepulse firmware version` to confirm the installed
 version. Use `sidepulse firmware version --json` for machine-readable output.
 
+### USB storage on SidePulse Dot
+
+Enable or disable the Dot's disk drive while keeping USB control available:
+
+```sh
+sidepulse storage status
+sidepulse storage off
+sidepulse storage on
+```
+
+The setting is saved in the Dot's flash. The CLI safely ejects its disk before
+disabling storage, reconnects USB automatically, and verifies the new setting.
+No unplug is needed. Close any files open on the Dot first; if ejection fails,
+the command stops. This requires Dot firmware with storage-control support.
+
+With multiple Dots connected, choose one using its serial or USB selector from
+`sidepulse storage status`:
+
+```sh
+sidepulse storage off --device SPD-000006
+sidepulse storage status --json
+```
+
+`sidepulse firmware version` continues to work with storage off. Enable storage
+before installing firmware through the disk drive. SidePulse Pro does not
+support this USB setting.
+
+To control live LEDs with storage off, pass the USB selector shown by
+`sidepulse storage status` to `write`:
+
+```sh
+sidepulse write --device /dev/sidepulse-usb/Dot-002-001 "#FF0000"
+```
+
+This sends the program directly over USB and checks the device acknowledgement.
+The selector identifies the current USB connection and may change after reconnecting.
+The menu-bar app also lists storage-disabled Dots and controls their agent-status,
+battery and manual LED displays over USB. USB device preferences follow the
+Dot's production serial when its connection address changes.
+
 ### Updating
 
 ```sh
@@ -135,6 +175,31 @@ Send an LED program to SidePulse:
 
 ```sh
 sidepulse write "off\n#ff3a00 1.6s pulse\nrepeat"
+```
+
+List connected hardware and the path to use with `--device`:
+
+```sh
+sidepulse list
+sidepulse ls
+sidepulse list --json
+```
+
+The list includes mounted Pro/Dot drives and USB Dots with storage disabled.
+Mounted Dots appear once. USB Dots remain visible when their disk is unmounted.
+
+The CLI, tray, background service and pip package share the same device discovery
+and LED writer. The Python API exposes the same targets shown by `sidepulse ls`:
+
+```python
+from sidepulse import discover_devices, write_led_program
+
+devices = discover_devices()
+for device in devices:
+    print(device.model, device.serial, device.root)
+
+# Select a device from that list; root can be a drive or USB selector.
+write_led_program("#FF0000", device_path=devices[0].root)
 ```
 
 `sidepulse write` prefers mounted hardware and falls back to a linked phone.

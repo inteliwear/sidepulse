@@ -23,6 +23,7 @@ RELEASES_URL = "https://api.github.com/repos/inteliwear/sidepulse/contents/firmw
 DOWNLOAD_ROOT = "https://raw.githubusercontent.com/inteliwear/sidepulse/main/firmware"
 MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
+USB_DEVICE_ROOT = Path("/dev/sidepulse-usb")
 PACKAGE_FILES = {"FIRMWARE.BIN", "README.txt", "RELEASE_NOTES.txt", "SHA256SUMS.txt"}
 
 
@@ -60,8 +61,40 @@ def version_key(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in normalize_version(value).split("."))
 
 
+def _usb_address(root: Path) -> tuple[int, int] | None:
+    from .usb_control import address_from_selector
+
+    try:
+        return address_from_selector(root)
+    except ValueError as exc:
+        raise FirmwareError(str(exc)) from exc
+
+
+def read_usb_device(bus: int, address: int) -> FirmwareDevice:
+    from .usb_control import Device
+
+    root = USB_DEVICE_ROOT / f"Dot-{bus:03d}-{address:03d}"
+    try:
+        with Device(bus=bus, address=address) as device:
+            info = device.info()
+    except (ImportError, OSError, ValueError, RuntimeError) as exc:
+        raise FirmwareError(f"Could not read Dot firmware over USB: {exc}") from exc
+    return FirmwareDevice(root, "dot", info["version"], info["serial"])
+
+
+def find_usb_devices() -> list[FirmwareDevice]:
+    from .usb_discovery import dots
+
+    return [FirmwareDevice(info['root'], "dot", info['version'], info['serial'])
+            for info in dots(force=True) if not info['storage_active']]
+
+
 def read_device(root: Path) -> FirmwareDevice:
-    root = root.expanduser().resolve()
+    root = root.expanduser()
+    address = _usb_address(root)
+    if address is not None:
+        return read_usb_device(*address)
+    root = root.resolve()
     try:
         text = read_status_bytes(root / "STATUS.TXT", max_bytes=65536).decode("utf-8", errors="replace")
     except OSError as exc:
@@ -84,13 +117,13 @@ def find_devices(device_path: Path | None) -> list[FirmwareDevice]:
     if device_path is not None:
         return [read_device(device_path)]
     devices = []
-    for candidate in discover_devices(file_name="STATUS.TXT"):
+    for candidate in discover_devices():
         try:
             devices.append(read_device(candidate.root))
         except FirmwareError:
             continue
     if not devices:
-        raise FirmwareError("No mounted SidePulse device found. Connect it or pass --device /path/to/drive.")
+        raise FirmwareError("No mounted SidePulse device or USB-control Dot found. Connect it or pass --device with its drive or USB selector.")
     return devices
 
 
@@ -211,6 +244,8 @@ def load_package(product: str, version: str | None, path: Path | None) -> Firmwa
 
 
 def write_firmware(device: FirmwareDevice, package: FirmwarePackage) -> None:
+    if _usb_address(device.root) is not None:
+        raise FirmwareError("Enable USB storage and reconnect the Dot before copying a firmware update.")
     # Recheck identity after downloading, before opening the update file.
     if read_device(device.root) != device:
         raise FirmwareError("The connected device changed. Run the upgrade again.")
@@ -255,6 +290,8 @@ def cmd_firmware_upgrade(args: argparse.Namespace) -> int:
             paths = "\n".join(f"  {device.root}" for device in devices)
             raise FirmwareError("Multiple SidePulse devices found. Select one with --device:\n" + paths)
         device = devices[0]
+        if _usb_address(device.root) is not None:
+            raise FirmwareError("Enable USB storage and reconnect the Dot before copying a firmware update.")
         print(f"{device.name}: firmware {device.version} ({device.root})", flush=True)
         package = load_package(device.product, args.release_version, args.file)
         if package.product != device.product:
