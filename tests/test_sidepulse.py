@@ -1637,7 +1637,8 @@ class AgentMonitorTests(unittest.TestCase):
             brightness=128,
         )
 
-        item = status_bar.build_device_menu_item(device, SimpleNamespace())
+        target = SimpleNamespace(firmware_status={}, firmware_messages={}, firmware_upgrade_root=None)
+        item = status_bar.build_device_menu_item(device, target)
         submenu = item.submenu()
         titles = [
             submenu.itemAtIndex_(index).title()
@@ -1665,7 +1666,7 @@ class AgentMonitorTests(unittest.TestCase):
             display=LED_DISPLAY_CUSTOM,
             brightness=128,
         )
-        custom_item = status_bar.build_device_menu_item(custom_device, SimpleNamespace())
+        custom_item = status_bar.build_device_menu_item(custom_device, target)
         custom_submenu = custom_item.submenu()
         by_title = {
             custom_submenu.itemAtIndex_(index).title(): custom_submenu.itemAtIndex_(index)
@@ -4745,6 +4746,17 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertTrue(repaired.changed)
             self.assertEqual(target.read_text(), first.program)
+
+    def test_agent_led_controller_checks_program_with_uncached_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Path(tmp) / "SidePulsePro"
+            device.mkdir()
+            controller = AgentLedController(device_path=device)
+            first = controller.sync_mode(AgentMode.COMPLETED)
+            with patch("sidepulse.led_status.read_status_bytes", return_value=first.program.encode()) as read:
+                second = controller.sync_mode(AgentMode.COMPLETED)
+            self.assertFalse(second.changed)
+            read.assert_called_once_with(device / "LEDS.LED", max_bytes=512)
 
     def test_agent_led_controller_tracks_mode_and_animation_choice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

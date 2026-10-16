@@ -107,6 +107,7 @@ from .device_writer import (
     write_led_program,
 )
 from .keep_awake import KEEPALIVE_FILE_NAME, KeepAwakeController
+from .firmware_status import FirmwareStatus, FirmwareStatusReader, install_update
 from .ipc import HookEventServer, default_event_socket_path, default_latest_state_path
 from .install import (
     install_claude_hooks,
@@ -617,6 +618,14 @@ class StatusBarController(NSObject):
         self.remote_led_program_by_device = {}
         self.last_led_display_kind_by_device = {}
         self.device_errors = {}
+        self.firmware_reader = FirmwareStatusReader()
+        self.firmware_status = {}
+        self.firmware_check_in_flight = False
+        self.firmware_roots = ()
+        self.firmware_checked_at = 0.0
+        self.firmware_upgrade_root = None
+        self.firmware_led_hold_until = 0.0
+        self.firmware_messages = {}
         self.leds_enabled = True
         self.led_sync_in_flight = False
         self.last_led_error = None
@@ -736,6 +745,7 @@ class StatusBarController(NSObject):
         battery_snapshot = self.read_battery_snapshot()
         state = state_for_mode(snapshot.aggregate.mode)
         self.observe_connected_devices()
+        self.check_firmware()
         self.set_status(state)
         self.sync_keep_awake(snapshot.aggregate.mode, battery_snapshot)
         mac_sleep_snapshot = self.read_mac_sleep_snapshot()
@@ -755,6 +765,89 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def forceRefresh_(self, _sender):
         self.refresh_(None)
+
+    def check_firmware(self) -> None:
+        roots = tuple(
+            device.root for device in self.status_bar_devices(remember=False)
+            if device.connected and device.remote_link is None and device.device_id != VIRTUAL_DEVICE_ID
+        )
+        if self.firmware_check_in_flight or self.firmware_upgrade_root is not None:
+            return
+        if roots == self.firmware_roots and time.monotonic() - self.firmware_checked_at < 60:
+            return
+        self.firmware_status = {root: status for root, status in self.firmware_status.items() if root in roots}
+        self.firmware_messages = {root: message for root, message in self.firmware_messages.items() if root in roots}
+        self.firmware_roots = roots
+        self.firmware_check_in_flight = True
+        threading.Thread(target=self.read_firmware_worker, args=(roots,), daemon=True).start()
+
+    def read_firmware_worker(self, roots) -> None:
+        try:
+            statuses = self.firmware_reader.read(roots)
+        except Exception as exc:
+            statuses = {root: FirmwareStatus(error=str(exc)) for root in roots}
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "handleFirmwareStatus:", statuses, False,
+        )
+
+    def handleFirmwareStatus_(self, statuses):
+        self.firmware_status = dict(statuses)
+        self.firmware_messages = {
+            root: message for root, message in self.firmware_messages.items()
+            if root == self.firmware_upgrade_root
+        }
+        self.firmware_check_in_flight = False
+        self.firmware_checked_at = time.monotonic()
+        self.rebuild_firmware_menu()
+
+    def rebuild_firmware_menu(self) -> None:
+        if self.status_item is not None and self.last_snapshot is not None:
+            self.status_item.setMenu_(build_menu(self.last_snapshot, self.current_state, self))
+
+    @objc.IBAction
+    def upgradeFirmware_(self, sender):
+        root = Path(str(sender.representedObject()))
+        status = self.firmware_status.get(root)
+        connected = any(
+            device.connected and device.root == root
+            for device in self.status_bar_devices(remember=False)
+        )
+        if self.firmware_upgrade_root is not None or not connected or status is None or not status.outdated:
+            return
+        self.firmware_upgrade_root = root
+        self.firmware_messages[root] = ("Updating firmware…", "Keep the device connected")
+        self.close_status_menu()
+        self.rebuild_firmware_menu()
+        threading.Thread(target=self.upgrade_firmware_worker, args=(status,), daemon=True).start()
+
+    def upgrade_firmware_worker(self, status) -> None:
+        try:
+            install_update(status.device, status.latest)
+            message = (
+                f"Firmware {status.latest} transferred. Leave the device connected for at least "
+                "10 seconds, then reconnect to confirm installation."
+            )
+            success = True
+        except Exception as exc:
+            message = f"Firmware upgrade failed: {exc}"
+            success = False
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "handleFirmwareUpgrade:", (str(status.device.root), message, success), False,
+        )
+
+    def handleFirmwareUpgrade_(self, payload):
+        root, message, success = payload
+        self.firmware_upgrade_root = None
+        self.firmware_led_hold_until = time.monotonic() + 10
+        title = "Reconnect to confirm firmware update" if success else "Firmware upgrade failed"
+        self.firmware_messages[Path(root)] = (title, message)
+        self.firmware_checked_at = time.monotonic()
+        self.rebuild_firmware_menu()
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Firmware transferred" if success else "Firmware upgrade failed")
+        alert.setInformativeText_(message)
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
 
     @objc.IBAction
     def openDeepLink_(self, sender):
@@ -3006,6 +3099,9 @@ class StatusBarController(NSObject):
 
         self.sync_virtual_status_device(mode, battery_snapshot)
 
+        if self.firmware_upgrade_root is not None or time.monotonic() < self.firmware_led_hold_until:
+            return
+
         if self.lid_closed_led_hold_active:
             if self.should_hold_lid_closed_led_state():
                 return
@@ -3741,6 +3837,32 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
 
     if device.device_id != VIRTUAL_DEVICE_ID and device.remote_link is None:
         submenu.addItem_(NSMenuItem.separatorItem())
+        if device.connected:
+            status = target.firmware_status.get(device.root)
+            version = "checking…" if status is None else "unavailable"
+            if status is not None and status.device is not None:
+                version = status.device.version
+            submenu.addItem_(disabled_menu_item(f"Firmware {version}"))
+            message = target.firmware_messages.get(device.root)
+            if message:
+                entry = disabled_menu_item(message[0])
+                entry.setToolTip_(message[1])
+                submenu.addItem_(entry)
+            elif status is not None and status.error:
+                entry = disabled_menu_item("Firmware update check unavailable")
+                entry.setToolTip_(status.error)
+                submenu.addItem_(entry)
+            elif status is not None and status.outdated:
+                upgrade = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    f"Upgrade to {status.latest}…", "upgradeFirmware:", "",
+                )
+                upgrade.setTarget_(target)
+                upgrade.setRepresentedObject_(str(device.root))
+                upgrade.setEnabled_(target.firmware_upgrade_root is None)
+                submenu.addItem_(upgrade)
+            elif status is not None and status.latest:
+                submenu.addItem_(disabled_menu_item("Firmware up to date" if version != "unknown" else "Firmware version unknown"))
+            submenu.addItem_(NSMenuItem.separatorItem())
         submenu.addItem_(disabled_menu_item(f"Brightness {brightness_percent(device.brightness)}%"))
         submenu.addItem_(build_brightness_slider_item(device, target))
 

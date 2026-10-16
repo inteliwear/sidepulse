@@ -746,6 +746,15 @@ row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
 provider app, Terminal resume, or Claude Code in VS Code.
 
+Open a connected device under **Devices** to see its firmware version. The app
+checks published releases for that model in the background and offers
+**Upgrade to VERSION…** when newer firmware is available. The update is
+downloaded and verified before transfer. Keep the device connected for at least
+10 seconds after transfer, then reconnect it to confirm the installed version.
+Firmware updates require a writable mounted drive. Release checks are cached
+for six hours; failed checks retry after five minutes and show an unavailable
+status instead of claiming the firmware is current.
+
 The dropdown also includes a checked `Connect to Device` item. A checkmark means
 the status-bar app is actively connected to a mounted SidePulse Pro/SidePulse Dot target.
 If both devices are mounted, the status-bar app prefers SidePulse Pro, then

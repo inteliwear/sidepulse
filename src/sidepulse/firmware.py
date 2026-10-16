@@ -124,6 +124,21 @@ def published_versions() -> list[str]:
     return sorted(set(versions), key=version_key, reverse=True)
 
 
+def latest_versions(products: set[str]) -> dict[str, str]:
+    """Find the latest release for each model without downloading OTA images."""
+    remaining = set(products)
+    result = {}
+    for release in published_versions():
+        checksums = parse_checksums(download(f"{DOWNLOAD_ROOT}/v{release}/SHA256SUMS.txt", limit=65536))
+        for product in tuple(remaining):
+            if f"sidepulse-{product}-{release}-ota.zip" in checksums:
+                result[product] = release
+                remaining.remove(product)
+        if not remaining:
+            break
+    return result
+
+
 def parse_checksums(data: bytes) -> dict[str, str]:
     try:
         lines = data.decode("utf-8").splitlines()

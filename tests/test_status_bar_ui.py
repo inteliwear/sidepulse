@@ -72,6 +72,8 @@ from AppKit import (  # noqa: E402
 
 from sidepulse import status_bar as sb  # noqa: E402
 from sidepulse import virtual_device as vd  # noqa: E402
+from sidepulse.firmware import FirmwareDevice  # noqa: E402
+from sidepulse.firmware_status import FirmwareStatus  # noqa: E402
 from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
 from sidepulse.settings import AgentMonitorSettings  # noqa: E402
@@ -351,6 +353,99 @@ class SelectorWiringTests(StatusBarTestCase):
                 "applicationDidFinishLaunching:"
             )
         )
+
+
+class FirmwareMenuTests(StatusBarTestCase):
+    def setUp(self):
+        self.device = make_device()
+        self.firmware_device = FirmwareDevice(self.device.root, "dot", "1.1.0", "SPD-123")
+        self.controller.firmware_status = {}
+        self.controller.firmware_messages = {}
+        self.controller.firmware_upgrade_root = None
+
+    def menu(self, status=None, device=None):
+        if status is not None:
+            self.controller.firmware_status[self.device.root] = status
+        return sb.build_device_menu_item(device or self.device, self.controller).submenu()
+
+    def test_outdated_device_shows_version_and_wired_upgrade(self):
+        menu = self.menu(FirmwareStatus(self.firmware_device, "1.1.14"))
+        titles = [item.title() for item in walk_menu(menu)]
+        self.assertIn("Firmware 1.1.0", titles)
+        upgrade = next(item for item in walk_menu(menu) if item.title() == "Upgrade to 1.1.14…")
+        self.assertEqual(str(upgrade.action()), "upgradeFirmware:")
+        self.assertEqual(upgrade.representedObject(), str(self.device.root))
+        self.assertTrue(upgrade.target().respondsToSelector_(upgrade.action()))
+
+    def test_equal_or_newer_firmware_has_no_upgrade(self):
+        for latest in ("1.1.0", "1.0.5"):
+            menu = self.menu(FirmwareStatus(self.firmware_device, latest))
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn("Firmware up to date", titles)
+            self.assertFalse(any(title.startswith("Upgrade to") for title in titles))
+
+    def test_offline_keeps_installed_version_and_reports_check_failure(self):
+        menu = self.menu(FirmwareStatus(self.firmware_device, error="offline"))
+        items = {item.title(): item for item in walk_menu(menu)}
+        self.assertIn("Firmware 1.1.0", items)
+        self.assertIn("Firmware update check unavailable", items)
+        self.assertEqual(items["Firmware update check unavailable"].toolTip(), "offline")
+        self.assertNotIn("Firmware up to date", items)
+
+    def test_disconnected_and_virtual_devices_have_no_firmware_actions(self):
+        for device in (make_device(connected=False), make_device(device_id=sb.VIRTUAL_DEVICE_ID)):
+            titles = [item.title() for item in walk_menu(self.menu(device=device))]
+            self.assertFalse(any(title.startswith(("Firmware", "Upgrade to")) for title in titles))
+
+    def test_updating_message_hides_duplicate_offer(self):
+        self.controller.firmware_upgrade_root = self.device.root
+        self.controller.firmware_messages[self.device.root] = ("Updating firmware…", "Keep the device connected")
+        titles = [item.title() for item in walk_menu(self.menu(FirmwareStatus(self.firmware_device, "1.1.14")))]
+        self.assertIn("Updating firmware…", titles)
+        self.assertFalse(any(title.startswith("Upgrade to") for title in titles))
+
+    def test_click_checks_connection_and_starts_only_one_worker(self):
+        status = FirmwareStatus(self.firmware_device, "1.1.14")
+        menu = self.menu(status)
+        sender = next(item for item in walk_menu(menu) if item.title().startswith("Upgrade to"))
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[self.device]), patch.object(
+            sb.StatusBarController, "close_status_menu",
+        ), patch.object(sb.StatusBarController, "rebuild_firmware_menu"), patch.object(sb.threading, "Thread") as thread:
+            self.controller.upgradeFirmware_(sender)
+            self.controller.upgradeFirmware_(sender)
+            thread.assert_called_once()
+            self.assertEqual(thread.call_args.kwargs["args"], (status,))
+        self.controller.firmware_upgrade_root = None
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[]), patch.object(sb.threading, "Thread") as thread:
+            self.controller.upgradeFirmware_(sender)
+            thread.assert_not_called()
+
+    def test_worker_reports_transfer_and_failure_on_main_thread(self):
+        status = FirmwareStatus(self.firmware_device, "1.1.14")
+        for error in (None, OSError("read-only drive")):
+            dispatch = Mock()
+            target = SimpleNamespace(performSelectorOnMainThread_withObject_waitUntilDone_=dispatch)
+            with patch.object(sb, "install_update", side_effect=error):
+                sb.StatusBarController.upgrade_firmware_worker(target, status)
+                selector, payload, wait = dispatch.call_args.args
+                self.assertEqual(selector, "handleFirmwareUpgrade:")
+                self.assertEqual(payload[0], str(self.device.root))
+                self.assertEqual(payload[2], error is None)
+                self.assertIn("reconnect" if error is None else "read-only drive", payload[1])
+                self.assertFalse(wait)
+
+    def test_version_checks_run_in_one_background_worker(self):
+        self.controller.firmware_check_in_flight = False
+        self.controller.firmware_roots = ()
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[self.device]), patch.object(
+            sb.threading, "Thread",
+        ) as thread, patch.object(self.controller.firmware_reader, "read") as read:
+            self.controller.check_firmware()
+            self.controller.check_firmware()
+            thread.assert_called_once()
+            self.assertEqual(thread.call_args.kwargs["args"], ((self.device.root,),))
+            read.assert_not_called()
+        self.controller.firmware_check_in_flight = False
 
 
 class MenuBuildTests(StatusBarTestCase):
