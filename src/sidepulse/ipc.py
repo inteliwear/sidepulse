@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -145,11 +146,20 @@ class HookEventServer:
                 self._handle_connection(connection)
 
     def _handle_connection(self, connection: socket.socket) -> None:
+        # Each client gets one second in total, so a slow or stalled client cannot
+        # block the accept loop. At the deadline, parse the bytes that arrived.
+        deadline = time.monotonic() + 1.0
         chunks: list[bytes] = []
         total = 0
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            connection.settimeout(remaining)
             try:
                 chunk = connection.recv(65536)
+            except TimeoutError:
+                break
             except OSError:
                 return
             if not chunk:

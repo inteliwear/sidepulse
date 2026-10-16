@@ -4,6 +4,7 @@ import json
 import os
 import plistlib
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -615,6 +616,41 @@ class AgentMonitorTests(unittest.TestCase):
                     "Stop",
                 )
             finally:
+                server.stop()
+
+    def test_hook_event_server_survives_a_stalled_client(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            received: list[str] = []
+            server = HookEventServer(
+                lambda provider, line: received.append(line["session_id"]),
+                socket_path=Path(tmp) / "events.sock",
+            )
+            stalled = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                server.start()
+                # This client sends a full message and never sends EOF. It then sends a
+                # space every 0.1 s, so a timeout per recv() never expires.
+                stalled.connect(str(server.socket_path))
+                stalled.sendall(b'{"provider":"codex","line":{"session_id":"stalled"}}')
+                sent = send_hook_event(
+                    "codex",
+                    {"session_id": "next"},
+                    socket_path=server.socket_path,
+                    timeout=0.5,
+                )
+
+                deadline = time.time() + 3
+                while sent and len(received) < 2 and time.time() < deadline:
+                    try:
+                        stalled.send(b" ")
+                    except OSError:
+                        pass  # The server closed the connection at its deadline.
+                    time.sleep(0.1)
+
+                self.assertTrue(sent)
+                self.assertEqual(received, ["stalled", "next"])
+            finally:
+                stalled.close()
                 server.stop()
 
     def test_hook_event_reaches_app_when_xdg_state_home_differs(self) -> None:
