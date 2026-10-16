@@ -1093,7 +1093,10 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"UserPromptSubmit", "PreCompact", "PostCompact", "SubagentStart"}:
         return AgentMode.WORKING
     if event in {"Stop", "SubagentStop"}:
-        if _assistant_message_asks_question(raw.get("last_assistant_message")):
+        if _assistant_message_asks_question(
+            raw.get("last_assistant_message"),
+            trust_final_line=event == "Stop",
+        ):
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.COMPLETED
     if event in {"SessionEnd"}:
@@ -1672,7 +1675,18 @@ def _tool_response_looks_failed(response: object) -> bool:
     return False
 
 
-def _assistant_message_asks_question(message: object) -> bool:
+def _assistant_message_asks_question(
+    message: object,
+    *,
+    trust_final_line: bool = False,
+) -> bool:
+    """Decide whether a finished turn is handing control back to the user.
+
+    trust_final_line applies only to a real Stop. On SubagentStop the field
+    carries the prompt handed to the subagent rather than its reply, so a
+    question there says nothing about whether the user is blocked - and a
+    subagent finishing leaves the parent agent still working either way.
+    """
     if not isinstance(message, str):
         return False
 
@@ -1681,13 +1695,45 @@ def _assistant_message_asks_question(message: object) -> bool:
     if not lines:
         return False
 
+    final_content_line = True
     for line in reversed(lines[-8:]):
         if _assistant_status_line(line):
             continue
+        if final_content_line:
+            final_content_line = False
+            if trust_final_line and _assistant_final_line_blocks(line):
+                return True
         if _assistant_line_asks_question(line):
             return True
 
     return False
+
+
+# Phrases an agent uses to close a turn on the user without asking outright.
+# Kept deliberately narrow: a statement only blocks when it says so plainly.
+BLOCKING_STATEMENT_PREFIXES = (
+    "what i need from you",
+    "i need you to",
+    "waiting on you",
+)
+
+
+def _assistant_final_line_blocks(line: str) -> bool:
+    """Judge the closing line of a turn, where an agent states what it needs.
+
+    Questions earlier in a message are often rhetorical, quoted, or recaps, so
+    those stay behind the phrasing allow-list in _assistant_line_asks_question.
+    The final line is different: a question mark there is a direct ask, however
+    the agent worded it. The allow-list was written around one agent's phrasing
+    and silently dropped others - "Do you mean X or Y?" never matched it.
+    """
+    text = line.strip()
+    lowered = text.lower()
+    if _assistant_line_is_casual_closing_question(lowered):
+        return False
+    if text.endswith("?"):
+        return True
+    return lowered.startswith(BLOCKING_STATEMENT_PREFIXES)
 
 
 def _assistant_status_line(line: str) -> bool:
