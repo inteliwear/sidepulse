@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from sidepulse.cli import sidepulse_main
-from sidepulse.ipc import HookEventServer, request_settings_window
+from sidepulse.ipc import UICommandServer, request_settings_window
 from sidepulse.settings import AgentMonitorSettings, load_settings, save_settings
 
 
@@ -67,8 +67,8 @@ class SettingsAccessTests(unittest.TestCase):
             for has_ui in (False, True):
                 open_settings = Mock()
                 on_event = Mock()
-                server = HookEventServer(
-                    on_event, socket_path=path,
+                server = UICommandServer(
+                    socket_path=path,
                     on_open_settings=open_settings if has_ui else None,
                 )
                 try:

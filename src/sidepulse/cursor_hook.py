@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from .hook import routed_hook_payload, write_hook_line, write_hook_status_audit
-from .ipc import send_hook_event
 
 
 EVENT_ALIASES = {
@@ -99,15 +98,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
         try:
-            from .program_adapter import hook_reports
-            from .program_transport import durable_submit
-            reports = hook_reports(provider, line)
-            if reports:
-                durable_submit({'v': 1, 'type': 'program_status_batch', 'reports': reports}, timeout=0.2)
-        except Exception:
-            pass
-        try:
-            send_hook_event(provider, line)
+            from .program_adapter import hook_report
+            from .program_transport import submit_status
+            report = hook_report(provider, line)
+            if report is not None:
+                submit_status(report, timeout=0.2)
         except Exception:
             pass
     except Exception:

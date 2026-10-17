@@ -266,7 +266,7 @@ class CleanInstallTests(unittest.TestCase):
                 )
 
     def test_console_scripts_are_installed(self):
-        expected = ("sidepulse", "agent-monitor", "agent-status-bar", "sidepulse-reply")
+        expected = ("sidepulse", "sidepulse-reply")
         for name in expected:
             with self.subTest(script=name):
                 self.assertTrue(
@@ -274,8 +274,12 @@ class CleanInstallTests(unittest.TestCase):
                     f"console script {name} was not installed",
                 )
 
+    def test_legacy_console_scripts_are_not_installed(self):
+        for name in ("agent-monitor", "agent-status-bar"):
+            self.assertFalse((self.venv / "bin" / name).exists())
+
     def test_console_scripts_run(self):
-        for name in ("sidepulse", "agent-monitor", "sidepulse-reply"):
+        for name in ("sidepulse", "sidepulse-reply"):
             with self.subTest(script=name):
                 result = self.run_script(name, ["--help"])
                 self.assertIn(result.returncode, (0, 2), result.stderr)
@@ -322,7 +326,7 @@ class CleanInstallTests(unittest.TestCase):
         log_path = self.home / "hook.jsonl"
         result = subprocess.run(
             [
-                str(self.venv / "bin" / "agent-monitor"), "hook-log",
+                str(self.venv / "bin" / "sidepulse"), "hook-log",
                 "--provider", "claude", "--log", str(log_path),
             ],
             input=json.dumps({"hook_event_name": "Stop", "session_id": "s1"}),

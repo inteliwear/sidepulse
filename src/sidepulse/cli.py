@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import queue
 import select
@@ -15,14 +16,7 @@ import uuid
 from pathlib import Path
 
 from . import __version__
-from .battery import (
-    BatteryLedController,
-    format_watts,
-    parse_full_watts,
-    read_battery_snapshot,
-    render_battery_snapshot,
-)
-from .collector import AgentMonitor, SourceSpec, default_sources
+from .battery import read_battery_snapshot
 from .device_writer import (
     DEFAULT_FILE_NAME,
     DeviceWriteError,
@@ -44,7 +38,6 @@ from .install import (
     uninstall_grok_hooks,
     uninstall_junie_hooks,
 )
-from .led_status import AgentLedController, LedStatusWrite
 from .links import (
     IOSLink,
     LinkError,
@@ -74,30 +67,17 @@ from .lid_sleep import (
 from .models import AgentStatus
 from .providers import (
     HOOK_PROVIDERS,
-    detect_log_path,
     detect_provider_configs,
     default_log_path,
 )
 from .settings import (
-    LED_DISPLAY_BATTERY,
-    LED_DISPLAY_CUSTOM,
-    LED_DISPLAY_CHOICES,
     load_settings,
     save_settings,
 )
 
 
-def main(argv: list[str] | None = None, *, prog: str = "agent-monitor") -> int:
-    parser = build_parser(prog=prog)
-    args = parser.parse_args(argv)
-    return args.func(args)
-
-
 def sidepulse_main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args[:1] == ["agent-monitor"]:
-        return main(args[1:], prog="sidepulse agent-monitor")
-
     parser = build_sidepulse_parser()
     if not args:
         parser.print_help()
@@ -139,7 +119,6 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     report_input.add_argument("--json", action="store_true", help="Read a complete JSON report from stdin.")
     report_input.add_argument("--osc", nargs="?", const="-", metavar="LINE",
                               help="Decode one OSC 7501 line (terminator optional); omit LINE or use - to read stdin. Requires --scope.")
-    report_input.add_argument("--end", action="store_true", help="End the scope, retaining done/error records.")
     report.set_defaults(func=cmd_report)
 
     version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
@@ -159,10 +138,17 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     from .device_list import add_list_parser
 
     add_list_parser(subparsers)
-    subparsers.add_parser(
-        "agent-monitor",
-        help="Install hooks and show live AI agent statuses.",
-    )
+    status = subparsers.add_parser("status", help="Show the daemon's current session status once.")
+    add_status_args(status)
+    status.set_defaults(func=cmd_status)
+    live = subparsers.add_parser("live", help="Refresh the same daemon status in the terminal.")
+    add_status_args(live)
+    live.add_argument("--interval", type=positive_interval, default=1.0, help="Refresh interval in seconds.")
+    live.add_argument("--once", action="store_true", help="Show one frame and exit.")
+    live.set_defaults(func=cmd_live)
+    doctor = subparsers.add_parser("doctor", help="Show detected agent hook configuration.")
+    doctor.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    doctor.set_defaults(func=cmd_doctor)
     setup = subparsers.add_parser(
         "setup",
         help="Install agent hooks and, on macOS, start the status-bar app.",
@@ -192,6 +178,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not install or start the status-bar app.",
     )
+    setup.add_argument("--uninstall", action="store_true", help="Remove the selected provider hooks.")
     setup.set_defaults(func=cmd_sidepulse_setup)
 
     write = subparsers.add_parser(
@@ -241,10 +228,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     )
     settings.set_defaults(func=cmd_sidepulse_settings)
     add_sidepulse_sdejectguard_parser(subparsers)
-    add_sidepulse_battery_parser(subparsers)
-    # Agent configs written by older installs invoke `sidepulse hook-log`
-    # directly, and `python -m sidepulse` lands here too, so both CLIs must
-    # accept it.
+    # Hook entry point shared by installed scripts and frozen executables.
     add_hook_log_parser(subparsers)
     return parser
 
@@ -353,60 +337,6 @@ def add_sdejectguard_scope_arg(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help="Use system scope when possible, or target one scope explicitly.",
     )
-
-
-def add_sidepulse_battery_parser(subparsers: argparse._SubParsersAction) -> None:
-    battery = subparsers.add_parser(
-        "battery",
-        help="Show or mirror Mac battery state to SidePulse Pro/SidePulse Dot LEDs.",
-    )
-    battery_subparsers = battery.add_subparsers(dest="battery_command", required=True)
-
-    status = battery_subparsers.add_parser("status", help="Show current Mac battery state.")
-    status.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    status.add_argument(
-        "--full-watts",
-        help="Full-speed charger wattage baseline, or 'auto'. Defaults to saved settings.",
-    )
-    status.set_defaults(func=cmd_sidepulse_battery_status)
-
-    leds = battery_subparsers.add_parser("leds", help="Mirror Mac battery state to LEDs.")
-    leds.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds.")
-    leds.add_argument(
-        "--device",
-        type=Path,
-        help="Mounted device folder or LED program file path. Defaults to auto-detection.",
-    )
-    leds.add_argument(
-        "--file-name",
-        default=DEFAULT_FILE_NAME,
-        help=f"Target file name when --device is a folder. Default: {DEFAULT_FILE_NAME}.",
-    )
-    leds.add_argument("--dry-run", action="store_true", help="Show writes without touching the device.")
-    leds.add_argument("--once", action="store_true", help="Write the current battery state once and exit.")
-    leds.add_argument(
-        "--full-watts",
-        help="Full-speed charger wattage baseline, or 'auto'. Defaults to saved settings.",
-    )
-    leds.set_defaults(func=cmd_sidepulse_battery_leds)
-
-    configure = battery_subparsers.add_parser("configure", help="Save battery LED settings.")
-    configure.add_argument("--display", choices=LED_DISPLAY_CHOICES, help="Status-bar LED display source.")
-    configure.add_argument(
-        "--full-watts",
-        help="Full-speed charger wattage baseline, or 'auto' to use laptop defaults.",
-    )
-    configure.add_argument(
-        "--show-on-power-change",
-        choices=("yes", "no"),
-        help="Briefly show battery LEDs when power is plugged/unplugged.",
-    )
-    configure.add_argument(
-        "--power-change-preview-seconds",
-        type=float,
-        help="Seconds to show battery LEDs after plug/unplug.",
-    )
-    configure.set_defaults(func=cmd_sidepulse_battery_configure)
 
 
 def cmd_sidepulse_write(args: argparse.Namespace) -> int:
@@ -846,87 +776,6 @@ def cmd_sidepulse_unlink(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_sidepulse_battery_status(args: argparse.Namespace) -> int:
-    try:
-        snapshot = read_battery_snapshot(full_charge_watts=full_watts_from_args(args))
-    except Exception as exc:
-        print(f"sidepulse battery status: {exc}", file=sys.stderr)
-        return 1
-
-    if args.json:
-        print(json.dumps(snapshot.to_dict(), indent=2))
-    else:
-        print(render_battery_snapshot(snapshot))
-    return 0
-
-
-def cmd_sidepulse_battery_leds(args: argparse.Namespace) -> int:
-    leds = BatteryLedController(
-        device_path=args.device,
-        file_name=args.file_name,
-        dry_run=args.dry_run,
-    )
-    full_watts = full_watts_from_args(args)
-
-    try:
-        while True:
-            snapshot = read_battery_snapshot(full_charge_watts=full_watts)
-            result = leds.sync_snapshot(snapshot)
-            if result.changed or result.error or args.once:
-                print(render_battery_led_result(result, snapshot, dry_run=args.dry_run))
-                sys.stdout.flush()
-
-            if args.once:
-                return 2 if result.error else 0
-
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        return 0
-    except Exception as exc:
-        print(f"sidepulse battery leds: {exc}", file=sys.stderr)
-        return 1
-
-
-def cmd_sidepulse_battery_configure(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    try:
-        if args.display is not None:
-            settings = settings.with_led_display(args.display)
-        if args.full_watts is not None:
-            settings = settings.with_battery_full_charge_watts(parse_full_watts(args.full_watts))
-        if args.show_on_power_change is not None:
-            settings = settings.with_battery_power_change_preview(
-                enabled=args.show_on_power_change == "yes",
-            )
-        if args.power_change_preview_seconds is not None:
-            settings = settings.with_battery_power_change_preview(
-                seconds=args.power_change_preview_seconds,
-            )
-        target = save_settings(settings)
-    except Exception as exc:
-        print(f"sidepulse battery configure: {exc}", file=sys.stderr)
-        return 1
-
-    full_watts = (
-        "auto"
-        if settings.battery_full_charge_watts is None
-        else format_watts(settings.battery_full_charge_watts)
-    )
-    preview = "on" if settings.battery_show_on_power_change else "off"
-    print(f"settings: {target}")
-    print(f"  led display: {settings.led_display}")
-    print(f"  full charge watts: {full_watts}")
-    print(
-        "  power-change preview: "
-        f"{preview} ({settings.battery_power_change_preview_seconds:g}s)"
-    )
-    if settings.led_display == LED_DISPLAY_BATTERY:
-        print("  status bar LEDs will show battery.")
-    elif settings.led_display == LED_DISPLAY_CUSTOM:
-        print("  status bar LEDs will leave devices on manual output.")
-    return 0
-
-
 def cmd_sidepulse_status_bar(args: argparse.Namespace) -> int:
     if args.status_bar_command == "install-sleep-helper":
         return cmd_sidepulse_sleep_helper_install(args)
@@ -1083,6 +932,8 @@ def cmd_sidepulse_sdejectguard_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
+    if getattr(args, "uninstall", False):
+        return cmd_uninstall(args)
     results = install_hook_results(args)
     print_install_results(results, dry_run=args.dry_run)
 
@@ -1184,125 +1035,20 @@ def print_sd_eject_guard_result(result) -> None:
         print(f"  removed legacy helper: {path}")
 
 
-def build_parser(prog: str = "agent-monitor") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=prog,
-        description="Collect and aggregate local AI agent statuses.",
-    )
-    add_version_argument(parser)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
-    version.set_defaults(func=cmd_version)
-
-    doctor = subparsers.add_parser("doctor", help="Show detected agent hook config.")
-    doctor.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    doctor.set_defaults(func=cmd_doctor)
-
-    status = subparsers.add_parser("status", help="Show current aggregate status once.")
-    add_status_args(status)
-    status.set_defaults(func=cmd_status)
-
-    add_live_parser(subparsers, "live", "Show live statuses in the terminal.")
-    add_live_parser(subparsers, "watch", "Alias for live.")
-
-    leds = subparsers.add_parser("leds", help="Mirror aggregate agent status to SidePulse Pro/SidePulse Dot LEDs.")
-    add_status_args(leds, include_json=False)
-    leds.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds.")
-    leds.add_argument(
-        "--device",
-        type=Path,
-        help="Mounted device folder or LED program file path. Defaults to auto-detecting /Volumes.",
-    )
-    leds.add_argument(
-        "--file-name",
-        default=DEFAULT_FILE_NAME,
-        help=f"Target file name when --device is a folder. Default: {DEFAULT_FILE_NAME}.",
-    )
-    leds.add_argument("--dry-run", action="store_true", help="Show writes without touching the device.")
-    leds.add_argument("--once", action="store_true", help="Write the current status once and exit.")
-    leds.set_defaults(func=cmd_leds)
-
-    status_bar = subparsers.add_parser("status-bar", help="Install and start the macOS menu-bar app.")
-    status_bar_mode = status_bar.add_mutually_exclusive_group()
-    status_bar_mode.add_argument(
-        "--foreground",
-        action="store_true",
-        help="Run the menu-bar app in the foreground instead of installing a LaunchAgent.",
-    )
-    status_bar_mode.add_argument(
-        "--uninstall",
-        action="store_true",
-        help="Stop and remove the status-bar LaunchAgent.",
-    )
-    status_bar.add_argument(
-        "--no-start",
-        action="store_true",
-        help="Install the LaunchAgent without starting it immediately.",
-    )
-    status_bar.set_defaults(func=cmd_status_bar)
-
-    install = subparsers.add_parser("install", help="Install supported AI agent monitor hooks.")
-    install.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
-    install.add_argument("--log-dir", type=Path, help="Directory for provider JSONL files.")
-    install.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
-    install.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
-    install.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
-    install.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
-    install.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
-    install.add_argument("--dry-run", action="store_true", help="Show what would change.")
-    install.set_defaults(func=cmd_install)
-
-    uninstall = subparsers.add_parser("uninstall", help="Remove supported AI agent monitor hooks.")
-    uninstall.add_argument("provider", choices=("all", *HOOK_PROVIDERS), nargs="?", default="all")
-    uninstall.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
-    uninstall.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
-    uninstall.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
-    uninstall.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
-    uninstall.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
-    uninstall.add_argument("--dry-run", action="store_true", help="Show what would change.")
-    uninstall.set_defaults(func=cmd_uninstall)
-
-    add_hook_log_parser(subparsers)
-
-    return parser
+def positive_interval(value: str) -> float:
+    try:
+        interval = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("interval must be a positive finite number") from None
+    if not math.isfinite(interval) or interval <= 0:
+        raise argparse.ArgumentTypeError("interval must be a positive finite number")
+    return interval
 
 
-def add_live_parser(
-    subparsers: argparse._SubParsersAction,
-    name: str,
-    help_text: str,
-) -> None:
-    live = subparsers.add_parser(name, help=help_text)
-    add_status_args(live, include_json=False)
-    live.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds.")
-    live.add_argument(
-        "--recent-seconds",
-        type=float,
-        default=3600.0,
-        help="Only show agents updated within this many seconds unless --all is set.",
-    )
-    live.add_argument("--no-color", action="store_true", help="Disable ANSI color output.")
-    live.set_defaults(func=cmd_watch)
-
-
-def add_status_args(parser: argparse.ArgumentParser, include_json: bool = True) -> None:
-    if include_json:
-        parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    parser.add_argument("--all", action="store_true", help="Include stale statuses in table output.")
-    parser.add_argument("--stale-after", type=float, default=3600.0, help="Seconds before a status is stale.")
-    parser.add_argument(
-        "--tool-running-timeout",
-        type=float,
-        default=0.0,
-        help="Seconds before an unmatched Tool Running event is treated as stale; 0 disables this.",
-    )
-    parser.add_argument("--max-lines", type=int, default=5000, help="Recent JSONL lines to scan per source.")
-    parser.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
-    parser.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
-    parser.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
-    parser.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
-    parser.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
+def add_status_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json", action="store_true", help="Print one JSON snapshot per line.")
+    parser.add_argument("--all", action="store_true", help="Include inactive sessions from the daemon.")
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI color output.")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -1322,64 +1068,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    monitor = monitor_from_args(args)
-    snapshot = monitor.snapshot(include_stale=args.all)
-    if args.json:
-        print(json.dumps(snapshot.to_dict(), indent=2))
-    else:
-        print(render_snapshot(snapshot, include_stale=args.all))
-    return 0
+    return _show_daemon_status(args, live=False)
 
 
-def cmd_watch(args: argparse.Namespace) -> int:
-    monitor = monitor_from_args(args)
-    color = should_use_color(args.no_color)
+def cmd_live(args: argparse.Namespace) -> int:
+    return _show_daemon_status(args, live=True)
+
+
+def _show_daemon_status(args: argparse.Namespace, *, live: bool) -> int:
+    from .program_presentation import DaemonMonitor
+
+    monitor = DaemonMonitor()
+    interactive = live and not args.json and not args.once and sys.stdout.isatty()
+    color = not args.json and should_use_color(args.no_color)
     try:
-        if sys.stdout.isatty():
+        if interactive:
             print("\033[?25l", end="")
         while True:
             snapshot = monitor.snapshot(include_stale=args.all)
-            print("\033[2J\033[H", end="")
-            print(
-                render_watch_dashboard(
-                    snapshot,
-                    interval=args.interval,
-                    recent_seconds=args.recent_seconds,
-                    include_stale=args.all,
-                    color=color,
-                )
-            )
+            if interactive:
+                print("\033[2J\033[H", end="")
+            if args.json:
+                print(json.dumps(snapshot.to_dict()))
+            else:
+                print(render_status_view(snapshot, include_stale=args.all, color=color))
             sys.stdout.flush()
+            if not live or args.once:
+                return 0
             time.sleep(args.interval)
+    except (OSError, ValueError) as exc:
+        print(f"sidepulse: {exc}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         return 0
     finally:
-        if sys.stdout.isatty():
-            print("\033[?25h", end="")
-
-
-def cmd_leds(args: argparse.Namespace) -> int:
-    monitor = monitor_from_args(args)
-    leds = AgentLedController(
-        device_path=args.device,
-        file_name=args.file_name,
-        dry_run=args.dry_run,
-    )
-
-    try:
-        while True:
-            snapshot = monitor.snapshot(include_stale=args.all)
-            result = leds.sync_mode(snapshot.aggregate.mode)
-            if result.changed or result.error or args.once:
-                print(render_led_sync_result(result, snapshot, dry_run=args.dry_run))
-                sys.stdout.flush()
-
-            if args.once:
-                return 2 if result.error else 0
-
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        return 0
+        if interactive:
+            print("\033[?25h", end="", flush=True)
 
 
 def cmd_sidepulse_update(args: argparse.Namespace) -> int:
@@ -1434,12 +1158,6 @@ def cmd_status_bar(args: argparse.Namespace) -> int:
         action += " and started"
     print(f"status-bar: {action}")
     print(f"  plist: {result.plist_path}")
-    return 0
-
-
-def cmd_install(args: argparse.Namespace) -> int:
-    results = install_hook_results(args)
-    print_install_results(results, dry_run=args.dry_run)
     return 0
 
 
@@ -1511,27 +1229,6 @@ def cmd_hook_log(args: argparse.Namespace) -> int:
     return hook_log_main(args.provider, args.log, event=getattr(args, "event", None))
 
 
-def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:
-    if any(getattr(args, f"{provider}_log", None) for provider in HOOK_PROVIDERS):
-        fallback_sources = default_sources()
-        sources = []
-        for provider in HOOK_PROVIDERS:
-            explicit = getattr(args, f"{provider}_log", None)
-            if explicit:
-                sources.append(SourceSpec(provider, explicit.expanduser()))
-            else:
-                sources.extend(source for source in fallback_sources if source.provider == provider)
-    else:
-        sources = list(default_sources())
-
-    return AgentMonitor(
-        sources=sources,
-        stale_after_seconds=args.stale_after,
-        tool_running_timeout_seconds=args.tool_running_timeout,
-        max_lines_per_source=args.max_lines,
-    )
-
-
 def install_log_path(provider: str, args: argparse.Namespace) -> Path:
     explicit = getattr(args, f"{provider}_log", None)
     if explicit:
@@ -1547,59 +1244,21 @@ def uninstall_log_path(provider: str, args: argparse.Namespace) -> Path | None:
     return explicit.expanduser() if explicit else None
 
 
-def full_watts_from_args(args: argparse.Namespace) -> float | None:
-    if getattr(args, "full_watts", None) is not None:
-        return parse_full_watts(args.full_watts)
-    return load_settings().battery_full_charge_watts
-
-
-def render_snapshot(snapshot, include_stale: bool = False) -> str:
-    lines = []
-    aggregate = snapshot.aggregate
-    lines.append(
-        f"Aggregate: {aggregate.mode_label} "
-        f"({aggregate.active_count} active, {aggregate.stale_count} stale)"
-    )
-    if aggregate.representative:
-        lines.append(f"Reason: {describe_status(aggregate.representative, snapshot.collected_at)}")
-    lines.append("")
-    lines.append("Sources:")
-    for source in snapshot.sources:
-        marker = "ok" if source.path.exists() else "missing"
-        lines.append(f"  {source.provider}: {source.path} [{marker}]")
-
-    statuses = list(snapshot.statuses)
-    if include_stale:
-        statuses.extend(snapshot.stale_statuses)
-
-    lines.append("")
-    lines.append("Agents:")
-    if not statuses:
-        lines.append("  none")
-    else:
-        for status in statuses:
-            lines.append(f"  {describe_status(status, snapshot.collected_at)}")
-    return "\n".join(lines)
-
-
-def render_watch_dashboard(
+def render_status_view(
     snapshot,
-    interval: float,
-    recent_seconds: float,
     include_stale: bool = False,
     color: bool = False,
 ) -> str:
     width = max(80, shutil.get_terminal_size((120, 24)).columns)
-    statuses = visible_watch_statuses(snapshot, recent_seconds, include_stale)
+    statuses = visible_statuses(snapshot, include_stale)
     aggregate = snapshot.aggregate
     timestamp = snapshot.collected_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    title = colorize("Agent Monitor", "1", color)
+    title = colorize("SidePulse", "1", color)
     aggregate_text = colorize(aggregate.mode_label, mode_color(aggregate.mode), color)
-    recent_text = "all known agents" if include_stale else f"last {format_duration(recent_seconds)}"
 
     lines = [
-        f"{title}  aggregate={aggregate_text}  agents={len(statuses)}  updated={timestamp}",
-        f"refresh={interval:g}s  showing={recent_text}  active={aggregate.active_count}  stale={aggregate.stale_count}  quit=Ctrl-C",
+        f"{title}  aggregate={aggregate_text}  sessions={len(statuses)}  updated={timestamp}",
+        f"active={aggregate.active_count}  inactive={aggregate.stale_count}",
         "=" * min(width, 120),
     ]
 
@@ -1613,15 +1272,9 @@ def render_watch_dashboard(
             )
         )
     else:
-        lines.append("reason: no recent agent status")
+        lines.append("reason: no active session status")
 
-    lines.extend(["", "Sources"])
-    for source in snapshot.sources:
-        ok = source.path.exists()
-        marker = colorize("OK", "32", color) if ok else colorize("MISS", "31", color)
-        lines.append(f"  {marker:<4} {source.provider:<7} {source.path}")
-
-    lines.extend(["", "Recently Active Agents"])
+    lines.extend(["", "Sessions"])
     if not statuses:
         lines.append("  none")
         return "\n".join(lines)
@@ -1651,19 +1304,10 @@ def render_watch_dashboard(
     return "\n".join(lines)
 
 
-def visible_watch_statuses(snapshot, recent_seconds: float, include_stale: bool) -> list[AgentStatus]:
+def visible_statuses(snapshot, include_stale: bool = False) -> list[AgentStatus]:
     statuses = list(snapshot.statuses)
     if include_stale:
         statuses.extend(snapshot.stale_statuses)
-        return sorted(statuses, key=lambda status: (status.priority, -status.updated_at.timestamp()))
-
-    if recent_seconds > 0:
-        statuses = [
-            status
-            for status in statuses
-            if status.age_seconds(snapshot.collected_at) <= recent_seconds
-        ]
-
     return sorted(statuses, key=lambda status: (status.priority, -status.updated_at.timestamp()))
 
 
@@ -1677,42 +1321,6 @@ def describe_status(status: AgentStatus, now) -> str:
         f"{status.display_name}: {status.mode_label}"
         f" event={status.event_name}{origin}{tool} age={age}s{stale}{cwd}"
     )
-
-
-def render_led_sync_result(result: LedStatusWrite, snapshot, dry_run: bool = False) -> str:
-    if result.error:
-        return f"LEDs: {result.label} error={result.error}"
-
-    action = "would write" if dry_run else "wrote"
-    target = result.target if result.target is not None else "-"
-    lines = [
-        (
-            f"LEDs: {action} {result.label} to {target} "
-            f"(aggregate={snapshot.aggregate.mode_label}, active={snapshot.aggregate.active_count})"
-        )
-    ]
-    if dry_run and result.program:
-        lines.append(result.program)
-    return "\n".join(lines)
-
-
-def render_battery_led_result(result, snapshot, dry_run: bool = False) -> str:
-    if result.error:
-        return f"Battery LEDs: error={result.error}"
-
-    action = "would write" if dry_run else "wrote"
-    target = result.target if result.target is not None else "-"
-    lines = [
-        (
-            f"Battery LEDs: {action} {snapshot.percent}% "
-            f"({format_watts(snapshot.adapter_power)}/"
-            f"{format_watts(snapshot.full_charge_watts)}, "
-            f"{snapshot.charge_speed_ratio() * 100:.0f}% speed) to {target}"
-        )
-    ]
-    if dry_run and result.program:
-        lines.append(result.program)
-    return "\n".join(lines)
 
 
 def table_separator(widths: list[int]) -> str:
@@ -1781,7 +1389,7 @@ def mode_color(mode) -> str:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    from .program_transport import durable_submit
+    from .program_transport import submit_status
     from .program_status import StatusError, MAX_BYTES
     try:
         if args.json:
@@ -1801,14 +1409,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             report = {"v": 1, "type": "program_status", "scope": args.scope,
                       "status": parse_osc7501(raw)}
         else:
-            if not args.scope or (not args.state and not args.end):
-                raise StatusError("Supply --scope and --state (or --end)")
+            if not args.scope or not args.state:
+                raise StatusError("Supply --scope and --state")
             status = {key: getattr(args, key) for key in ("state", "app", "id", "title", "msg", "kind", "progress") if getattr(args, key) is not None}
-            report = {"v": 1, "type": "scope_end" if args.end else "program_status", "scope": args.scope}
-            if not args.end:
-                report["status"] = status
+            report = {"v": 1, "type": "program_status", "scope": args.scope, "status": status}
         report.setdefault("request_id", args.request_id or str(uuid.uuid4()))
-        print(json.dumps(durable_submit(report)))
+        print(json.dumps(submit_status(report)))
         return 0
     except (ValueError, OSError) as exc:
         print(f"Could not submit status: {exc}. Check sidepulse service status.", file=sys.stderr)

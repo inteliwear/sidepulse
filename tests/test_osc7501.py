@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from sidepulse.osc7501 import parse_osc7501
-from sidepulse.program_status import ProgramStore, StatusError
+from sidepulse.program_status import ProgramState, StatusError
 
 
 def osc(body, terminator='\x1b\\'):
@@ -95,13 +95,13 @@ def test_byte_limits_and_no_mutation_on_rejection(tmp_path):
         parse_osc7501(exact.replace('ignored=', 'ignored=x'))
 
     from sidepulse.cli import sidepulse_main
-    store = ProgramStore(tmp_path / 'ledger.sqlite3')
+    store = ProgramState()
     try:
-        with patch('sidepulse.program_transport.durable_submit', side_effect=store.submit):
+        with patch('sidepulse.program_transport.submit_status', side_effect=store.submit):
             assert sidepulse_main(['report', '--scope', 'job', '--osc', osc('state=working')]) == 0
-            before = store.local_snapshot()
+            before = store.statuses(), store.pending_events('phone')
             assert sidepulse_main(['report', '--scope', 'job', '--osc', osc('state=done:msg=bad')]) == 1
-            assert store.local_snapshot() == before
+            assert (store.statuses(), store.pending_events('phone')) == before
     finally:
         store.close()
 
@@ -114,22 +114,15 @@ def test_byte_limits_and_no_mutation_on_rejection(tmp_path):
     (['--osc'], osc('state=blocked:kind=permission:msg=SGk=', '') + '\n'),
     (['--osc', '-'], osc('state=blocked:kind=permission:msg=SGk=', '')),
 ])
-def test_cli_argument_and_stdin_durably_submit_without_daemon(tmp_path, flags, input_value):
-    env = dict(os.environ, XDG_STATE_HOME=str(tmp_path / 'state'))
+def test_cli_without_daemon_reports_unavailable_and_creates_no_database(tmp_path, flags, input_value):
+    env = dict(os.environ, HOME=str(tmp_path / 'home'), XDG_STATE_HOME=str(tmp_path / 'state'))
     command = [sys.executable, '-c', 'from sidepulse.cli import sidepulse_main; raise SystemExit(sidepulse_main())']
     args = command + ['report', '--scope', 'job', '--request-id', 'same-request'] + flags
     first = subprocess.run(args, input=input_value, env=env, capture_output=True, text=True)
-    retry = subprocess.run(args, input=input_value, env=env, capture_output=True, text=True)
-    assert first.returncode == retry.returncode == 0, first.stderr + retry.stderr
-    assert json.loads(first.stdout) == json.loads(retry.stdout) == {'ok': True, 'seq': 1, 'revision': 1}
-    with patch.dict(os.environ, env):
-        store = ProgramStore()
-        try:
-            record = store.local_snapshot()['scopes']['job']['records'][0]
-            assert record['status'] == {'state': 'blocked', 'kind': 'permission', 'msg': 'Hi'}
-            assert 'context' not in record and store.aliases() == set()
-        finally:
-            store.close()
+    assert first.returncode == 1
+    assert 'daemon unavailable' in first.stderr.lower()
+    assert not list(tmp_path.rglob('*.sqlite3'))
+
 
 
 @pytest.mark.parametrize('flags', [
@@ -137,11 +130,11 @@ def test_cli_argument_and_stdin_durably_submit_without_daemon(tmp_path, flags, i
     ['--scope', 'job', '--osc', osc('state=working'), '--msg', 'override'],
     ['--scope', 'job', '--osc', osc('state=working'), '--state', 'done'],
     ['--scope', 'job', '--osc', osc('state=working'), '--json'],
-    ['--scope', 'job', '--osc', osc('state=working'), '--end'],
+    ['--scope', 'job', '--end'],
 ])
 def test_cli_rejects_ambiguous_input_before_submission(flags):
     from sidepulse.cli import sidepulse_main
-    with patch('sidepulse.program_transport.durable_submit') as submit:
+    with patch('sidepulse.program_transport.submit_status') as submit:
         try:
             assert sidepulse_main(['report'] + flags) == 1
         except SystemExit as exc:
@@ -152,6 +145,6 @@ def test_cli_rejects_ambiguous_input_before_submission(flags):
 def test_cli_bounds_stdin_and_returns_error_for_invalid_utf8():
     from sidepulse.cli import sidepulse_main
     for value in [osc('state=working:ignored=' + 'x' * 5000), '\ud800']:
-        with patch('sys.stdin', io.StringIO(value)), patch('sidepulse.program_transport.durable_submit') as submit:
+        with patch('sys.stdin', io.StringIO(value)), patch('sidepulse.program_transport.submit_status') as submit:
             assert sidepulse_main(['report', '--scope', 'job', '--osc']) == 1
             submit.assert_not_called()

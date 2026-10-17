@@ -10,7 +10,6 @@ from .providers import candidate_state_dirs, default_state_dir
 
 
 MAX_EVENT_BYTES = 1024 * 1024
-HOOK_EVENT_SEND_TIMEOUT_SECONDS = 0.2
 
 
 def default_event_socket_path() -> Path:
@@ -43,53 +42,13 @@ def request_settings_window(*, socket_path: Path | None = None) -> bool:
     return False
 
 
-def send_hook_event(
-    provider: str,
-    line: dict,
-    *,
-    socket_path: Path | None = None,
-    timeout: float = HOOK_EVENT_SEND_TIMEOUT_SECONDS,
-) -> bool:
-    payload = json.dumps(
-        {"provider": provider, "line": line},
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    if len(payload) > MAX_EVENT_BYTES:
-        return False
-
-    if socket_path is not None:
-        return _send_payload(socket_path.expanduser(), payload, timeout)
-
-    # The caller and the app can resolve different state dirs, so try each candidate.
-    for target in candidate_event_socket_paths():
-        if _send_payload(target.expanduser(), payload, timeout):
-            return True
-    return False
-
-
-def _send_payload(target: Path, payload: bytes, timeout: float) -> bool:
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(timeout)
-    try:
-        client.connect(str(target))
-        client.sendall(payload)
-        return True
-    except OSError:
-        return False
-    finally:
-        client.close()
-
-
-class HookEventServer:
+class UICommandServer:
     def __init__(
         self,
-        on_event: Callable[[str, dict], None],
         *,
         socket_path: Path | None = None,
         on_open_settings: Callable[[], None] | None = None,
     ) -> None:
-        self.on_event = on_event
         self.on_open_settings = on_open_settings
         self.socket_path = (socket_path or default_event_socket_path()).expanduser()
         self.socket: socket.socket | None = None
@@ -174,7 +133,3 @@ class HookEventServer:
                 except OSError:
                     pass
             return
-        provider = message.get("provider")
-        line = message.get("line")
-        if isinstance(provider, str) and isinstance(line, dict):
-            self.on_event(provider, line)

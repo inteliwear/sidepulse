@@ -94,7 +94,6 @@ from .audit import (
     read_status_history_records,
     status_history_record,
 )
-from .collector import LiveAgentMonitor, SourceSpec, default_sources
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -106,11 +105,11 @@ from .device_writer import (
     path_exists,
     target_from_device_path,
     validate_led_text,
-    write_led_program,
 )
 from .keep_awake import KEEPALIVE_FILE_NAME, KeepAwakeController
 from .firmware_status import FirmwareStatus, FirmwareStatusReader, install_update
-from .ipc import HookEventServer, default_event_socket_path, default_latest_state_path
+from .ipc import UICommandServer
+from .program_transport import daemon_command, write_daemon_program as write_led_program
 from .install import (
     install_claude_hooks,
     install_codex_hooks,
@@ -124,13 +123,13 @@ from .install import (
     uninstall_junie_hooks,
 )
 from .led_status import (
+    led_count_for_target,
     AgentLedController,
     apply_brightness,
     brightness_percent,
     normalize_brightness,
     normalized_device_name,
     program_for_agent_mode,
-    write_mode_to_leds,
 )
 from .links import IOSLink, load_ios_links, remove_ios_link, send_ios_program
 from .virtual_device import (
@@ -160,7 +159,6 @@ from .providers import (
     detect_grok_config,
     detect_junie_config,
     default_state_dir,
-    parse_log_line,
 )
 from .sd_eject_guard_launch import (
     SD_EJECT_GUARD_DISPLAY_NAME,
@@ -615,8 +613,6 @@ class StatusBarController(NSObject):
         self.current_state = STATE_IDLE
         self.led_controller = AgentLedController()
         self.battery_led_controller = BatteryLedController()
-        self.agent_led_controllers_by_device = {}
-        self.battery_led_controllers_by_device = {}
         self.remote_led_program_by_device = {}
         self.last_led_display_kind_by_device = {}
         self.device_errors = {}
@@ -815,6 +811,12 @@ class StatusBarController(NSObject):
             for device in self.status_bar_devices(remember=False)
         )
         if self.firmware_upgrade_root is not None or not connected or status is None or not status.outdated:
+            return
+        try:
+            daemon_command({'type': 'output_control', 'pause_seconds': 300}, timeout=1)
+        except Exception as exc:
+            self.firmware_messages[root] = ("Could not pause LED output", str(exc))
+            self.rebuild_firmware_menu()
             return
         self.firmware_upgrade_root = root
         self.firmware_messages[root] = ("Updating firmware…", "Keep the device connected")
@@ -1337,29 +1339,16 @@ class StatusBarController(NSObject):
                     status, frame if animated else None, dark_mode=dark_mode,
                 ))
 
-    def build_monitor(self) -> LiveAgentMonitor:
-        socket_path = default_event_socket_path()
-        from .program_status import ProgramStore
-        from .program_presentation import ProgramMonitor
-        self.program_store = getattr(self, "program_store", None) or ProgramStore()
-        monitor = LiveAgentMonitor(
-            sources=(SourceSpec("event-bus", socket_path),),
-            recovery_sources=default_sources(self.settings),
-            stale_after_seconds=self.settings.idle_timeout_seconds,
-            latest_state_path=default_latest_state_path(),
-        )
-
-        return ProgramMonitor(monitor, self.program_store)
+    def build_monitor(self):
+        from .program_presentation import DaemonMonitor
+        return DaemonMonitor()
 
     def reload_monitor(self) -> None:
         self.monitor = self.build_monitor()
 
     def start_event_server(self) -> None:
         self.stop_event_server()
-        self.event_server = HookEventServer(
-            self.handle_hook_event_message,
-            on_open_settings=self.schedule_open_settings,
-        )
+        self.event_server = UICommandServer(on_open_settings=self.schedule_open_settings)
         try:
             socket_path = self.event_server.start()
             log_status_bar(f"event_server listening={socket_path}")
@@ -1376,18 +1365,6 @@ class StatusBarController(NSObject):
         self.performSelectorOnMainThread_withObject_waitUntilDone_(
             "openSettings:", None, False,
         )
-
-    def handle_hook_event_message(self, provider: str, line: dict) -> None:
-        try:
-            record = parse_log_line(
-                provider,
-                json.dumps(line, separators=(",", ":"), ensure_ascii=False),
-            )
-            if record is not None:
-                self.monitor.ingest_record(record)
-                self.schedule_event_refresh()
-        except Exception as exc:
-            log_status_bar(f"event_server ingest error: {exc}")
 
     def schedule_event_refresh(self) -> None:
         if self.event_refresh_pending:
@@ -2543,16 +2520,21 @@ class StatusBarController(NSObject):
     ) -> None:
         for device in devices:
             try:
-                result = write_mode_to_leds(
+                program = program_for_agent_mode(
                     mode,
-                    device_path=device.target,
+                    led_count=led_count_for_target(device.target),
                     brightness=device.brightness,
                     animation_style=animation_style,
                     custom_program=custom_program,
                 )
+                target = write_led_program(
+                    program,
+                    device_path=device.target,
+                    hold_seconds=AGENT_ANIMATION_DEVICE_PREVIEW_SECONDS,
+                )
                 log_status_bar(
                     f"animation device preview={MODE_LABELS[mode]} "
-                    f"device={device.name} target={result.target}"
+                    f"device={device.name} target={target}"
                 )
             except Exception as exc:
                 log_status_bar(
@@ -2692,6 +2674,7 @@ class StatusBarController(NSObject):
                 target = write_led_program(
                     scaled_program,
                     device_path=device.target,
+                    hold_seconds=AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS,
                 )
                 log_status_bar(
                     f"custom animation preview device={device.name} target={target}"
@@ -2923,43 +2906,15 @@ class StatusBarController(NSObject):
     def reset_led_controllers_for_display_change(self) -> None:
         self.led_controller.reset()
         self.battery_led_controller.reset()
-        for controller in self.agent_led_controllers_by_device.values():
-            controller.reset()
-        for controller in self.battery_led_controllers_by_device.values():
-            controller.reset()
         self.remote_led_program_by_device.clear()
         self.last_led_display_kind_by_device.clear()
         self.last_led_error = None
 
     def reset_led_controllers_for_device(self, device_id: str) -> None:
-        agent_controller = self.agent_led_controllers_by_device.get(device_id)
-        if agent_controller is not None:
-            agent_controller.reset()
-        battery_controller = self.battery_led_controllers_by_device.get(device_id)
-        if battery_controller is not None:
-            battery_controller.reset()
         self.remote_led_program_by_device.pop(device_id, None)
         self.last_led_display_kind_by_device.pop(device_id, None)
         self.device_errors.pop(device_id, None)
         self.last_led_error = None
-
-    def agent_controller_for_device(self, device: StatusBarDevice) -> AgentLedController:
-        controller = self.agent_led_controllers_by_device.get(device.device_id)
-        if controller is None:
-            controller = AgentLedController(device_path=device.target)
-            self.agent_led_controllers_by_device[device.device_id] = controller
-        controller.device_path = device.target
-        controller.brightness = device.brightness
-        return controller
-
-    def battery_controller_for_device(self, device: StatusBarDevice) -> BatteryLedController:
-        controller = self.battery_led_controllers_by_device.get(device.device_id)
-        if controller is None:
-            controller = BatteryLedController(device_path=device.target)
-            self.battery_led_controllers_by_device[device.device_id] = controller
-        controller.device_path = device.target
-        controller.brightness = device.brightness
-        return controller
 
     def status_bar_devices(self, *, remember: bool = True) -> list[StatusBarDevice]:
         entries_by_id: dict[str, StatusBarDevice] = {}
@@ -3117,22 +3072,8 @@ class StatusBarController(NSObject):
         battery_snapshot: BatterySnapshot | None,
         display_kind: str,
     ) -> None:
-        if not self.leds_enabled:
-            return
-
-        self.sync_virtual_status_device(mode, battery_snapshot)
-
-        if self.firmware_upgrade_root is not None or time.monotonic() < self.firmware_led_hold_until:
-            return
-
-        if self.lid_closed_led_hold_active:
-            if self.should_hold_lid_closed_led_state():
-                return
-            self.lid_closed_led_hold_active = False
-            log_status_bar("lid_led_state=restoring reason=sleep_conditions_changed")
-
-        if time.monotonic() < self.led_animation_until_monotonic:
-            return
+        if self.leds_enabled:
+            self.sync_virtual_status_device(mode, battery_snapshot)
 
         if self.led_sync_in_flight:
             return
@@ -3207,70 +3148,24 @@ class StatusBarController(NSObject):
         battery_snapshot: BatterySnapshot | None,
         display_kind: str,
     ) -> None:
-        devices = [
-            device for device in self.status_bar_devices()
-            if device.connected and device.device_id != VIRTUAL_DEVICE_ID
-        ]
-        if not devices:
-            self.ensure_device_selection()
-            devices = [
-                device
-                for device in self.status_bar_devices(remember=False)
-                if device.connected and device.device_id != VIRTUAL_DEVICE_ID
-            ]
-        if not devices:
-            self.last_led_error = None
-            return
-
-        active_errors: dict[str, str] = {}
-        for device in devices:
-            if device.remote_link is not None:
-                # Session forwarding belongs to ProgramRelay; the phone owns its LEDs.
-                self.remote_led_program_by_device.pop(device.device_id, None)
-                self.device_errors.pop(device.device_id, None)
-                continue
-
-            device_display_kind = self.active_led_display_kind_for_device(
-                device,
-                battery_snapshot,
-            )
-            if self.last_led_display_kind_by_device.get(device.device_id) != device_display_kind:
-                self.reset_led_controllers_for_device(device.device_id)
-                self.last_led_display_kind_by_device[device.device_id] = device_display_kind
-
-            if device_display_kind == LED_DISPLAY_CUSTOM:
-                self.device_errors.pop(device.device_id, None)
-                continue
-
-            if device_display_kind == LED_DISPLAY_BATTERY and battery_snapshot is not None:
-                result = self.battery_controller_for_device(device).sync_snapshot(battery_snapshot)
-                label = (
-                    f"{device.name} Battery {battery_snapshot.percent}% "
-                    f"{format_watts(battery_snapshot.adapter_power)}"
-                )
+        now = time.monotonic()
+        pause = max(0.0, getattr(self, 'firmware_led_hold_until', 0.0) - now,
+                    getattr(self, 'led_animation_until_monotonic', 0.0) - now)
+        if getattr(self, 'firmware_upgrade_root', None) is not None:
+            pause = max(pause, 5.0)
+        if getattr(self, 'lid_closed_led_hold_active', False):
+            if self.should_hold_lid_closed_led_state():
+                pause = max(pause, 5.0)
             else:
-                animation = self.settings.agent_animation(mode)
-                result = self.agent_controller_for_device(device).sync_mode(
-                    mode,
-                    animation_style=animation.style,
-                    custom_program=animation.custom_program,
-                )
-                label = f"{device.name} {result.label}"
-
-            if result.error:
-                active_errors[device.device_id] = result.error
-                previous_error = self.device_errors.get(device.device_id)
-                if result.error != previous_error:
-                    log_status_bar(f"led error {device.name}: {result.error}")
-                continue
-
-            self.device_errors.pop(device.device_id, None)
-            if result.changed:
-                target = result.target if result.target is not None else "-"
-                log_status_bar(f"leds={label} target={target}")
-
-        self.device_errors.update(active_errors)
-        self.last_led_error = next(iter(self.device_errors.values()), None)
+                self.lid_closed_led_hold_active = False
+        try:
+            reply = daemon_command({'type': 'output_control', 'enabled': getattr(self, 'leds_enabled', True),
+                'pause_seconds': min(pause, 3600),
+                'battery_preview_seconds': min(max(0.0, getattr(self, 'battery_preview_until', 0.0) - now), 3600)})
+            self.device_errors = reply.get('output_errors', {})
+            self.last_led_error = next(iter(self.device_errors.values()), None)
+        except Exception as exc:
+            self.last_led_error = str(exc)
 
     def play_lid_animation(
         self,
@@ -3358,7 +3253,8 @@ class StatusBarController(NSObject):
         for device in devices:
             try:
                 program = program_for_lid_animation(animation, brightness=device.brightness)
-                target = write_led_program(program, device_path=device.target)
+                target = write_led_program(program, device_path=device.target,
+                    hold_seconds=animation.duration_seconds + LID_ANIMATION_RESTORE_FUDGE_SECONDS)
                 log_status_bar(f"animation={label} device={device.name} target={target}")
             except Exception as exc:
                 log_status_bar(f"animation error {label} {device.name}: {exc}")
@@ -3384,6 +3280,10 @@ class StatusBarController(NSObject):
 
     def disconnect_device(self) -> None:
         self.leds_enabled = False
+        try:
+            daemon_command({'type': 'output_control', 'enabled': False})
+        except Exception as exc:
+            log_status_bar(f"device disconnect error: {exc}")
         targets = self.current_led_targets()
         if not targets:
             targets = [
@@ -3396,8 +3296,9 @@ class StatusBarController(NSObject):
             ]
         for target in targets:
             try:
-                result = write_mode_to_leds(AgentMode.IDLE_READY, device_path=target)
-                log_status_bar(f"device disconnected target={result.target}")
+                program = program_for_agent_mode(AgentMode.IDLE_READY, led_count=led_count_for_target(target))
+                result = write_led_program(program, device_path=target)
+                log_status_bar(f"device disconnected target={result}")
             except Exception as exc:
                 log_status_bar(f"device disconnect error: {exc}")
         self.reset_led_controllers_for_display_change()
@@ -3425,8 +3326,6 @@ class StatusBarController(NSObject):
         targets: list[Path] = []
         seen: set[str] = set()
         for controller in (
-            *self.battery_led_controllers_by_device.values(),
-            *self.agent_led_controllers_by_device.values(),
             self.battery_led_controller,
             self.led_controller,
         ):
@@ -3787,9 +3686,9 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
     submenu = NSMenu.alloc().init()
 
     if device.remote_link is not None:
-        capable = device.remote_link.status_protocol == 1
+        capable = device.remote_link.status_protocol == 2
         sync = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Sync session states", "togglePhoneSessionSync:" if capable else None, "",
+            "Forward sessions", "togglePhoneSessionSync:" if capable else None, "",
         )
         sync.setTarget_(target)
         sync.setRepresentedObject_(device.remote_link.link_id)

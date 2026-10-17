@@ -8,7 +8,7 @@ import argparse
 import time
 
 from sidepulse.links import load_phone_links
-from sidepulse.program_transport import publish_snapshot
+from sidepulse.program_transport import publish_update
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
     parser.add_argument('state', nargs='?', default='working', choices=['working', 'blocked', 'error', 'done', 'idle', 'clear'])
     parser.add_argument('--to', help='Linked iPhone name or ID when more than one supports sessions.')
     args = parser.parse_args()
-    phones = [p for p in load_phone_links() if p.platform == 'ios' and p.status_protocol == 1
+    phones = [p for p in load_phone_links() if p.platform == 'ios' and p.status_protocol == 2
               and (not args.to or args.to in (p.name, p.link_id))]
     if len(phones) != 1:
         parser.error('Choose one session-capable iPhone with --to, or refresh its link using sidepulse link.')
@@ -25,11 +25,11 @@ def main():
               'msg': 'Test session sent from your Mac.'}
     if args.state == 'working': status['progress'] = 35
     if args.state == 'blocked': status['kind'] = 'permission'
-    scopes = {} if args.state == 'clear' else {'phone-test': {'seq': now, 'records': [{'status': status, 'updated_at': now}]}}
-    snapshot = {'v': 1, 'type': 'program_status_snapshot', 'publisher': 'sidepulse-phone-test', 'revision': now, 'scopes': scopes}
+    snapshot = {'v': 1, 'type': 'program_status', 'publisher': 'sidepulse-phone-test',
+                'scope': 'phone-test', 'seq': now, 'updated_at': now, 'status': status}
     phone = phones[0]
     try:
-        publish_snapshot(phone.server, 'apns_' + phone.token, snapshot, phone=True)
+        publish_update(phone.server, 'apns_' + phone.token, snapshot, phone=True)
     except Exception:
         parser.exit(1, 'Bridge did not acknowledge the test. Check the phone link and connection.\n')
     print(f'Bridge accepted {args.state} test for {phone.name}. Open SidePulse → Sessions to verify receipt.')

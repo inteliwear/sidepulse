@@ -8,7 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from sidepulse.cli import sidepulse_main
 from sidepulse.device_writer import DeviceCandidate
@@ -20,10 +20,6 @@ from sidepulse.relay import (
     ensure_receiver_config,
     load_relay_config,
     new_relay_channel,
-    parse_relay_event,
-    publish_relay_event,
-    relay_socket_path_for_state_dir,
-    relay_event_message,
     relay_link_command,
 )
 from sidepulse.service import SidePulseService
@@ -78,99 +74,48 @@ class RelayConfigTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(config.outbound_channel, "a" * 22)
 
-    def test_long_state_paths_use_a_short_socket_path(self) -> None:
-        path = relay_socket_path_for_state_dir(Path("/tmp") / ("very-long/" * 20))
-        self.assertEqual(path.parent, Path("/tmp"))
-        self.assertLessEqual(len(str(path).encode("utf-8")), 96)
-
-
 class RelayTransportTests(unittest.TestCase):
-    def test_event_message_round_trips(self) -> None:
-        line = {"hook_event_name": "Stop", "session_id": "vm-session"}
-        message = relay_event_message("claude", line)
-        parsed = parse_relay_event(json.dumps(message))
-
-        self.assertIsNotNone(parsed)
-        provider, parsed_line, event_id = parsed
-        self.assertEqual(provider, "claude")
-        self.assertEqual(parsed_line["hook_event_name"], "Stop")
-        self.assertIn("sidepulse_relay_source", parsed_line)
-        self.assertTrue(parsed_line["agent_id"].startswith("relay:"))
-        self.assertTrue(event_id)
-
-    def test_unknown_provider_is_rejected(self) -> None:
-        message = relay_event_message("claude", {})
-        message["provider"] = "../../escape"
-        self.assertIsNone(parse_relay_event(json.dumps(message)))
-
-    def test_publish_posts_to_receiver_channel(self) -> None:
-        response = MagicMock()
-        response.__enter__.return_value = response
-        config = RelayConfig(
-            server="https://bridge.sidepulse.io",
-            outbound_channel="a" * 22,
-        )
-        with patch("sidepulse.relay.urllib.request.urlopen", return_value=response) as open_url:
-            publish_relay_event(config, "codex", {"event": {"type": "task_complete"}})
-
-        request = open_url.call_args.args[0]
-        self.assertEqual(
-            request.full_url,
-            f"https://bridge.sidepulse.io/api/leds/{'a' * 22}",
-        )
-        self.assertEqual(json.loads(request.data)["type"], "agent_event")
-
-    def test_hook_notifies_ui_and_background_service_sockets(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            relay_socket = Path(tmp) / "relay.sock"
-            log = Path(tmp) / "claude.jsonl"
-            with (
-                patch("sys.stdin", io.StringIO('{"hook_event_name":"Stop"}')),
-                patch("sidepulse.hook.hook_event_socket_disabled", return_value=False),
-                patch("sidepulse.program_transport.durable_submit", side_effect=OSError("unavailable")),
-                patch("sidepulse.hook.send_hook_event", return_value=True) as send,
-                patch(
-                    "sidepulse.relay.candidate_relay_event_socket_paths",
-                    return_value=(relay_socket,),
-                ),
-            ):
-                result = hook_log_main("claude", log)
-
-        self.assertEqual(result, 0)
-        self.assertEqual(send.call_count, 2)
-        self.assertEqual(send.call_args_list[1].kwargs["socket_path"], relay_socket)
+    def test_network_failure_retries_until_stopped(self):
+        from sidepulse.relay import listen_for_status_updates
+        stop = MagicMock(); stop.is_set.side_effect = [False, True]
+        with patch('urllib.request.urlopen', side_effect=OSError('offline')):
+            listen_for_status_updates(RelayConfig('https://example.test',receiver_channel='sample-channel'), stop, Mock())
+        stop.wait.assert_called_once_with(1.0)
 
 
 class SidePulseServiceTests(unittest.TestCase):
-    def test_local_hook_is_published_when_source_is_linked(self) -> None:
+    def setUp(self):
+        from sidepulse.program_status import ProgramState
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = ProgramState()
+        self.addCleanup(self.store.close)
+        replacement = patch('sidepulse.program_status.ProgramState', return_value=self.store)
+        replacement.start(); self.addCleanup(replacement.stop)
+
+    def test_service_has_no_raw_hook_listener_or_delivery(self):
         service = SidePulseService()
-        config = RelayConfig(
-            server="https://bridge.sidepulse.io",
-            outbound_channel="a" * 22,
-        )
-        line = {"hook_event_name": "Stop"}
-        with (
-            patch.object(service, "ingest_event"),
-            patch("sidepulse.service.load_relay_config", return_value=config),
-            patch("sidepulse.service.publish_relay_event") as publish,
-        ):
-            service.handle_local_event("claude", line)
+        self.assertFalse(hasattr(service, 'local_server'))
+        self.assertFalse(hasattr(service, 'handle_local_event'))
+        self.assertFalse(hasattr(service, 'handle_remote_event'))
 
-        publish.assert_called_once_with(config, "claude", line)
-
-    def test_remote_event_is_logged_forwarded_and_deduplicated(self) -> None:
+    def test_dead_remote_listener_is_restarted(self):
         service = SidePulseService()
-        line = {"hook_event_name": "Stop"}
-        with (
-            patch("sidepulse.service.detect_log_path", return_value=Path("/tmp/claude.jsonl")),
-            patch("sidepulse.service.write_hook_line") as write,
-            patch("sidepulse.service.send_hook_event") as forward,
-        ):
-            service.handle_remote_event("claude", line, "event-1")
-            service.handle_remote_event("claude", line, "event-1")
+        config = RelayConfig('https://example.test',receiver_channel='sample-channel')
+        service.receiver_signature = (config.server,config.receiver_channel)
+        service.receiver_thread = SimpleNamespace(is_alive=lambda:False)
+        with patch('sidepulse.service.threading.Thread') as thread:
+            service.sync_receiver(config)
+        thread.return_value.start.assert_called_once()
 
-        write.assert_called_once_with(Path("/tmp/claude.jsonl"), line)
-        forward.assert_called_once_with("claude", line)
+    def test_live_remote_listener_is_not_restarted(self):
+        service = SidePulseService()
+        config = RelayConfig('https://example.test',receiver_channel='sample-channel')
+        service.receiver_signature = (config.server,config.receiver_channel)
+        service.receiver_thread = SimpleNamespace(is_alive=lambda:True)
+        with patch('sidepulse.service.threading.Thread') as thread:
+            service.sync_receiver(config)
+        thread.assert_not_called()
 
     def test_manual_linked_phone_is_not_updated(self) -> None:
         service = SidePulseService()
@@ -184,7 +129,6 @@ class SidePulseServiceTests(unittest.TestCase):
         settings.battery_full_charge_watts = None
         settings.display_for_device.return_value = "custom"
         with (
-            patch("sidepulse.service.status_bar_monitor_available", return_value=False),
             patch("sidepulse.service.load_settings", return_value=settings),
             patch("sidepulse.service.read_battery_snapshot", side_effect=OSError),
             patch("sidepulse.service.discover_devices", return_value=[]),
@@ -206,8 +150,7 @@ class SidePulseServiceTests(unittest.TestCase):
                 )
             )
             with (
-                patch("sidepulse.service.status_bar_monitor_available", return_value=False),
-                patch("sidepulse.service.load_settings", return_value=AgentMonitorSettings()),
+                    patch("sidepulse.service.load_settings", return_value=AgentMonitorSettings()),
                 patch("sidepulse.service.read_battery_snapshot", side_effect=OSError),
                 patch(
                     "sidepulse.service.discover_devices",
@@ -219,15 +162,11 @@ class SidePulseServiceTests(unittest.TestCase):
             self.assertTrue(target.exists())
             self.assertIn("#", target.read_text(encoding="utf-8"))
 
-    def test_status_bar_process_remains_output_owner_when_running(self) -> None:
+    def test_daemon_keeps_output_ownership_when_ui_is_running(self):
         service = SidePulseService()
-        with (
-            patch("sidepulse.service.status_bar_monitor_available", return_value=True),
-            patch.object(service.monitor, "snapshot") as snapshot,
-        ):
+        with patch('sidepulse.service.discover_devices',return_value=[]), patch.object(service.monitor,'snapshot',wraps=service.monitor.snapshot) as snapshot, patch('sidepulse.service.read_battery_snapshot',side_effect=OSError):
             service.sync_outputs()
-
-        snapshot.assert_not_called()
+        snapshot.assert_called_once()
 
 
 class ServiceLaunchTests(unittest.TestCase):

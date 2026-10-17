@@ -4,28 +4,28 @@ import hashlib
 import json
 import uuid
 import socket
-from .program_status import validate_status
+from .program_status import CONTEXT_LIMITS, validate_status
 
 
 def clean_text(value: str, limit: int) -> str:
     value = ''.join(' ' if ord(c) < 32 or 127 <= ord(c) <= 159 else c for c in value)
-    return value.encode('utf-8')[:limit].decode('utf-8', errors='ignore')
+    return value.encode('utf-8', errors='replace')[:limit].decode('utf-8', errors='ignore')
 
 
 def hook_report(provider: str, line: dict) -> dict | None:
-    from .collector import StatusMetadata, status_from_event, title_from_event
+    from .collector import StatusMetadata, status_from_event, title_from_event, codex_session_title
     from .providers import parse_log_line
     record = parse_log_line(provider, json.dumps(line, ensure_ascii=False))
     if record is None:
         return None
     scope = provider + '-' + hashlib.sha256((record.session_id or record.status_key).encode()).hexdigest()[:32]
     base = {'v': 1, 'type': 'program_status', 'scope': scope,
-            'request_id': str(uuid.uuid4()), 'legacy_key': record.status_key}
+            'request_id': str(uuid.uuid4())}
     interpreted = status_from_event(record, StatusMetadata(cwd=record.cwd, title=title_from_event(record)))
     if interpreted is None:
         from .collector import should_ignore_record
         if should_ignore_record(record, StatusMetadata(cwd=record.cwd, title=title_from_event(record))):
-            return {**base, 'type': 'scope_reset', '_hook_suppressed': True}
+            return {**base, 'status': {'state': 'clear'}, '_hook_suppressed': True}
         return None
     mode = interpreted.mode.value
     states = {'idle_ready': 'idle', 'working': 'working', 'tool_running': 'working',
@@ -45,15 +45,21 @@ def hook_report(provider: str, line: dict) -> dict | None:
     title = title_from_event(record)
     if title:
         status['title'] = clean_text(title, 192)
-    # Presentation metadata is outside OSC fields, as in legacy relay events.
+    # Presentation metadata travels as JSON context outside the OSC status fields.
     context = {key: value for key, value in {
-        'provider': provider, 'legacy_key': record.status_key,
+        'provider': provider,
         'session_id': record.session_id, 'agent_id': record.agent_id,
         'cwd': record.cwd, 'origin': interpreted.origin,
         'display_name': interpreted.display_name, 'tool_name': record.tool_name,
         'mode': interpreted.mode.value, 'event_name': record.event_name,
         'source_name': socket.gethostname(), 'title': title,
+        'title_source': 'session' if provider == 'codex' and title and title == codex_session_title(record.session_id) else 'prompt',
     }.items() if value is not None}
+    # Clean display text at the producer boundary. Identity and session-opening
+    # paths stay exact and are still checked strictly by the receiver.
+    for field in ('origin', 'display_name', 'tool_name', 'source_name', 'title'):
+        if field in context:
+            context[field] = clean_text(context[field], CONTEXT_LIMITS[field])
     result = {**base, 'status': validate_status(status), 'context': context}
     if record.event_name == 'Notification':
         result['unless_state'] = 'done'
@@ -66,25 +72,3 @@ def wait_id(record, *, use_invocation: bool = True) -> str:
     identity = ['tool_use_id', invocation] if isinstance(invocation, str) and invocation else [record.tool_name, record.raw.get('tool_input')]
     signature = json.dumps(identity, sort_keys=True, ensure_ascii=False)
     return prefix + 'permissions/' + hashlib.sha256(signature.encode()).hexdigest()[:32]
-
-
-def hook_reports(provider: str, line: dict) -> list[dict]:
-    from .providers import parse_log_line
-    report = hook_report(provider, line)
-    if report is None:
-        return []
-    record = parse_log_line(provider, json.dumps(line, ensure_ascii=False))
-    reports = [report]
-    if report.get('_hook_suppressed'):
-        return reports
-    if record.event_name in {'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'}:
-        # Some providers omit invocation identity on PermissionRequest only.
-        # Also clear their fallback record, without clearing other identified calls.
-        for record_id in dict.fromkeys([wait_id(record), wait_id(record, use_invocation=False)]):
-            reports.append({**report, 'request_id': str(uuid.uuid4()), 'status': {'state': 'clear', 'id': record_id}})
-    elif record.event_name == 'SessionEnd':
-        reports.append({**report, 'request_id': str(uuid.uuid4()), 'type': 'scope_end'})
-    elif record.event_name in {'Stop', 'StopFailure', 'Interrupt', 'UserPromptSubmit', 'SubagentStop'}:
-        prefix = 'agents/' + hashlib.sha256(record.agent_id.encode()).hexdigest()[:32] + '/' if record.agent_id else ''
-        reports.append({**report, 'request_id': str(uuid.uuid4()), 'status': {'state': 'clear', 'id': prefix + 'permissions'}})
-    return reports

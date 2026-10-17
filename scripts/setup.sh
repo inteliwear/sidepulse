@@ -122,7 +122,12 @@ fi
 
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/sidepulse" "$BIN_DIR/sidepulse"
-ln -sf "$VENV/bin/agent-monitor" "$BIN_DIR/agent-monitor"
+# Remove only aliases owned by this installation, including broken symlinks.
+for legacy in agent-monitor agent-status-bar; do
+    if [ -L "$BIN_DIR/$legacy" ] && [ "$(readlink "$BIN_DIR/$legacy")" = "$VENV/bin/$legacy" ]; then
+        rm "$BIN_DIR/$legacy"
+    fi
+done
 
 "$VENV/bin/sidepulse" setup
 SETUP_COMPLETE=1

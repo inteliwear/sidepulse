@@ -9,7 +9,6 @@ from typing import Any
 
 from .audit import append_status_audit_record
 from .collector import StatusMetadata, read_recent_lines, status_from_event, title_from_event
-from .ipc import send_hook_event
 from .origin import annotate_payload_with_origin
 from .providers import detect_log_path, infer_provider_from_payload, parse_log_line
 
@@ -227,24 +226,11 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
             pass
         try:
             if not hook_event_socket_disabled():
-                from .program_adapter import hook_reports
-                from .program_transport import durable_submit
-                reports = hook_reports(actual_provider, line)
-                if reports:
-                    try:
-                        durable_submit({'v': 1, 'type': 'program_status_batch', 'reports': reports}, timeout=0.2)
-                    except Exception:
-                        pass  # Keep existing UI and relay delivery available on failure.
-                send_hook_event(actual_provider, line)
-                from .relay import candidate_relay_event_socket_paths
-
-                for relay_socket in candidate_relay_event_socket_paths():
-                    if send_hook_event(
-                        actual_provider,
-                        line,
-                        socket_path=relay_socket,
-                    ):
-                        break
+                from .program_adapter import hook_report
+                from .program_transport import submit_status
+                report = hook_report(actual_provider, line)
+                if report is not None:
+                    submit_status(report, timeout=0.2)
         except Exception:
             pass
     except Exception:

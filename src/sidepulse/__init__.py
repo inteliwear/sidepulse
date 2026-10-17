@@ -9,10 +9,9 @@ from .battery import (
 from .collector import AgentMonitor, LiveAgentMonitor, MonitorSnapshot, SourceSpec
 from .device_writer import DeviceCandidate, DeviceWriteError, discover_devices, write_led_program
 from .ipc import (
-    HookEventServer,
+    UICommandServer,
     default_event_socket_path,
     default_latest_state_path,
-    send_hook_event,
 )
 from .led_status import (
     AgentLedController,
@@ -47,7 +46,7 @@ __all__ = [
     "AgentMonitor",
     "LiveAgentMonitor",
     "HookEvent",
-    "HookEventServer",
+    "UICommandServer",
     "LedDisplayState",
     "MonitorSnapshot",
     "SourceSpec",
@@ -64,7 +63,6 @@ __all__ = [
     "sleep_helper_install_command",
     "sleep_helper_installed",
     "uninstall_sleep_helper",
-    "send_hook_event",
     "program_for_display_state",
     "write_mode_to_leds",
 ]

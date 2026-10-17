@@ -55,8 +55,6 @@ test = [
 
 [project.scripts]
 sidepulse = "sidepulse.cli:sidepulse_main"
-agent-monitor = "sidepulse.cli:main"
-agent-status-bar = "sidepulse.status_bar:main"
 sidepulse-reply = "sidepulse.reply_classifier:main"
 
 [tool.setuptools.packages.find]

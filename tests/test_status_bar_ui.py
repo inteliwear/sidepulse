@@ -32,6 +32,7 @@ if os.uname().sysname != "Darwin":  # pragma: no cover
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _ENV_PATCH = None
+_DAEMON_PATCH = None
 
 
 def setUpModule():
@@ -41,16 +42,20 @@ def setUpModule():
     at import time, so scoping the patch here keeps it from leaking into other
     test modules while still landing before anything reads configuration.
     """
-    global _ENV_PATCH
+    global _ENV_PATCH, _DAEMON_PATCH
     scratch = tempfile.mkdtemp(prefix="sidepulse-ui-tests-")
     _ENV_PATCH = patch.dict(
         os.environ,
         {"HOME": scratch, "XDG_CONFIG_HOME": str(Path(scratch) / ".config")},
     )
     _ENV_PATCH.start()
+    _DAEMON_PATCH = patch.object(sb,"daemon_command",return_value={"ok":True,"output_errors":{}})
+    _DAEMON_PATCH.start()
 
 
 def tearDownModule():
+    if _DAEMON_PATCH is not None:
+        _DAEMON_PATCH.stop()
     if _ENV_PATCH is not None:
         _ENV_PATCH.stop()
 
@@ -478,8 +483,6 @@ class MenuBuildTests(StatusBarTestCase):
         titles = [entry.title() for entry in walk_menu(item.submenu())]
         self.assertIn('Agent Status', titles)
         self.assertIn('Battery Level', titles)
-        self.assertEqual(self.controller.agent_controller_for_device(dot).device_path, root)
-        self.assertEqual(self.controller.battery_controller_for_device(dot).device_path, root)
 
 
     def assert_menu_is_wired(self, menu: NSMenu):
@@ -585,7 +588,7 @@ class MenuBuildTests(StatusBarTestCase):
             for index in range(item.submenu().numberOfItems())
             if item.submenu().itemAtIndex_(index).title()
         ]
-        self.assertIn("Sync session states", submenu_titles)
+        self.assertIn("Forward sessions", submenu_titles)
         self.assertNotIn("Agent Status", submenu_titles)
         self.assertNotIn("Manual", submenu_titles)
         self.assertNotIn("Battery Level", submenu_titles)
@@ -596,7 +599,7 @@ class MenuBuildTests(StatusBarTestCase):
 
     def test_phone_sync_menu_toggle_persists_without_sending_colors(self):
         from sidepulse.settings import load_settings, save_settings
-        link = sb.IOSLink("Session phone", "b" * 64, status_protocol=1)
+        link = sb.IOSLink("Session phone", "b" * 64, status_protocol=2)
         device = sb.StatusBarDevice(device_id=sb.linked_phone_device_id(link), name=link.name,
             root=Path("ios/phone"), target=Path("ios/phone"), connected=True,
             display="custom", remote_link=link)
@@ -607,7 +610,7 @@ class MenuBuildTests(StatusBarTestCase):
                 for expected in (False, True):
                     menu = sb.build_device_menu_item(device, target).submenu()
                     toggle = menu.itemAtIndex_(0)
-                    self.assertEqual(toggle.title(), "Sync session states")
+                    self.assertEqual(toggle.title(), "Forward sessions")
                     self.assertTrue(toggle.isEnabled())
                     self.assertEqual(toggle.state(), int(not expected))
                     sb.StatusBarController.toggle_phone_session_sync(target, str(toggle.representedObject()))
@@ -948,6 +951,7 @@ class WindowBuildTests(StatusBarTestCase):
         write_program.assert_called_once_with(
             sb.apply_brightness(program, 128),
             device_path=device.target,
+            hold_seconds=sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS,
         )
         sleep.assert_called_once_with(
             sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS

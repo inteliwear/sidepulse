@@ -40,7 +40,7 @@ from sidepulse.collector import (
     SourceSpec,
     default_sources,
 )
-from sidepulse.cli import build_parser, visible_watch_statuses
+from sidepulse.cli import build_sidepulse_parser, visible_statuses
 from sidepulse.device_writer import (
     DeviceWriteError,
     default_mount_roots,
@@ -50,7 +50,7 @@ from sidepulse.device_writer import (
     write_led_program,
 )
 from sidepulse.hook import format_hook_payload, routed_hook_payload, write_hook_payload
-from sidepulse.ipc import HookEventServer, send_hook_event
+from sidepulse.ipc import UICommandServer, request_settings_window
 from sidepulse.install import (
     hook_command,
     install_claude_hooks,
@@ -580,83 +580,35 @@ class AgentMonitorTests(unittest.TestCase):
                     path=blocking_file / "status-history.jsonl",
                 )
 
-    def test_hook_event_server_receives_socket_message(self) -> None:
+    def test_ui_socket_only_handles_ui_commands(self) -> None:
+        import socket
         with tempfile.TemporaryDirectory() as tmp:
-            received: list[tuple[str, dict]] = []
-            server = HookEventServer(
-                lambda provider, line: received.append((provider, line)),
-                socket_path=Path(tmp) / "events.sock",
-            )
+            opened = []
+            server = UICommandServer(socket_path=Path(tmp) / "events.sock", on_open_settings=lambda: opened.append(True))
             try:
                 server.start()
-                sent = send_hook_event(
-                    "codex",
-                    {
-                        "logged_at": "2026-06-20T06:00:00Z",
-                        "event": {
-                            "hook_event_name": "Stop",
-                            "session_id": "codex-session",
-                            "last_assistant_message": "Done.",
-                        },
-                    },
-                    socket_path=server.socket_path,
-                    timeout=0.5,
-                )
-
-                deadline = time.time() + 1
-                while sent and not received and time.time() < deadline:
-                    time.sleep(0.01)
-
-                self.assertTrue(sent)
-                self.assertTrue(received)
-                self.assertEqual(received[0][0], "codex")
-                self.assertEqual(
-                    received[0][1]["event"]["hook_event_name"],
-                    "Stop",
-                )
+                self.assertTrue(request_settings_window(socket_path=server.socket_path))
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.connect(str(server.socket_path))
+                    client.sendall(b'{"provider":"claude","line":{"hook_event_name":"Stop"}}')
+                    client.shutdown(socket.SHUT_WR)
+                    self.assertEqual(client.recv(16), b'')
+                self.assertEqual(opened, [True])
             finally:
                 server.stop()
 
-    def test_hook_event_reaches_app_when_xdg_state_home_differs(self) -> None:
-        """A shell hook must still find an app that resolved another state dir.
-
-        The LaunchAgent plist forwards only PATH and PYTHONUNBUFFERED, so the app never
-        sees XDG_STATE_HOME and binds under ~/.local/state. A hook started from the user's
-        shell does see it. Before candidate probing the send failed silently.
-        """
-        # An AF_UNIX path is capped near 104 bytes and the macOS default temp dir is long,
-        # so root this fixture somewhere short.
+    def test_ui_command_reaches_app_when_xdg_state_home_differs(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
             home = Path(tmp) / "home"
             app_dir = home / ".local" / "state" / "sidepulse" / "agent-monitor"
             app_dir.mkdir(parents=True)
-
-            received: list[tuple[str, dict]] = []
-            server = HookEventServer(
-                lambda provider, line: received.append((provider, line)),
-                socket_path=app_dir / "events.sock",
-            )
+            opened = []
+            server = UICommandServer(socket_path=app_dir / "events.sock", on_open_settings=lambda: opened.append(True))
             try:
                 server.start()
-                environment = {
-                    "HOME": str(home),
-                    "XDG_STATE_HOME": str(Path(tmp) / "xdg"),
-                }
-                with patch.dict(os.environ, environment):
-                    sent = send_hook_event(
-                        "claude",
-                        {"hook_event_name": "Stop", "session_id": "claude-session"},
-                        timeout=0.5,
-                    )
-
-                deadline = time.time() + 1
-                while sent and not received and time.time() < deadline:
-                    time.sleep(0.01)
-
-                self.assertTrue(sent)
-                self.assertTrue(received)
-                self.assertEqual(received[0][0], "claude")
-                self.assertEqual(received[0][1]["hook_event_name"], "Stop")
+                with patch.dict(os.environ, {"HOME": str(home), "XDG_STATE_HOME": str(Path(tmp) / "xdg")}):
+                    self.assertTrue(request_settings_window())
+                self.assertEqual(opened, [True])
             finally:
                 server.stop()
 
@@ -1898,7 +1850,7 @@ class AgentMonitorTests(unittest.TestCase):
             active_led_display_kind_for_device=lambda item, battery: item.display,
         )
 
-        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send, patch("sidepulse.status_bar.daemon_command", return_value={'ok':True,'output_errors':{}}):
             status_bar.StatusBarController.sync_leds_now(
                 fake,
                 AgentMode.WORKING,
@@ -1943,7 +1895,7 @@ class AgentMonitorTests(unittest.TestCase):
             active_led_display_kind_for_device=lambda item, battery: item.display,
         )
 
-        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send, patch("sidepulse.status_bar.daemon_command", return_value={'ok':True,'output_errors':{}}):
             status_bar.StatusBarController.sync_leds_now(
                 fake,
                 AgentMode.IDLE_READY,
@@ -1976,23 +1928,13 @@ class AgentMonitorTests(unittest.TestCase):
             last_led_display_kind_by_device={},
             reset_led_controllers_for_device=lambda device_id: None,
             active_led_display_kind_for_device=lambda _device, _battery: LED_DISPLAY_CUSTOM,
-            agent_controller_for_device=lambda _device: self.fail("agent LEDs should not sync"),
-            battery_controller_for_device=lambda _device: self.fail("battery LEDs should not sync"),
         )
 
-        status_bar.StatusBarController.sync_leds_now(
-            fake,
-            AgentMode.WORKING,
-            None,
-            LED_DISPLAY_CUSTOM,
-        )
-
+        with patch('sidepulse.status_bar.daemon_command',return_value={'ok':True,'output_errors':{}}) as command:
+            status_bar.StatusBarController.sync_leds_now(fake,AgentMode.WORKING,None,LED_DISPLAY_CUSTOM)
+        self.assertEqual(command.call_args.args[0]['type'],'output_control')
         self.assertIsNone(fake.last_led_error)
-        self.assertNotIn(device.device_id, fake.device_errors)
-        self.assertEqual(
-            fake.last_led_display_kind_by_device[device.device_id],
-            LED_DISPLAY_CUSTOM,
-        )
+        self.assertEqual(fake.device_errors,{})
 
     def test_status_bar_manual_device_display_clears_leds(self) -> None:
         try:
@@ -2063,7 +2005,7 @@ class AgentMonitorTests(unittest.TestCase):
             last_led_error=None,
         )
 
-        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send:
+        with patch("sidepulse.status_bar.send_ios_program", return_value="OK") as send, patch("sidepulse.status_bar.daemon_command", return_value={'ok':True,'output_errors':{}}):
             error = status_bar.StatusBarController.clear_manual_device_display(fake, device)
 
         self.assertIsNone(error)
@@ -2386,15 +2328,27 @@ class AgentMonitorTests(unittest.TestCase):
                 )
             )
 
-            with patch("sidepulse.status_bar.time.sleep"):
-                status_bar.StatusBarController.show_agent_animation_on_device_worker(
-                    fake,
-                    AgentMode.WORKING,
-                    AGENT_ANIMATION_KITT,
-                    "",
-                    [device],
-                    17,
-                )
+            from sidepulse.program_transport import ProgramServer
+            from sidepulse.service import SidePulseService
+            service = SidePulseService()
+            server = ProgramServer(service.program_state, Path(tmp) / "status.sock",
+                                   on_command=service.handle_command)
+            server.start()
+            try:
+                with patch("sidepulse.status_bar.time.sleep"), patch(
+                    "sidepulse.program_transport.status_socket_path", return_value=server.path
+                ):
+                    status_bar.StatusBarController.show_agent_animation_on_device_worker(
+                        fake,
+                        AgentMode.WORKING,
+                        AGENT_ANIMATION_KITT,
+                        "",
+                        [device],
+                        17,
+                    )
+                self.assertGreater(service.manual_pause_until, time.monotonic())
+            finally:
+                server.stop()
 
             program = (root / "LEDS.LED").read_text()
             self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
@@ -2536,29 +2490,12 @@ class AgentMonitorTests(unittest.TestCase):
         except SystemExit as exc:
             self.skipTest(str(exc))
 
-        with tempfile.TemporaryDirectory() as tmp:
-            recovery_source = SourceSpec("codex", Path(tmp) / "codex.jsonl")
-            fake = SimpleNamespace(
-                settings=AgentMonitorSettings(idle_timeout_seconds=1234)
-            )
-            with (
-                patch(
-                    "sidepulse.status_bar.default_event_socket_path",
-                    return_value=Path(tmp) / "events.sock",
-                ),
-                patch(
-                    "sidepulse.status_bar.default_latest_state_path",
-                    return_value=Path(tmp) / "latest.json",
-                ),
-                patch(
-                    "sidepulse.status_bar.default_sources",
-                    return_value=(recovery_source,),
-                ),
-            ):
-                monitor = status_bar.StatusBarController.build_monitor(fake)
-
-        self.assertEqual(monitor.stale_after_seconds, 1234)
-        self.assertEqual(monitor.recovery_sources, (recovery_source,))
+        from sidepulse.program_presentation import DaemonMonitor
+        fake = SimpleNamespace(settings=AgentMonitorSettings(idle_timeout_seconds=1234))
+        monitor = status_bar.StatusBarController.build_monitor(fake)
+        self.assertIsInstance(monitor, DaemonMonitor)
+        self.assertFalse(hasattr(fake, 'program_state'))
+        self.assertFalse(hasattr(fake, 'program_store'))
 
     def test_status_bar_setup_window_has_first_launch_controls(self) -> None:
         try:
@@ -3761,56 +3698,22 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertIn("PreToolUse", detected.hook_events)
             self.assertIn(log, detected.log_paths)
 
-    def test_sidepulse_sidepulse_command_shape(self) -> None:
-        parser = build_parser(prog="sidepulse agent-monitor")
-
-        install = parser.parse_args(["install"])
-        live = parser.parse_args(["live", "--recent-seconds", "120"])
-        leds = parser.parse_args(["leds", "--once", "--dry-run"])
-        uninstall = parser.parse_args(["uninstall"])
-        status_bar = parser.parse_args(["status-bar"])
-        status_bar_foreground = parser.parse_args(["status-bar", "--foreground"])
-        grok_install = parser.parse_args(["install", "grok"])
-        grok_hook_log = parser.parse_args(["hook-log", "--provider", "grok", "--log", "/tmp/grok.jsonl"])
-
-        self.assertEqual(install.provider, "all")
-        self.assertEqual(grok_install.provider, "grok")
-        self.assertEqual(live.command, "live")
-        self.assertEqual(live.recent_seconds, 120)
-        self.assertEqual(leds.command, "leds")
-        self.assertTrue(leds.once)
-        self.assertTrue(leds.dry_run)
-        self.assertEqual(uninstall.provider, "all")
-        self.assertEqual(status_bar.command, "status-bar")
-        self.assertFalse(status_bar.foreground)
-        self.assertFalse(status_bar.uninstall)
-        self.assertTrue(status_bar_foreground.foreground)
-        self.assertEqual(grok_hook_log.provider, "grok")
-        self.assertIn("sidepulse agent-monitor", parser.format_usage())
-
-    def test_sidepulse_entrypoint_dispatches_to_sidepulse(self) -> None:
-        with patch.object(cli_module, "main", return_value=17) as main:
-            result = cli_module.sidepulse_main(["agent-monitor", "live"])
-
-        self.assertEqual(result, 17)
-        main.assert_called_once_with(["live"], prog="sidepulse agent-monitor")
-
-    def test_sidepulse_battery_command_shape(self) -> None:
-        parser = cli_module.build_sidepulse_parser()
-
-        status = parser.parse_args(["battery", "status", "--json"])
-        leds = parser.parse_args(["battery", "leds", "--once", "--dry-run", "--full-watts", "140"])
-        configure = parser.parse_args(["battery", "configure", "--display", "battery"])
-
-        self.assertEqual(status.command, "battery")
-        self.assertEqual(status.battery_command, "status")
-        self.assertTrue(status.json)
-        self.assertEqual(leds.battery_command, "leds")
-        self.assertTrue(leds.once)
-        self.assertTrue(leds.dry_run)
-        self.assertEqual(leds.full_watts, "140")
-        self.assertEqual(configure.battery_command, "configure")
-        self.assertEqual(configure.display, "battery")
+    def test_sidepulse_session_command_shape(self) -> None:
+        parser = build_sidepulse_parser()
+        self.assertEqual(parser.parse_args(["setup"]).provider, "all")
+        self.assertEqual(parser.parse_args(["setup", "grok"]).provider, "grok")
+        self.assertTrue(parser.parse_args(["setup", "--uninstall"]).uninstall)
+        for command in ("status", "live"):
+            args = parser.parse_args([command, "--all", "--json", "--no-color"])
+            self.assertEqual(args.command, command)
+            self.assertTrue(args.all)
+            self.assertTrue(args.json)
+            self.assertTrue(args.no_color)
+        live = parser.parse_args(["live", "--interval", "2", "--once"])
+        self.assertEqual(live.interval, 2)
+        self.assertTrue(live.once)
+        hook = parser.parse_args(["hook-log", "--provider", "grok", "--log", "/tmp/grok.jsonl"])
+        self.assertEqual(hook.provider, "grok")
 
     def test_sidepulse_status_bar_root_command_shape(self) -> None:
         parser = cli_module.build_sidepulse_parser()
@@ -5262,25 +5165,13 @@ class AgentMonitorTests(unittest.TestCase):
         controller.led_animation_until_monotonic = 0.0
         controller.led_sync_in_flight = False
 
-        with (
-            patch.object(controller, "sync_virtual_status_device"),
-            patch.object(
-                status_bar.StatusBarController,
-                "should_hold_lid_closed_led_state",
-                side_effect=[True, False],
-            ),
-            patch("sidepulse.status_bar.threading.Thread") as thread,
-            patch("sidepulse.status_bar.log_status_bar"),
-        ):
-            controller.sync_leds(AgentMode.IDLE_READY, None, "agent")
-            thread.assert_not_called()
+        with patch.object(status_bar.StatusBarController,'should_hold_lid_closed_led_state',side_effect=[True,False]), patch('sidepulse.status_bar.daemon_command',return_value={'ok':True,'output_errors':{}}) as command:
+            controller.sync_leds_now(AgentMode.IDLE_READY,None,'agent')
+            self.assertGreater(command.call_args.args[0]['pause_seconds'],0)
             self.assertTrue(controller.lid_closed_led_hold_active)
-
-            controller.sync_leds(AgentMode.WORKING, None, "agent")
-            thread.assert_called_once()
-            thread.return_value.start.assert_called_once()
-
-        self.assertFalse(controller.lid_closed_led_hold_active)
+            controller.sync_leds_now(AgentMode.WORKING,None,'agent')
+            self.assertEqual(command.call_args.args[0]['pause_seconds'],0)
+            self.assertFalse(controller.lid_closed_led_hold_active)
 
     def test_status_bar_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:
         try:
@@ -5748,8 +5639,8 @@ class AgentMonitorTests(unittest.TestCase):
             )
 
     def test_install_defaults_to_standard_state_log_path(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["install", "codex"])
+        parser = build_sidepulse_parser()
+        args = parser.parse_args(["setup", "codex"])
 
         with patch.object(
             cli_module,
@@ -6434,7 +6325,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(
             command,
-            f"{sys.executable} agent-monitor hook-log --provider codex "
+            f"{sys.executable} hook-log --provider codex "
             "--log '/tmp/codex events.jsonl' ; true",
         )
 
@@ -6884,7 +6775,7 @@ class AgentMonitorTests(unittest.TestCase):
             chown.assert_any_call(system_paths.binary_path, 0, 0)
             chown.assert_any_call(system_paths.plist_path, 0, 0)
 
-    def test_watch_filters_to_recent_statuses(self) -> None:
+    def test_status_views_keep_all_daemon_statuses(self) -> None:
         now = datetime.now(timezone.utc)
         recent = AgentStatus(
             provider="codex",
@@ -6910,9 +6801,9 @@ class AgentMonitorTests(unittest.TestCase):
             collected_at=now,
         )
 
-        visible = visible_watch_statuses(snapshot, recent_seconds=120, include_stale=False)
+        visible = visible_statuses(snapshot, include_stale=False)
 
-        self.assertEqual([status.agent_id for status in visible], ["recent"])
+        self.assertEqual([status.agent_id for status in visible], ["recent", "older"])
 
     def test_orphaned_tool_running_expires_before_session_stale_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

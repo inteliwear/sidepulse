@@ -1640,8 +1640,13 @@ def project_name(cwd: str | None) -> str | None:
         return None
     path = Path(cwd)
     for candidate in (path, *path.parents):
-        if (candidate / ".git").exists():
-            return candidate.name or str(candidate)
+        try:
+            if (candidate / ".git").exists():
+                return candidate.name or str(candidate)
+        except OSError:
+            # Remote paths can exceed this machine's filesystem limits.
+            # Their display metadata must not prevent status accounting.
+            continue
     return path.name or cwd
 
 

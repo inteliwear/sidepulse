@@ -1,4 +1,4 @@
-"""Local JSON submission and snapshot delivery over the existing bridge."""
+"""Local JSON submission and individual status delivery over the existing bridge."""
 from __future__ import annotations
 
 import hashlib
@@ -11,12 +11,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .program_status import MAX_BYTES, ProgramStore, StatusError, encoded
-from .providers import default_state_dir
+from .program_status import MAX_BYTES, ProgramState, StatusError, encoded
+from .providers import default_state_dir, candidate_state_dirs
 
 
-def status_socket_path() -> Path:
-    path = default_state_dir() / 'program-status.sock'
+def status_socket_path(state_dir: Path | None = None) -> Path:
+    path = (state_dir or default_state_dir()) / 'program-status.sock'
     if len(str(path).encode()) > 96:
         digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return Path('/tmp') / f'sidepulse-status-{os.getuid()}' / f'{digest}.sock'
@@ -24,39 +24,61 @@ def status_socket_path() -> Path:
 
 
 def submit_report(report: dict, *, timeout: float = 0.5, path: Path | None = None) -> dict:
+    paths = (path,) if path is not None else tuple(dict.fromkeys([
+        status_socket_path(), *(status_socket_path(directory) for directory in candidate_state_dirs())]))
+    for target in paths:
+        try:
+            return _submit_report_at(report, target, timeout)
+        except (FileNotFoundError, ConnectionRefusedError):
+            if target == paths[-1]:
+                raise
+
+
+def _submit_report_at(report: dict, path: Path, timeout: float) -> dict:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
-        client.connect(str(path or status_socket_path()))
+        client.connect(str(path))
         client.sendall(encoded(report).encode())
         client.shutdown(socket.SHUT_WR)
         data = bytearray()
         while chunk := client.recv(4096):
             data.extend(chunk)
-            if len(data) > 4096:
-                raise StatusError('Invalid daemon acknowledgement')
+            if len(data) > 1024 * 1024:
+                raise StatusError('Daemon response exceeds its size limit')
     reply = json.loads(data)
+    if not isinstance(reply, dict):
+        raise StatusError('Invalid daemon response')
     if not reply.get('ok'):
         raise StatusError(reply.get('error', 'Report rejected'))
     return reply
 
 
-def durable_submit(report: dict, *, timeout: float = 0.5) -> dict:
+def submit_status(report: dict, *, timeout: float = 0.5) -> dict:
     import uuid
     report = dict(report)
     report.setdefault('request_id', str(uuid.uuid4()))
     try:
         return submit_report(report, timeout=timeout)
-    except OSError:
-        store = ProgramStore()
-        try:
-            return store.submit(report)
-        finally:
-            store.close()
+    except OSError as exc:
+        raise StatusError('SidePulse daemon unavailable; start it with sidepulse service start') from exc
+
+
+def daemon_command(command: dict, *, timeout: float = 0.5, path: Path | None = None) -> dict:
+    try:
+        return submit_report({'v': 1, **command}, timeout=timeout, path=path)
+    except OSError as exc:
+        raise StatusError('SidePulse daemon unavailable; start it with sidepulse service start') from exc
+
+
+def write_daemon_program(program: str, *, device_path: Path, hold_seconds: float = 1.5) -> Path:
+    reply = daemon_command({'type': 'write_led', 'program': program, 'target': str(device_path),
+                            'hold_seconds': hold_seconds}, timeout=5)
+    return Path(reply['target'])
 
 
 class ProgramServer:
-    def __init__(self, store: ProgramStore, path: Path | None = None):
-        self.store, self.path = store, path or status_socket_path()
+    def __init__(self, state: ProgramState, path: Path | None = None, on_command=None):
+        self.state, self.path, self.on_command = state, path or status_socket_path(), on_command
         self.socket = None
         self.running = False
 
@@ -81,6 +103,9 @@ class ProgramServer:
         self.path.chmod(0o600)
         self.socket.listen(16)
         self.socket.settimeout(0.2)
+        from concurrent.futures import ThreadPoolExecutor
+        self.workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sidepulse-ipc')
+        self.slots = threading.BoundedSemaphore(4)
         self.running = True
         self.thread = threading.Thread(target=self.serve, daemon=True)
         self.thread.start()
@@ -93,6 +118,17 @@ class ProgramServer:
                 continue
             except OSError:
                 break
+            if not self.slots.acquire(blocking=False):
+                try:
+                    conn.sendall(b'{"ok":false,"error":"Daemon is busy; retry shortly"}')
+                except OSError:
+                    pass
+                conn.close()
+                continue
+            self.workers.submit(self.handle_connection, conn)
+
+    def handle_connection(self, conn):
+        try:
             with conn:
                 conn.settimeout(0.5)
                 try:
@@ -107,22 +143,38 @@ class ProgramServer:
                     report = json.loads(data)
                     if not isinstance(report, dict):
                         raise StatusError('Report must be an object')
-                    ack = self.store.submit(report)
+                    if report.get('type') == 'get_state':
+                        if type(report.get('v')) is not int or report['v'] != 1:
+                            raise StatusError('Unsupported protocol version')
+                        from .program_presentation import ProgramMonitor
+                        ack = {'ok': True, 'snapshot': ProgramMonitor(self.state).snapshot().to_dict()}
+                        if self.on_command:
+                            ack.update(self.on_command({'v': 1, 'type': 'output_info'}))
+                    elif report.get('type') in {'output_control', 'write_led'} and self.on_command:
+                        ack = self.on_command(report)
+                    else:
+                        ack = self.state.submit(report)
                 except (ValueError, OSError, TypeError) as exc:
                     ack = {'ok': False, 'error': str(exc)}
                 except Exception:
-                    ack = {'ok': False, 'error': 'Could not persist report'}
+                    ack = {'ok': False, 'error': 'Could not account report'}
                 try:
-                    conn.sendall(json.dumps(ack).encode())
+                    conn.sendall(json.dumps(ack, ensure_ascii=False, allow_nan=False).encode('utf-8', errors='replace'))
                 except OSError:
                     pass
+
+        finally:
+            self.slots.release()
 
     def stop(self):
         self.running = False
         if self.socket:
             self.socket.close()
+        if hasattr(self, 'thread'):
             self.thread.join(timeout=1)
             self.path.unlink(missing_ok=True)
+        if hasattr(self, 'workers'):
+            self.workers.shutdown(wait=False, cancel_futures=True)
 
 
 def endpoint(server: str, channel: str) -> str:
@@ -134,9 +186,9 @@ def sender_identity(server: str, channel: str) -> str:
     return 'relay-' + hashlib.sha256(endpoint(server, channel).encode()).hexdigest()[:16]
 
 
-def publish_snapshot(server: str, channel: str, snapshot: dict, *, phone: bool = False) -> None:
+def publish_update(server: str, channel: str, update: dict, *, phone: bool = False) -> None:
     # Existing phone push handlers carry application data under `data`.
-    body = encoded({'data': snapshot} if phone else snapshot).encode()
+    body = encoded({'data': update} if phone else update).encode()
     request = urllib.request.Request(endpoint(server, channel), data=body,
         method='POST', headers={'Content-Type': 'application/json'})
     try:
@@ -144,15 +196,14 @@ def publish_snapshot(server: str, channel: str, snapshot: dict, *, phone: bool =
             if response.read(128).strip() not in {b'OK', b'OK QUEUED'}:
                 raise StatusError('Invalid bridge acknowledgement')
     except Exception as exc:
-        # URLs contain credentials. The local ledger remains available for retry.
-        raise StatusError('Status bridge unavailable; update saved locally for retry') from exc
+        # URLs contain credentials. Pending updates remain in daemon memory for retry.
+        raise StatusError('Status bridge unavailable; update pending in daemon memory') from exc
 
 
 class ProgramRelay:
-    def __init__(self, store: ProgramStore):
+    def __init__(self, state: ProgramState):
         import threading
-        self.store = store
-        self.sent = {}
+        self.state = state
         self.stop_event = threading.Event()
 
     def start(self):
@@ -166,7 +217,7 @@ class ProgramRelay:
                 self.sync()
             except Exception:
                 pass  # Retained state will be retried. Do not log credential URLs.
-            self.stop_event.wait(5)
+            self.stop_event.wait(1)
 
     def stop(self):
         self.stop_event.set()
@@ -174,38 +225,34 @@ class ProgramRelay:
             self.thread.join(timeout=1)
 
     def sync(self):
-        import time
-        from .program_status import fits_phone_push
+        from .program_status import phone_update
         from .links import load_phone_links
         from .relay import load_relay_config
         from .settings import load_settings
         config = load_relay_config()
         sender = sender_identity(config.server, config.receiver_channel) if config.receiver_channel else None
-        self.store.retain_senders({'local', sender} if sender else {'local'})
-        # Incoming snapshots share the service's existing SSE receiver with raw
-        # hook events. A second listener would compete for queued messages.
+        self.state.retain_senders({'local', sender} if sender else {'local'})
         targets = []
         if config.outbound_channel:
-            targets.append(((config.server, config.outbound_channel), self.store.local_snapshot(), False))
+            targets.append((config.server, config.outbound_channel, False))
         settings = load_settings()
+        configured = list(targets)
         for link in load_phone_links():
-            if link.status_protocol != 1 or not settings.sync_sessions_to_phone(link.link_id):
-                continue
-            try:
-                snapshot = self.store.phone_snapshot()
-                if not fits_phone_push(snapshot):
-                    continue  # Never replace missing session state with direct LED control.
-            except StatusError:
-                continue  # Capacity must not interrupt independent desktop relay delivery.
-            targets.append(((link.server, link.token if link.platform == 'android' else 'apns_' + link.token), snapshot, True))
-        active_targets = {target for target, _, _ in targets}
-        self.sent = {target: value for target, value in self.sent.items() if target in active_targets}
-        now = time.monotonic()
-        for target, snapshot, phone in targets:
-            previous = self.sent.get(target)
-            if snapshot['revision'] and (previous is None or previous[0] != snapshot['revision'] or now - previous[1] >= 60):
+            if link.status_protocol == 2:
+                channel = link.token if link.platform == 'android' else 'apns_' + link.token
+                target = (link.server, channel, True)
+                configured.append(target)
+                if settings.sync_sessions_to_phone(link.link_id):
+                    targets.append(target)
+        self.state.retain_targets({hashlib.sha256(json.dumps([server, channel, phone]).encode()).hexdigest()
+                                   for server, channel, phone in configured})
+        for server, channel, phone in targets:
+            target = hashlib.sha256(json.dumps([server, channel, phone]).encode()).hexdigest()
+            for number, update in self.state.pending_events(target, local_only=not phone):
+                if self.stop_event.is_set():
+                    return
                 try:
-                    publish_snapshot(*target, snapshot, phone=phone)
-                    self.sent[target] = (snapshot['revision'], now)
+                    publish_update(server, channel, phone_update(update) if phone else update, phone=phone)
                 except StatusError:
-                    pass
+                    break  # Retry this event in order; do not block another destination.
+                self.state.acknowledge_event(target, number)

@@ -6,7 +6,7 @@ Allow roughly 15 minutes for local smoke tests, 15–20 minutes per phone, and 2
 
 ## 1. Prepare the test environment
 
-- [ ] Use the existing bridge or an isolated test instance. No OSC-specific bridge deployment is needed. Use only an isolated instance for bridge restart tests.
+- [ ] Use an isolated local build of `../sidepulse-bridge` for bridge tests. Do not deploy or change production to run this checklist. Test desktops and phones must point to the chosen local test instance.
 - [ ] Install branch builds of desktop/service and both phone apps. Check `sidepulse report --help` and `sidepulse service status`. Restart an already running daemon after updating its installation.
 - [ ] Attach a SidePulse device to the receiving computer. Attach a device to each phone when testing that phone's output. Record the device model and firmware version.
 - [ ] Pair each updated phone to the test bridge again. Older links do not receive automatic state or colors; manual LED pushes still work and are not evidence that status accounting works.
@@ -14,14 +14,14 @@ Allow roughly 15 minutes for local smoke tests, 15–20 minutes per phone, and 2
 - [ ] Keep phone apps in the foreground for initial tests. Test background behavior separately.
 - [ ] Save the table below and mark every case Pass, Fail, or Not tested. Do not record full pairing tokens or sender keys in screenshots or bug reports.
 
-Use these test scopes only: `osc-human-main`, `osc-human-other`, and `osc-human-remote`. Clear a leftover test scope with:
+Use the `osc-human-` prefix for test scopes: `osc-human-main`, `osc-human-other`, and `osc-human-remote` below, plus uniquely numbered scopes for capacity checks. Clear only those test scopes, for example:
 
 ```sh
 sidepulse report --scope osc-human-main --state clear
 sidepulse report --scope osc-human-other --state clear
 ```
 
-**What to observe:** the desktop's named state/message and the connected device animation. Phone status messages may appear in the app's existing message area. Animations depend on settings and device model; Blocked and Error can currently share an animation. Verify their semantic distinction in the desktop state, not by color alone. There is no promise of a progress bar or a full record inspector in the phone UI.
+**What to observe:** the desktop's named state/message and the connected device animation. Both phone apps show a Sessions summary and a full session list, with status, message, and reported progress. Animations depend on settings and device model; Blocked and Error can currently share an animation. Verify their semantic distinction in the desktop state, not by color alone. Use the full Sessions list to inspect text truncated in the Home summary.
 
 ## 2. Local third-party sender — required smoke test
 
@@ -36,11 +36,10 @@ Run one command at a time, allowing the desktop to refresh.
 | L5 | `sidepulse report --scope osc-human-main --state working` | Working returns. The earlier approval message and title must not remain attached to this record. |
 | L6 | `sidepulse report --scope osc-human-main --state error --msg 'Build failed'` | Error appears. |
 | L7 | `sidepulse report --scope osc-human-main --state done --msg 'Build complete'` | Done/Completed appears; it is not still Error. |
-| L8 | `sidepulse report --scope osc-human-main --end` | Done remains visible. Ending a scope does not erase its completion result. |
-| L9 | `sidepulse report --scope osc-human-main --state clear` | The test record disappears and output returns to Idle, assuming no other active records. |
-| L10 | Send Working, then `--end`. | Working is removed immediately; it must not turn into a false Done. |
+| L8 | `sidepulse report --scope osc-human-main --state clear` | The test record disappears and output returns to Idle, assuming no other active records. |
+| L9 | Send Working, then `--state clear`. | Working is removed immediately; it must not turn into a false Done. |
 
-An acknowledgement means saved locally. It does not prove remote delivery or a successful hardware write.
+An acknowledgement means accepted into the running daemon’s memory. It does not prove remote delivery or a successful hardware write.
 
 ### Raw OSC CLI input
 
@@ -54,12 +53,12 @@ sidepulse report --scope osc-human-main --state clear
 
 - [ ] The first command displays Waiting for Input with `Approve deploy?`, decoded from base64.
 - [ ] The piped command displays Working and removes the old message. Raw OSC and ordinary status flags update the same scope.
-- [ ] The final command clears that scope. No duplicate legacy hook row appears.
-- [ ] Repeat with the daemon stopped: the command acknowledges local persistence; restarting the daemon delivers the stored update.
+- [ ] The final command clears that scope. The UI shows only accounted JSON state.
+- [ ] Repeat with the daemon stopped: the command reports that the daemon is unavailable. It must not create a session database or local state fallback.
 - [ ] With a test remote link/phone configured, repeat these commands and verify the same resulting status on the receiver.
 - [ ] Omitting the final ESC-backslash or BEL works for both an argument and stdin. Two concatenated sequences or mixed terminal output returns an error without changing the last accepted status.
 
-## 3. Hierarchy and multiple sessions
+## 3. One state per session and multiple sessions
 
 Run:
 
@@ -70,9 +69,8 @@ sidepulse report --scope osc-human-main --state blocked --id build/link --title 
 sidepulse report --scope osc-human-main --state working --id builder --title Unrelated
 ```
 
-- [ ] Blocked wins even with an Idle parent and Working siblings.
-- [ ] Children inherit the parent's application identity when they omit `app`.
-- [ ] The desktop counts this as one active session, not three active sessions.
+- [ ] Each command replaces the same session. After the last command, one Working row titled Unrelated is visible.
+- [ ] Status IDs do not create additional rows or retain old permission requests.
 
 Then:
 
@@ -80,8 +78,7 @@ Then:
 sidepulse report --scope osc-human-main --state clear --id build
 ```
 
-- [ ] `build/compile` and `build/link` disappear.
-- [ ] `builder` remains Working. Clearing `build` must not clear an unrelated prefix match.
+- [ ] The entire main session disappears. A clear removes its session regardless of its status ID.
 
 Add a second scope:
 
@@ -93,7 +90,7 @@ sidepulse report --scope osc-human-main --state clear
 - [ ] The other scope remains Error after the first scope is cleared.
 - [ ] Clearing `osc-human-other` returns the device to Idle.
 
-## 4. Retry, validation, and persistence
+## 4. Retry, validation, and daemon lifetime
 
 Create a unique request ID once, then run the same report twice:
 
@@ -109,108 +106,102 @@ sidepulse report --scope osc-human-main --state working --request-id "$OSC_RETRY
 - [ ] `sidepulse report --scope osc-human-main --state working --id 'a//b'` is rejected. The existing record remains intact.
 - [ ] A Unicode message such as `Build café ✓` survives unchanged.
 - [ ] Quit/reopen the desktop UI. The current explicit state survives.
-- [ ] Stop the test daemon using its normal service controls. Submit a new message. The CLI still acknowledges durable storage. Start the daemon again; the saved state is displayed and forwarded.
-- [ ] Clear the scope, restart the daemon, and verify that the cleared Working state does not return.
+- [ ] Stop the test daemon using its normal service controls. Submit a new message. The CLI reports the unavailable daemon. Start it again: its sessions and pending queue start empty; submit a new update and verify it appears.
+- [ ] Restart the daemon and verify that it starts with no session state. Closing/reopening only the UI must preserve the running daemon state.
 
 Do not stop a shared production service to run these checks.
 
-## 5. Actual Claude, Codex, and Cursor hooks
+## 5. Actual provider hooks: Claude, Codex, Cursor, Grok, and Junie
 
 Run these separately for each installed provider. Record the provider version and hook installation used. These tests exercise hook normalization; native terminal OSC capture is not part of this branch.
 
 - [ ] Start a new agent session and submit a task. SidePulse shows Working.
 - [ ] Ask for a harmless operation that requires approval in the test environment. SidePulse shows Waiting for Input.
-- [ ] If the provider permits concurrent tools, leave one approval pending while another tool starts/finishes. Waiting must remain until the pending approval is resolved.
-- [ ] Repeat with identical concurrent tool arguments when the provider supplies distinct `tool_use_id` values. Resolving one invocation must leave the other blocked. If those IDs are absent, record the documented fallback limitation instead of claiming isolation.
+- [ ] If another hook reports Working while an approval is pending, Working replaces it. There is one current state and no separate pending-approval accounting.
 - [ ] Approve the operation. SidePulse returns to Working while the agent continues answering, including after the tool itself finishes.
 - [ ] Let the answer finish. Done appears, or Waiting for Input if the adapter recognizes a follow-up question.
 - [ ] Interrupt a separate running task. It must not report successful completion merely because it was cancelled.
-- [ ] Close/end the session normally. Live records disappear; completed/error results may remain according to the lifecycle policy.
-- [ ] Confirm there is one logical session, without duplicate legacy and normalized entries. Verify the provider icon, title, project, origin, tool detail, and session resume action still work.
+- [ ] Close/end a session in a provider that emits SessionEnd. The hook reports Done; it is visible for 20 minutes, unless replaced or explicitly cleared. Providers without that hook do not receive invented completion events.
+- [ ] Confirm there is one logical session, with one current state from JSON. Verify the provider icon, title, project, origin, tool detail, and session resume action still work.
 - [ ] Exercise a failed tool and a notification-driven request for input; compare the displayed state with the existing hook behavior.
-- [ ] Test an older receiving desktop through the existing relay. It must still receive hook updates while the sender also publishes OSC snapshots.
-- [ ] Use a non-default desktop agent animation on a capable phone. The selected animation must still play through the existing direct presentation path.
-- [ ] Enable transcript recovery or include a legacy-only remote session. Its state must still contribute to phone output.
+- [ ] Verify the bridge receives individual JSON updates only. An old raw `agent_event` envelope must not create a session. Both desktops require the updated protocol.
+- [ ] Change a desktop animation and verify the phone still chooses its own session pattern.
+- [ ] Add a raw provider log/transcript event without submitting JSON. It must not change daemon, UI, or phone session state.
+- [ ] Stop the daemon and run a hook. The provider must continue normally, but no fallback state is written. Restart the daemon and run a fresh hook; it is accounted and forwarded.
+- [ ] Leave a UI client connection stalled while sending a hook. Other bounded workers must accept the hook promptly.
 
 If a provider/version does not expose a particular lifecycle or approval hook, record that case as **Not supported by provider** rather than claiming a pass. Abruptly killing a process is not currently an automatic cleanup signal; explicit status can remain until the producer reports cleanup.
 
 ## 6. Remote computer → bridge → receiving desktop
 
-Use `sidepulse link` on the receiving Mac and follow its displayed command on the remote test machine. Both desktops must use this branch; the bridge uses its existing message routes.
+Use a local bridge test instance and configure both test desktops to use it. Both desktops and the bridge must use the updated branch; keep these tests separate from production links.
 
-On the remote machine:
+- [ ] Send Working, Blocked, Clear, and Done updates with `sidepulse report`. Verify each arrives individually and updates the receiving UI. The forwarding worker checks every second; record observed latency.
+- [ ] Use the same scope name locally and remotely. Both rows remain distinct and the active count matches the number of working/blocked/error rows. Clearing the remote scope preserves the local row and updates the active count.
+- [ ] Disconnect a receiver and update 12 different sessions. On reconnect, expect only the newest 10 sessions. Repeated updates to one session must occupy only one queue item. Do not expect a complete-state snapshot to repair missing events.
+- [ ] Stop and restart the sender daemon with pending events. Its in-memory queue starts empty; it forwards only new incoming updates. Closing/reopening the UI alone must leave the daemon queue intact.
+- [ ] Remove/change the receiving link. Its remote records clear locally and clear updates are queued for phones; local records remain.
 
-```sh
-sidepulse report --scope osc-human-remote --state working --msg 'Remote build running'
-```
+## 7. Phone acceptance — repeat on iOS and Android
 
-- [ ] The receiving desktop and its device show the remote state. With a healthy bridge, allow roughly two five-second synchronization cycles; record observed latency.
-- [ ] Start a separate local scope. Remote and local sessions coexist rather than replacing each other.
-- [ ] Disconnect the receiving computer from the bridge. On the remote machine, update one scope to Blocked and another to Done. Clear one of them before reconnecting.
-- [ ] Reconnect within queue retention, or keep the sender running for its next resend. The latest complete snapshot restores both scopes without resurrecting the clear.
-- [ ] Restart only the test bridge. Existing queued snapshots survive when Redis is configured; a running sender also repairs missed delivery on its next resend.
-- [ ] For a persistence check, restart the test Redis and bridge. Repeat recovery. Record the Redis persistence configuration.
-- [ ] Remove/change the receiving link. Its previously received remote records are removed locally without deleting local records.
+- [ ] Pair the updated app, advertising `status_protocol: 2`. In the tray, enable **Forward sessions**.
+- [ ] Send individual updates from two paired computers. Use identical `publisher` and `scope` strings. Both sessions must appear independently. Clear one; the other stays visible.
+- [ ] From a single sender, use two publishers with the same scope. They remain separate too.
+- [ ] Send a higher sequence followed by an older one. The older event must not replace or revive state. Repeat after clearing and after restarting the app.
+- [ ] Send a newer event for one session followed by a lower sequence for another session. Both are accepted because ordering is tracked per session.
+- [ ] Use a long Unicode message containing quotes/backslashes. It is clipped to fit one push; state, IDs, and lifecycle remain intact. Many existing sessions must not stop new updates.
+- [ ] Try an unknown outer sender key and a valid key placed only inside `data`. Neither authorizes an update. Revoke one paired sender and verify only that sender's records disappear.
+- [ ] Pause syncing, send changes, then resume. Retained pending events arrive; unchanged state is not periodically republished.
+- [ ] Select a manual pattern, then replay a duplicate update. The duplicate must not override the pattern. A newly accepted status may resume the phone's own session rendering.
+- [ ] Change Mac patterns and Battery/Manual modes. Session forwarding continues and the phone's pattern choice is unchanged.
+- [ ] Disconnect the phone and send multiple events. Recovery returns up to 10 queued items, with only the newest state per source/session. Verify clear replaces an older Working update, and queued items expire within 24 hours. Record missed events honestly; no full-state reconstruction is promised.
+- [ ] Upgrade from an earlier saved-cache format: old sessions and replay guards start fresh; new individual updates populate the list. Current-format sessions, dismissals, and replay guards survive relaunch. An old `program_status_snapshot` or removed control message must be rejected without becoming a direct LED write.
 
-Disconnecting a receiver or losing the network must not manufacture a Done result.
-
-## 7. Phone acceptance — repeat the entire section on iOS and Android
-
-Keep the desktop's local test scope clean, and use the same commands from section 2 as the sender. For offline recovery cases, reconnect within the queue TTL or keep the sender daemon running until its next 60-second resend.
-
-| Case | Action | Expected result |
-| --- | --- | --- |
-| P1 | Foreground app, device attached: send Working → Blocked → Done → Clear. | App/device follow the transitions. Messages remain readable. Clear returns to Idle when no other work exists. |
-| P2 | Detach the device, send Blocked, then reattach. | The app accepts/accounts the update without hardware. Reconnection presents the retained Blocked state when device access is available. |
-| P3 | While Working, play a manual pattern in the phone app. Trigger “update/recover from server” without publishing a new status. | The manual pattern stays. Duplicate recovery does not resume automatic output. |
-| P4 | Now send a new Working report with a new message. | Automatic Working output resumes, even though Working was also the state before the manual pattern. |
-| P5 | Play a manual pattern, then disconnect/reconnect the device without publishing new status. | Reconnection does not cancel the manual override. |
-| P6 | Send two scopes. Put the phone offline, change both scopes and clear one, then reconnect and perform recovery. | The surviving scope is current and the cleared scope is absent. No stale task is resurrected. |
-| P7 | Close/reopen the app and recover. | Accepted records and revision guards persist. Repeated recovery does not create duplicate records or replay Done. |
-| P8 | Remove the sender key in the phone, then send another update using the old link. | No new state from that key is accepted. Its retained records are removed from accounting; other senders remain valid. |
-| P9 | Background/lock the phone and publish updates; then foreground it and recover. | Record any background delivery and latency separately. Foreground recovery converges from an unexpired queued snapshot or the next resend while the sender runs. |
-| P10 | Use an older/unmodified phone link in a separate test. | Manual direct LED control still works; automatic colors are never sent. The tray asks for an app update and renewed pairing. |
-| P11 | On iOS, play a pattern through Shortcuts. On Android, use a notification automation if configured. Then recover an unchanged snapshot. | These successful direct writes also remain manual until a newer status is accepted. |
-| P12 | Turn **Sync session states** off, change a session, then turn it back on. Repeat without changing any session after a manual push. | Off pauses state delivery; on sends the latest snapshot. An unchanged snapshot does not override the manual pattern. The setting survives restart and affects only that phone. |
-| P13 | Disconnect the phone briefly, send a status, then reconnect and recover the existing push queue. | The app receives the latest queued snapshot within the queue TTL, or converges on the next resend while the sender runs. |
-| P14 | Send several rapid state changes, then recover queued messages. | The latest received revision wins; older or duplicate messages cannot restore cleared work. |
-| P16 | Change the Mac animation profile and Battery/Manual display choices while phone sync is enabled. | Session state still arrives; patterns are chosen on the phone. |
-| P15 | Exceed the phone snapshot push budget while keeping desktop accounting within its limits. | The phone keeps its last received snapshot; no automatic colors are sent. Shrinking the snapshot resumes phone accounting. |
-
-A simulator, an emulator, or a foreground-only pass does not verify real APNs/FCM delivery, background execution, USB/filesystem access, or physical LEDs. Mark unavailable paths **Not tested**.
+A simulator/emulator does not establish physical LED behavior or background APNs/FCM reliability. Record those separately.
 
 ## 8. Soak and cleanup
 
-- [ ] Leave explicit Working active beyond the legacy idle timeout. Verify that it stays Working on every receiver that is running.
-- [ ] Leave Done visible for more than 20 minutes, then foreground/recover each phone. It should age out of presentation; no new completion event should be manufactured.
-- [ ] Leave a manual pattern active through a repeated snapshot refresh (the sender refreshes unchanged state every 60 seconds). It must not be overridden by the duplicate.
-- [ ] End/clear every test scope on the machine that owns it. Verify recovery on desktop and both phones after cleanup.
-- [ ] Restore normal device display settings and remove test links if they are no longer needed.
+- [ ] Run several providers concurrently for an hour. Track phone arrival latency, dropped events, and source/session separation.
+- [ ] Fill 64 sessions across multiple sources, update the oldest, then add a new session. Verify the updated session and new session remain, the least recently updated session disappears, and the list stays at 64.
+- [ ] Reopen the UI without restarting the daemon and repeat. A rejected stale/duplicate message must not refresh recency; a genuinely newer update for an evicted session must bring it back. All accepted updates are forwarded individually, including when the sender evicts an older session.
+- [ ] Clear test scopes and remove test sender keys. Do not clear unrelated sessions.
 
 ## Result sheet
 
 | Case | Platform/build | Device/firmware | Pass / Fail / Not tested | Observed result and latency |
 | --- | --- | --- | --- | --- |
-| Local L1–L10 | | | | |
-| Hierarchy / isolation | | | | |
+| Local L1–L9 | | | | |
+| Single-state replacement / source isolation | | | | |
 | Retry / daemon restart | | | | |
 | Claude hooks | | | | |
 | Codex hooks | | | | |
-| Remote recovery / Redis restart | | | | |
-| iOS P1–P11 | | | | |
-| Android P1–P11 | | | | |
+| Cursor hooks | | | | |
+| Grok hooks | | | | |
+| Junie hooks | | | | |
+| Remote recovery / expiry / process restart | | | | |
+| iOS phone acceptance | | | | |
+| Android phone acceptance | | | | |
 | Soak / cleanup | | | | |
 
 For a failure, capture the exact command or provider action, build IDs, previous state, observed state, app foreground/background state, device attachment state, and timestamp. Include a sanitized screenshot or log; omit channel capabilities, device push tokens, and sender keys.
 
-**Acceptance:** convergence within existing queue retention or on a running sender's next resend; no resurrection from stale snapshots; no false Done; correct scope isolation and permission waits; no duplicate replay of output; manual overrides behave consistently; all required real-device paths either pass or remain explicitly unverified before release.
+**Acceptance:** individual updates arrive within normal bridge latency; source/session isolation and replay guards hold; a large ledger does not block new updates; messages are clipped safely; no automatic desktop LED commands target phones. Offline delivery remains limited to the existing queue guarantees.
 
 ## Mobile Sessions screen
 
 - Open Sessions from Home on iOS and Android. With no reports, verify the empty-state instructions.
-- Send two sessions, then add a permission child to one. Verify one row per session, Needs approval above Working, the parent session title, agent and sender labels, message, and progress if provided.
+- Send two sessions, then change one to Blocked with kind permission. Verify one row per session, Needs approval above Working, the session title, agent and sender labels, message, and progress if provided.
 - Disconnect the Dot and send another update. The list must update even though LEDs cannot be written.
-- Relaunch the app. Sessions should restore immediately. Replay an older snapshot; cleared sessions must stay cleared.
+- Relaunch the app. Sessions should restore immediately. Replay an older update; cleared sessions must stay cleared.
 - Play a manual pattern. Sessions remain visible independently of LED control.
 - Remove a sender key. Only that sender's sessions disappear.
 - Check a long title/message and large accessibility text. Open the full list to read messages truncated in Home's three-row summary.
+
+
+## Daemon-owned state and LED output
+
+- [ ] Quit the UI while a session is Working. The daemon continues driving physical LEDs and forwarding individual phone updates.
+- [ ] Reopen the UI. It obtains the same session from the daemon without reading a database or provider logs.
+- [ ] Change brightness/display settings and verify the daemon applies them. A UI preview or lid animation must not be overwritten by the automatic loop during its hold.
+- [ ] Disable and re-enable LED output from the UI. Session state remains intact and phone session forwarding continues.
+- [ ] Restart the daemon. Its local session list and pending updates start empty. Phone apps retain their last received state until subsequent updates; startup does not send an aggregate reset or snapshot.
