@@ -62,15 +62,17 @@ daemon ── OSC-style JSON / existing bridge ──→ iOS / Android
 
 - The hook adapter owns provider interpretation and creates one explicit status update per event. Hooks do no network forwarding or local accounting.
 - The CLI decodes raw OSC or accepts JSON and submits it to the same daemon.
-- The daemon owns live session state, sequence checks, the 64-session retention order, outgoing queue, physical LED rendering, and physical LED writes.
+- The daemon owns live session state, sequence checks, the 64-session retention order, outgoing queue, physical LED rendering, and physical LED writes. On macOS it also owns sleep prevention and grace periods, battery safeguards, lid observations and animations, power-change previews, and 15-second status-history sampling.
 - The UI reads a daemon view and sends control requests. It does not instantiate an accounting store or drive physical LEDs directly. The on-screen Notch remains a UI rendering of daemon state.
 - The existing bridge only transports individual JSON messages. Phones account their own received sessions and choose their own LED patterns, including updates from multiple paired senders.
 
 ### Daemon ↔ UI
 
-The existing status socket also accepts `{"v":1,"type":"get_state"}` and returns `{"ok":true,"snapshot":...}` with the daemon's current display state. The UI/default CLI never reconstruct sessions from local logs or a previous UI process.
+The existing status socket also accepts `{"v":1,"type":"get_state"}` and returns `{"ok":true,"snapshot":...,"runtime":...,"outputs_enabled":...,"output_errors":...}` with the daemon's current display state. `runtime` includes cached battery observations, lid state, sleep-control indicators, preview expiry, and observation/history errors. Reading state has no output or history side effects. The UI/default CLI never reconstruct sessions from local logs or a previous UI process.
 
-`output_control` changes output enablement, a temporary hold, or battery-preview duration; it does not submit a session mode. Explicit UI previews use `write_led` with a target, program, and bounded hold duration. The daemon serializes physical writes and restores automatic output after a preview. Firmware/lid holds are communicated to the daemon so its status loop does not overwrite them. Preferences remain ordinary JSON configuration files read by the daemon; they are not a session database.
+`output_control` changes output enablement, a temporary hold, battery-preview duration, or the keep-awake switch; it does not submit a session mode. Omitted fields leave existing controls unchanged. Explicit UI previews use `write_led` with a target, program, and bounded hold duration. `play_lid_animation` requests a configured lid animation, or an explicit unsaved preview program and bounded duration. The daemon selects per-device brightness, serializes physical writes, and owns animation expiry and restoration. Firmware installation requests an explicit output pause. Lid observation and normal lid animations require no UI. Preferences remain ordinary JSON configuration files read by the daemon; they are not a session database.
+
+Closing or reopening the tray does not stop sleep control, restart timers, or create duplicate history samples. The daemon releases its sleep controls when it stops. History remains an append-only diagnostic JSONL file, not a source of live session state. Linux daemons continue session accounting, history, forwarding, and device output without running macOS power controls.
 
 
 ## Status object

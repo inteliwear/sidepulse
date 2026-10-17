@@ -50,6 +50,12 @@ If a Linux session has no systemd user manager, setup still installs the unit
 and prints that it could not start; `sidepulse service run` remains available as
 a foreground fallback.
 
+On macOS, the daemon also owns sleep prevention, low-battery safeguards, lid
+animations, battery-change previews, and status-history recording. These keep
+running when the tray is closed. The tray displays daemon observations and sends
+explicit user controls; quitting the tray does not release the daemon's sleep
+controls. Stopping the daemon releases them.
+
 ### 2. Install into your own Python environment
 
 If you already manage your own Python 3.10+ environment:

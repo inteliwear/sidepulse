@@ -28,6 +28,8 @@ class DaemonMonitor:
     def __init__(self, path=None):
         self.path = path
         self.output_errors = {}
+        self.runtime = {}
+        self.outputs_enabled = True
 
     def snapshot(self, include_stale=False):
         from .program_transport import daemon_command
@@ -44,6 +46,8 @@ class DaemonMonitor:
                                stale=row.get('stale', False))
         aggregate = value['aggregate']
         self.output_errors = reply.get('output_errors', {})
+        self.runtime = reply.get('runtime', {})
+        self.outputs_enabled = reply.get('outputs_enabled', True)
         return MonitorSnapshot(AggregateStatus(AgentMode(aggregate['mode']), aggregate['active_count'],
             aggregate['stale_count'], status(aggregate.get('representative'))),
             tuple(status(row) for row in value['statuses']), tuple(status(row) for row in value['stale_statuses']),

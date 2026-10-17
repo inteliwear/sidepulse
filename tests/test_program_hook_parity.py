@@ -174,7 +174,7 @@ def test_hook_status_does_not_infer_completion_from_silence(runtime):
     assert store.statuses()[0].mode == AgentMode.WORKING  # No synthetic OSC Done.
 
 
-def test_ui_controls_daemon_without_writing_leds(runtime):
+def test_ui_only_controls_daemon_on_explicit_output_action(runtime):
     try:
         from sidepulse import status_bar
     except SystemExit as exc:
@@ -182,6 +182,8 @@ def test_ui_controls_daemon_without_writing_leds(runtime):
     fake = SimpleNamespace(leds_enabled=True, last_led_error=None, device_errors={})
     with patch('sidepulse.status_bar.daemon_command', return_value={'ok':True,'output_errors':{}}) as command, patch('sidepulse.status_bar.write_led_program') as write, patch('sidepulse.status_bar.send_ios_program') as phone:
         status_bar.StatusBarController.sync_leds_now(fake, AgentMode.WORKING, None, 'agent')
+        command.assert_not_called()
+        status_bar.StatusBarController.connect_device(fake)
     assert command.call_args.args[0]['type'] == 'output_control'
     assert 'mode' not in command.call_args.args[0]
     write.assert_not_called(); phone.assert_not_called()

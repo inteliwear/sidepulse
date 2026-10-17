@@ -11,6 +11,10 @@ current protocol support, deployment, or installed-device behavior.
 - The daemon owns one current value per sender/publisher/session in memory,
   physical LED output, replay guards, and the 4,096-event forwarding queue.
   UI, `sidepulse status`, and `sidepulse live` query that daemon.
+- Mac sleep control, grace periods, battery safeguards, power/lid observations,
+  output timing, and 15-second history sampling run in the daemon. The tray
+  reads cached observations and issues explicit controls. Closing it leaves
+  daemon behavior running; daemon shutdown releases sleep controls.
 - Each receiver keeps at most 64 nonempty sessions. New accepted updates win;
   oldest sessions are evicted while sequence guards remain. Working does not
   become Done through silence; Done is visible for 20 minutes.
@@ -31,7 +35,7 @@ current protocol support, deployment, or installed-device behavior.
 | OSC / CLI | Raw OSC arguments/stdin, BEL/ST/omitted terminators, Unicode/base64, field and size limits, rejection, retries; identical status/live views and removed-command rejection. |
 | Daemon | Shared individual-update fixtures, one state per session, source isolation and active counts, ordering, clears, eviction, malformed-update rejection, concurrency, fresh restart, no database or fallback files. |
 | Hooks | Five providers compared with the baseline interpreter; real hook → socket → receiver tests; sparse metadata, notifications, suppression, failures, fast fail-open submission. |
-| UI / physical output boundary | Daemon queries, reconnect, output controls, preview holds, and daemon LED ownership while UI is connected. |
+| UI / physical output boundary | Daemon queries and reconnect without side effects; headless sleep grace, low-battery safeguards, lid frames/restoration, history sampling, manual preview expiry, firmware pauses, cached observation errors, and daemon shutdown cleanup. |
 | Local bridge | Real isolated POST/SSE and APNs/FCM recovery routes; coalescing, stale retries, ten-item capacity, expiry, and CLI → daemon → bridge → receiver flow. No production calls or provider credentials. |
 | Mobile | Identical `program-updates.json` fixtures; persistence, multi-source isolation, dismissals, replay/eviction guards, configurable patterns, manual ownership, object/string envelopes, and rejected legacy payloads never becoming LED writes. |
 | iOS activity | Combined summary counts, priority, bounded text, and app/widget compilation; full phone tap/background behavior remains a human check. |
@@ -70,7 +74,8 @@ the project's release target. The human checklist is
 
 | Check | Result |
 | --- | --- |
-| Desktop, including six local bridge integration checks | 900 passed, 1 skipped; 597 subtests passed. 40 existing packaging deprecation warnings. |
+| Desktop, including six local bridge integration checks | 914 passed, 1 skipped; 600 subtests passed. 40 existing packaging deprecation warnings. |
+| Daemon/tray ownership after final control-state adjustment | 413 passed; 126 subtests passed. Includes headless runtime behavior, tray lifecycle, previews, hooks, relay and cached UI observations. |
 | Swift package | 84 passed. |
 | Android unit tests | 89 passed. |
 | Android lint and debug build | Passed. |

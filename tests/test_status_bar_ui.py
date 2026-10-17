@@ -945,7 +945,6 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.show_animation_program_on_device_worker(
                 program,
                 [device],
-                12,
             )
 
         write_program.assert_called_once_with(
@@ -953,9 +952,7 @@ class WindowBuildTests(StatusBarTestCase):
             device_path=device.target,
             hold_seconds=sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS,
         )
-        sleep.assert_called_once_with(
-            sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS
-        )
+        sleep.assert_not_called()
         self.assertEqual(sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS, 10.0)
 
     def test_agent_animation_profile_editor_builds(self):
@@ -1373,3 +1370,21 @@ class PureUiLogicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrayDaemonOwnershipTests(unittest.TestCase):
+    def test_quitting_tray_does_not_stop_daemon_behavior(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch.object(sb, 'NSApp') as app, patch.object(sb, 'daemon_command') as command:
+            sb.StatusBarController.quit_(target, None)
+        app.terminate_.assert_called_once_with(target)
+        command.assert_not_called()
+
+    def test_tray_termination_only_cleans_up_ui_resources(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch.object(sb.StatusBarController, 'stop_status_icon_animation') as icons, patch.object(sb.StatusBarController, 'stop_agent_animation_preview_timer') as preview, patch.object(sb.StatusBarController, 'stop_event_server') as events, patch.object(sb, 'daemon_command') as command:
+            target.applicationWillTerminate_(None)
+        icons.assert_called_once()
+        preview.assert_called_once()
+        events.assert_called_once()
+        command.assert_not_called()

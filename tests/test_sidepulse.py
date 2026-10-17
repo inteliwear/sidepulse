@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from sidepulse import daemon_runtime
+from sidepulse.service import SidePulseService
+
 import json
 import os
 import plistlib
@@ -1761,66 +1764,28 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertEqual(calls, [None])
 
-    def test_status_bar_battery_poll_does_not_overlap_reads(self) -> None:
+    def test_tray_reads_cached_daemon_battery_without_polling(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
             self.skipTest(str(exc))
+        target = SimpleNamespace(monitor=SimpleNamespace(runtime={'battery': {'percent': 55}}, outputs_enabled=True))
+        with patch('sidepulse.daemon_runtime.read_battery_snapshot') as read:
+            first = status_bar.StatusBarController.read_battery_snapshot(target)
+            second = status_bar.StatusBarController.read_battery_snapshot(target)
+        read.assert_not_called()
+        self.assertEqual(first.percent, 55)
+        self.assertEqual(first, second)
 
-        target = SimpleNamespace(
-            battery_poll_in_flight=False,
-            battery_poll_pending=False,
-            _read_battery_snapshot_async=lambda: None,
-        )
-
-        with patch("sidepulse.status_bar.threading.Thread") as thread:
-            status_bar.StatusBarController.poll_battery_once(target)
-            status_bar.StatusBarController.poll_battery_once(target)
-
-        self.assertTrue(target.battery_poll_in_flight)
-        self.assertTrue(target.battery_poll_pending)
-        thread.assert_called_once_with(
-            target=target._read_battery_snapshot_async,
-            daemon=True,
-        )
-        thread.return_value.start.assert_called_once_with()
-
-    def test_status_bar_battery_poll_result_syncs_leds_immediately(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
-        snapshot = BatterySnapshot(percent=55, is_plugged=True, is_charging=True)
-        calls: list[tuple[str, object]] = []
-        target = SimpleNamespace(
-            pending_battery_snapshot=snapshot,
-            pending_battery_error=None,
-            battery_poll_in_flight=True,
-            battery_poll_pending=False,
-            last_battery_error=None,
-            last_snapshot=SimpleNamespace(
-                aggregate=SimpleNamespace(mode=AgentMode.WORKING),
-            ),
-            accept_battery_snapshot=lambda value: value,
-            sync_keep_awake=lambda mode, value: calls.append(
-                ("awake", (mode, value))
-            ),
-            active_led_display_kind=lambda value: "battery",
-            sync_leds=lambda mode, value, display: calls.append(
-                ("leds", (mode, value, display))
-            ),
-        )
-
-        status_bar.StatusBarController.handle_battery_snapshot(target)
-
-        self.assertFalse(target.battery_poll_in_flight)
-        self.assertIsNone(target.pending_battery_snapshot)
-        self.assertEqual(calls[0], ("awake", (AgentMode.WORKING, snapshot)))
-        self.assertEqual(
-            calls[1],
-            ("leds", (AgentMode.WORKING, snapshot, "battery")),
-        )
+    def test_daemon_power_change_sets_battery_preview_without_ui(self) -> None:
+        service = SidePulseService()
+        runtime = service.runtime
+        runtime.settings = AgentMonitorSettings().with_battery_power_change_preview(enabled=True)
+        runtime.last_power_connected = False
+        with patch('sidepulse.daemon_runtime.time.monotonic', return_value=100):
+            runtime.update_battery_power_preview(BatterySnapshot(percent=55, is_plugged=True))
+        self.assertGreater(service.battery_preview_until, 100)
+        self.assertTrue(runtime.last_power_connected)
 
     def test_status_bar_never_sends_agent_colors_to_linked_phone(self) -> None:
         try:
@@ -1932,7 +1897,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         with patch('sidepulse.status_bar.daemon_command',return_value={'ok':True,'output_errors':{}}) as command:
             status_bar.StatusBarController.sync_leds_now(fake,AgentMode.WORKING,None,LED_DISPLAY_CUSTOM)
-        self.assertEqual(command.call_args.args[0]['type'],'output_control')
+        command.assert_not_called()
         self.assertIsNone(fake.last_led_error)
         self.assertEqual(fake.device_errors,{})
 
@@ -2085,37 +2050,25 @@ class AgentMonitorTests(unittest.TestCase):
         validate_led_text(program)
         self.assertTrue(program.startswith("brightness 128\n"))
 
-    def test_lid_animation_restore_forces_led_resync(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
-        calls: list[tuple[str, object]] = []
-        fake = SimpleNamespace(
-            led_animation_token=42,
-            led_animation_until_monotonic=100.0,
-            last_snapshot=SimpleNamespace(
-                aggregate=SimpleNamespace(mode=AgentMode.WORKING),
-            ),
-            last_battery_snapshot=object(),
-            reset_led_controllers_for_display_change=lambda: calls.append(("reset", None)),
-            active_led_display_kind=lambda snapshot: "agent",
-            sync_leds=lambda mode, snapshot, display: calls.append(
-                ("sync", (mode, snapshot, display))
-            ),
-            refresh_=lambda sender: calls.append(("refresh", sender)),
-        )
-
-        status_bar.restore_led_display(fake, "41")
-        self.assertEqual(calls, [])
-        self.assertEqual(fake.led_animation_until_monotonic, 100.0)
-
-        status_bar.restore_led_display(fake, "42")
-        self.assertEqual(fake.led_animation_until_monotonic, 0.0)
-        self.assertEqual(calls[0], ("reset", None))
-        self.assertEqual(calls[1][0], "sync")
-        self.assertEqual(calls[1][1][0], AgentMode.WORKING)
+    def test_daemon_preview_restore_forces_led_resync(self) -> None:
+        service = SidePulseService()
+        service.program_state.submit({'v':1, 'type':'program_status', 'scope':'session',
+            'status':{'state':'working'}})
+        target = Path('/test/LEDS.LED')
+        from sidepulse.device_writer import DeviceCandidate
+        with patch('sidepulse.service.discover_devices', return_value=[DeviceCandidate(target.parent,target,'dot')]), patch('sidepulse.service.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.service.write_led_program',return_value=target) as write:
+            with patch('sidepulse.service.time.monotonic',return_value=100):
+                service.sync_outputs()
+                service.handle_command({'v':1,'type':'write_led','program':'#FF0000',
+                    'target':str(target),'hold_seconds':3})
+            with patch('sidepulse.service.time.monotonic',return_value=102):
+                service.sync_outputs()
+                self.assertEqual(write.call_count,2)
+            with patch('sidepulse.service.time.monotonic',return_value=104):
+                service.sync_outputs()
+                self.assertEqual(write.call_count,3)
+            # Automatic mode is rewritten even though it equals the pre-preview value.
+            self.assertEqual(write.call_args_list[0].args[0],write.call_args_list[2].args[0])
 
     def test_status_bar_settings_window_has_lid_animation_controls(self) -> None:
         try:
@@ -2302,7 +2255,7 @@ class AgentMonitorTests(unittest.TestCase):
             ],
         )
 
-    def test_status_bar_show_agent_animation_on_device_writes_and_restores(self) -> None:
+    def test_status_bar_device_preview_delegates_restoration_to_daemon(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
@@ -2344,7 +2297,6 @@ class AgentMonitorTests(unittest.TestCase):
                         AGENT_ANIMATION_KITT,
                         "",
                         [device],
-                        17,
                     )
                 self.assertGreater(service.manual_pause_until, time.monotonic())
             finally:
@@ -2352,10 +2304,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             program = (root / "LEDS.LED").read_text()
             self.assertIn("7:#00E5FF 320ms pulse 595ms", program)
-            self.assertEqual(
-                restore_calls,
-                [("restoreLedDisplay:", "17", False)],
-            )
+            self.assertEqual(restore_calls, [])
 
     def test_status_history_status_text_is_compact(self) -> None:
         try:
@@ -4941,41 +4890,36 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
     def test_lid_close_holds_final_led_state_only_when_sleep_is_allowed(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
         self.assertTrue(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=False,
             )
         )
         self.assertFalse(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=True,
             )
         )
         self.assertFalse(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=False,
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=False,
             )
         )
         self.assertFalse(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
                 agents_active=False,
             )
         )
         self.assertTrue(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
                 agents_active=False,
@@ -4983,14 +4927,14 @@ class AgentMonitorTests(unittest.TestCase):
             )
         )
         self.assertTrue(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
                 agents_active=True,
             )
         )
         self.assertFalse(
-            status_bar.lid_closed_led_state_should_hold(
+            daemon_runtime.lid_closed_led_state_should_hold(
                 lid_closed=True,
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=None,
@@ -4998,78 +4942,68 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
     def test_lid_close_animation_runs_only_when_sleep_prevention_is_inactive(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
         self.assertFalse(
-            status_bar.lid_close_animation_should_run(
+            daemon_runtime.lid_close_animation_should_run(
                 sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
                 agents_active=False,
             )
         )
         self.assertFalse(
-            status_bar.lid_close_animation_should_run(
+            daemon_runtime.lid_close_animation_should_run(
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=True,
             )
         )
         self.assertFalse(
-            status_bar.lid_close_animation_should_run(
+            daemon_runtime.lid_close_animation_should_run(
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=None,
             )
         )
         self.assertTrue(
-            status_bar.lid_close_animation_should_run(
+            daemon_runtime.lid_close_animation_should_run(
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
                 agents_active=False,
             )
         )
         self.assertTrue(
-            status_bar.lid_close_animation_should_run(
+            daemon_runtime.lid_close_animation_should_run(
                 sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
                 agents_active=True,
             )
         )
 
     def test_lid_display_sleep_never_runs_with_an_external_or_unknown_display(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
         self.assertTrue(
-            status_bar.closed_lid_display_sleep_should_request(
+            daemon_runtime.closed_lid_display_sleep_should_request(
                 lid_closed=True,
                 external_display_active=False,
                 system_sleep_disabled=True,
             )
         )
         self.assertFalse(
-            status_bar.closed_lid_display_sleep_should_request(
+            daemon_runtime.closed_lid_display_sleep_should_request(
                 lid_closed=True,
                 external_display_active=True,
                 system_sleep_disabled=True,
             )
         )
         self.assertFalse(
-            status_bar.closed_lid_display_sleep_should_request(
+            daemon_runtime.closed_lid_display_sleep_should_request(
                 lid_closed=True,
                 external_display_active=None,
                 system_sleep_disabled=True,
             )
         )
         self.assertFalse(
-            status_bar.closed_lid_display_sleep_should_request(
+            daemon_runtime.closed_lid_display_sleep_should_request(
                 lid_closed=False,
                 external_display_active=False,
                 system_sleep_disabled=True,
             )
         )
         self.assertFalse(
-            status_bar.closed_lid_display_sleep_should_request(
+            daemon_runtime.closed_lid_display_sleep_should_request(
                 lid_closed=True,
                 external_display_active=False,
                 system_sleep_disabled=False,
@@ -5077,13 +5011,10 @@ class AgentMonitorTests(unittest.TestCase):
         )
 
     def test_lid_poll_enables_hold_on_close_and_clears_it_on_open(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
         animations = []
-        controller = status_bar.StatusBarController.alloc().init()
+        controller = SidePulseService().runtime
+        controller.settings = AgentMonitorSettings()
+        controller.sync_closed_lid_awake = lambda **kw: None
         controller.lid_poll_in_flight = True
         controller.pending_lid_error = None
         controller.pending_lid_closed = True
@@ -5093,40 +5024,37 @@ class AgentMonitorTests(unittest.TestCase):
         controller.lid_closed_led_hold_active = False
 
         with (
-            patch("sidepulse.status_bar.log_status_bar"),
+            patch("sidepulse.daemon_runtime.log_runtime"),
             patch.object(
-                status_bar.StatusBarController,
+                daemon_runtime.DaemonRuntime,
                 "should_run_lid_close_animation",
                 return_value=True,
             ),
             patch.object(
-                status_bar.StatusBarController,
+                daemon_runtime.DaemonRuntime,
                 "should_hold_lid_closed_led_state",
                 return_value=True,
             ),
             patch.object(
-                status_bar.StatusBarController,
+                daemon_runtime.DaemonRuntime,
                 "play_lid_animation",
                 side_effect=lambda kind: animations.append(kind),
             ),
         ):
-            controller.handleLidPollResult_(None)
+            controller.accept_lid_state(controller.pending_lid_closed)
             self.assertTrue(controller.lid_closed_led_hold_active)
             self.assertEqual(animations, [LID_ANIMATION_CLOSED])
 
             controller.pending_lid_closed = False
-            controller.handleLidPollResult_(None)
+            controller.accept_lid_state(controller.pending_lid_closed)
 
         self.assertFalse(controller.lid_closed_led_hold_active)
         self.assertEqual(animations, [LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN])
 
     def test_lid_poll_skips_close_animation_while_sleep_prevention_is_active(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
-        controller = status_bar.StatusBarController.alloc().init()
+        controller = SidePulseService().runtime
+        controller.settings = AgentMonitorSettings()
+        controller.sync_closed_lid_awake = lambda **kw: None
         controller.lid_poll_in_flight = True
         controller.pending_lid_error = None
         controller.pending_lid_closed = True
@@ -5136,49 +5064,35 @@ class AgentMonitorTests(unittest.TestCase):
         controller.lid_closed_led_hold_active = True
 
         with (
-            patch("sidepulse.status_bar.log_status_bar"),
+            patch("sidepulse.daemon_runtime.log_runtime"),
             patch.object(
-                status_bar.StatusBarController,
+                daemon_runtime.DaemonRuntime,
                 "should_run_lid_close_animation",
                 return_value=False,
             ),
             patch.object(
-                status_bar.StatusBarController,
+                daemon_runtime.DaemonRuntime,
                 "play_lid_animation",
             ) as play_lid_animation,
         ):
-            controller.handleLidPollResult_(None)
+            controller.accept_lid_state(controller.pending_lid_closed)
 
         self.assertTrue(controller.last_lid_closed)
         self.assertFalse(controller.lid_closed_led_hold_active)
         play_lid_animation.assert_not_called()
 
-    def test_lid_close_hold_suppresses_refresh_until_conditions_change(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
+    def test_daemon_lid_close_hold_suppresses_output_until_conditions_change(self) -> None:
+        service = SidePulseService()
+        service.runtime.lid_closed_led_hold_active = True
+        with patch.object(service.runtime, 'should_hold_lid_closed_led_state', side_effect=[True, False]), patch('sidepulse.service.discover_devices', return_value=[]) as discover:
+            service.sync_outputs()
+            discover.assert_not_called()
+            self.assertTrue(service.runtime.lid_closed_led_hold_active)
+            service.sync_outputs()
+            discover.assert_called_once()
+            self.assertFalse(service.runtime.lid_closed_led_hold_active)
 
-        controller = status_bar.StatusBarController.alloc().init()
-        controller.leds_enabled = True
-        controller.lid_closed_led_hold_active = True
-        controller.led_animation_until_monotonic = 0.0
-        controller.led_sync_in_flight = False
-
-        with patch.object(status_bar.StatusBarController,'should_hold_lid_closed_led_state',side_effect=[True,False]), patch('sidepulse.status_bar.daemon_command',return_value={'ok':True,'output_errors':{}}) as command:
-            controller.sync_leds_now(AgentMode.IDLE_READY,None,'agent')
-            self.assertGreater(command.call_args.args[0]['pause_seconds'],0)
-            self.assertTrue(controller.lid_closed_led_hold_active)
-            controller.sync_leds_now(AgentMode.WORKING,None,'agent')
-            self.assertEqual(command.call_args.args[0]['pause_seconds'],0)
-            self.assertFalse(controller.lid_closed_led_hold_active)
-
-    def test_status_bar_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
+    def test_daemon_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:
         fake = SimpleNamespace(
             settings=AgentMonitorSettings(
                 sleep_prevention_policy=SLEEP_PREVENTION_NEVER,
@@ -5198,28 +5112,23 @@ class AgentMonitorTests(unittest.TestCase):
             battery_sleep_safeguard_reason="",
         )
         fake.update_agent_awake_request = (
-            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+            lambda mode: daemon_runtime.DaemonRuntime.update_agent_awake_request(fake, mode)
         )
         fake.sync_closed_lid_awake = (
-            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+            lambda *, agents_active=None: daemon_runtime.DaemonRuntime.sync_closed_lid_awake(
                 fake,
                 agents_active=agents_active,
             )
         )
 
-        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
-            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.WORKING)
+        with patch("sidepulse.daemon_runtime.sleep_helper_installed", return_value=False):
+            daemon_runtime.DaemonRuntime.sync_keep_awake(fake, AgentMode.WORKING)
 
         self.assertFalse(fake.keep_awake.process_running())
         self.assertFalse(fake.closed_lid_awake.process_running())
         self.assertTrue(fake.agent_awake_requested)
 
-    def test_status_bar_sleep_prevention_always_holds_caffeinate_while_agents_idle(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
+    def test_daemon_sleep_prevention_always_holds_caffeinate_while_agents_idle(self) -> None:
         fake = SimpleNamespace(
             settings=AgentMonitorSettings(
                 sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
@@ -5239,28 +5148,23 @@ class AgentMonitorTests(unittest.TestCase):
             battery_sleep_safeguard_reason="",
         )
         fake.update_agent_awake_request = (
-            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+            lambda mode: daemon_runtime.DaemonRuntime.update_agent_awake_request(fake, mode)
         )
         fake.sync_closed_lid_awake = (
-            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+            lambda *, agents_active=None: daemon_runtime.DaemonRuntime.sync_closed_lid_awake(
                 fake,
                 agents_active=agents_active,
             )
         )
 
-        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
-            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.IDLE_READY)
+        with patch("sidepulse.daemon_runtime.sleep_helper_installed", return_value=False):
+            daemon_runtime.DaemonRuntime.sync_keep_awake(fake, AgentMode.IDLE_READY)
 
         self.assertTrue(fake.keep_awake.process_running())
         self.assertTrue(fake.closed_lid_awake.process_running())
         self.assertFalse(fake.agent_awake_requested)
 
-    def test_status_bar_sleep_prevention_agents_drives_both_paths(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
+    def test_daemon_sleep_prevention_agents_drives_both_paths(self) -> None:
         fake = SimpleNamespace(
             settings=AgentMonitorSettings(
                 sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
@@ -5280,43 +5184,38 @@ class AgentMonitorTests(unittest.TestCase):
             battery_sleep_safeguard_reason="",
         )
         fake.update_agent_awake_request = (
-            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+            lambda mode: daemon_runtime.DaemonRuntime.update_agent_awake_request(fake, mode)
         )
         fake.sync_closed_lid_awake = (
-            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+            lambda *, agents_active=None: daemon_runtime.DaemonRuntime.sync_closed_lid_awake(
                 fake,
                 agents_active=agents_active,
             )
         )
 
-        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
-            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.WORKING)
+        with patch("sidepulse.daemon_runtime.sleep_helper_installed", return_value=False):
+            daemon_runtime.DaemonRuntime.sync_keep_awake(fake, AgentMode.WORKING)
 
         self.assertTrue(fake.keep_awake.process_running())
         self.assertTrue(fake.closed_lid_awake.process_running())
 
         fake.agent_awake_grace_until_monotonic = None
-        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
-            status_bar.StatusBarController.sync_keep_awake(fake, AgentMode.IDLE_READY)
+        with patch("sidepulse.daemon_runtime.sleep_helper_installed", return_value=False):
+            daemon_runtime.DaemonRuntime.sync_keep_awake(fake, AgentMode.IDLE_READY)
 
         self.assertFalse(fake.keep_awake.process_running())
         self.assertFalse(fake.closed_lid_awake.process_running())
 
     def test_sleep_prevention_battery_safeguard_activates_only_on_battery(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
-        active, reason = status_bar.sleep_prevention_battery_safeguard(
+        active, reason = daemon_runtime.sleep_prevention_battery_safeguard(
             BatterySnapshot(percent=19, is_plugged=False),
             20,
         )
-        plugged_active, plugged_reason = status_bar.sleep_prevention_battery_safeguard(
+        plugged_active, plugged_reason = daemon_runtime.sleep_prevention_battery_safeguard(
             BatterySnapshot(percent=19, is_plugged=True),
             20,
         )
-        disabled_active, disabled_reason = status_bar.sleep_prevention_battery_safeguard(
+        disabled_active, disabled_reason = daemon_runtime.sleep_prevention_battery_safeguard(
             BatterySnapshot(percent=5, is_plugged=False),
             0,
         )
@@ -5328,12 +5227,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertFalse(disabled_active)
         self.assertEqual(disabled_reason, "disabled")
 
-    def test_status_bar_battery_safeguard_releases_all_sleep_prevention(self) -> None:
-        try:
-            from sidepulse import status_bar
-        except SystemExit as exc:
-            self.skipTest(str(exc))
-
+    def test_daemon_battery_safeguard_releases_all_sleep_prevention(self) -> None:
         fake = SimpleNamespace(
             settings=AgentMonitorSettings(
                 sleep_prevention_policy=SLEEP_PREVENTION_ALWAYS,
@@ -5354,17 +5248,17 @@ class AgentMonitorTests(unittest.TestCase):
             battery_sleep_safeguard_reason="",
         )
         fake.update_agent_awake_request = (
-            lambda mode: status_bar.StatusBarController.update_agent_awake_request(fake, mode)
+            lambda mode: daemon_runtime.DaemonRuntime.update_agent_awake_request(fake, mode)
         )
         fake.sync_closed_lid_awake = (
-            lambda *, agents_active=None: status_bar.StatusBarController.sync_closed_lid_awake(
+            lambda *, agents_active=None: daemon_runtime.DaemonRuntime.sync_closed_lid_awake(
                 fake,
                 agents_active=agents_active,
             )
         )
 
-        with patch("sidepulse.status_bar.sleep_helper_installed", return_value=False):
-            status_bar.StatusBarController.sync_keep_awake(
+        with patch("sidepulse.daemon_runtime.sleep_helper_installed", return_value=False):
+            daemon_runtime.DaemonRuntime.sync_keep_awake(
                 fake,
                 AgentMode.WORKING,
                 BatterySnapshot(percent=19, is_plugged=False),

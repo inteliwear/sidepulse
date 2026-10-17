@@ -150,7 +150,7 @@ class ProgramServer:
                         ack = {'ok': True, 'snapshot': ProgramMonitor(self.state).snapshot().to_dict()}
                         if self.on_command:
                             ack.update(self.on_command({'v': 1, 'type': 'output_info'}))
-                    elif report.get('type') in {'output_control', 'write_led'} and self.on_command:
+                    elif report.get('type') in {'output_control', 'write_led', 'play_lid_animation'} and self.on_command:
                         ack = self.on_command(report)
                     else:
                         ack = self.state.submit(report)

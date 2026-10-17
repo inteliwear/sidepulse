@@ -7,15 +7,16 @@ from pathlib import Path
 import sys
 import threading
 
-from .battery import program_for_battery, read_battery_snapshot
-from .device_writer import DeviceWriteError, discover_devices, write_led_program
-from .led_status import led_count_for_target, program_for_agent_mode
+from .battery import program_for_battery
+from .daemon_runtime import DaemonRuntime
+from .device_writer import DeviceWriteError, discover_devices, write_led_program, normalize_led_text, validate_led_text
+from .led_status import apply_brightness, led_count_for_target, program_for_agent_mode
 from .relay import (
     RelayConfig,
     listen_for_status_updates,
     load_relay_config,
 )
-from .settings import LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM, load_settings
+from .settings import LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM, load_settings, LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN
 
 
 SERVICE_POLL_SECONDS = 1.0
@@ -39,9 +40,12 @@ class SidePulseService:
         self.output_errors: dict[str, str] = {}
         self.output_lock = threading.RLock()
         self.outputs_enabled = True
+        self.keep_awake_enabled = True
         self.ui_pause_until = 0.0
         self.manual_pause_until = 0.0
         self.battery_preview_until = 0.0
+        self.animation_until = 0.0
+        self.runtime = DaemonRuntime(self)
 
     def run(self) -> int:
         self.install_signal_handlers()
@@ -61,12 +65,22 @@ class SidePulseService:
             while not self.stop_event.is_set():
                 config = load_relay_config()
                 self.sync_receiver(config)
-                self.sync_outputs()
+                try:
+                    self.runtime.poll()
+                except Exception as exc:
+                    print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)
+                try:
+                    self.sync_outputs()
+                except Exception as exc:
+                    print(f"sidepulse service: output update failed: {exc}", file=sys.stderr)
                 self.stop_event.wait(self.poll_seconds)
         finally:
-            self.stop_receiver()
-            self.program_server.stop()
-            self.program_relay.stop()
+            try:
+                self.stop_receiver()
+                self.program_server.stop()
+                self.program_relay.stop()
+            finally:
+                self.runtime.close()
         return 0
 
     def stop(self) -> None:
@@ -120,18 +134,16 @@ class SidePulseService:
 
     def _sync_outputs(self) -> None:
         now = time.monotonic()
-        if not self.outputs_enabled or now < max(self.ui_pause_until, self.manual_pause_until):
+        if not self.outputs_enabled or now < max(self.ui_pause_until, self.manual_pause_until, self.animation_until):
             return
+        if self.runtime.lid_closed_led_hold_active:
+            if self.runtime.should_hold_lid_closed_led_state():
+                return
+            self.runtime.lid_closed_led_hold_active = False
         settings = load_settings()
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
-        battery = None
-        try:
-            battery = read_battery_snapshot(
-                full_charge_watts=settings.battery_full_charge_watts,
-            )
-        except Exception:
-            pass
+        battery = self.runtime.last_battery_snapshot
 
         active_targets: set[str] = set()
         for candidate in discover_devices():
@@ -176,6 +188,47 @@ class SidePulseService:
         for key in set(self.last_program_by_target) - active_targets:
             self.last_program_by_target.pop(key, None)
 
+    def play_lid_animation(self, kind, *, program=None, duration=None):
+        if kind not in (LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN):
+            from .program_status import StatusError
+            raise StatusError('Invalid lid animation')
+        if program is not None:
+            if not isinstance(program, str):
+                raise ValueError('Invalid animation program')
+            program = normalize_led_text(program)
+            validate_led_text(program)
+            if type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 3600:
+                raise ValueError('Invalid animation duration')
+        with self.output_lock:
+            if not self.outputs_enabled or time.monotonic() < max(self.ui_pause_until, self.manual_pause_until):
+                return
+            settings = load_settings()
+            animation = settings.lid_animation(kind)
+            # Lid presets and custom profiles share the configured animation state.
+            from .settings import ANIMATION_STATE_LID_CLOSED, ANIMATION_STATE_LID_OPEN
+            from .models import AgentMode
+            state = ANIMATION_STATE_LID_CLOSED if kind == LID_ANIMATION_CLOSED else ANIMATION_STATE_LID_OPEN
+            selected = settings.agent_animation(state)
+            if program is None:
+                from .settings import AGENT_ANIMATION_LID_CLOSED, AGENT_ANIMATION_LID_OPEN, default_lid_animation
+                duration = animation.duration_seconds
+                if settings.agent_animation_id(state) in (AGENT_ANIMATION_LID_CLOSED, AGENT_ANIMATION_LID_OPEN):
+                    duration = default_lid_animation(kind).duration_seconds
+            for candidate in discover_devices():
+                device_id = candidate.device_id or str(candidate.root.expanduser())
+                if settings.display_for_device(device_id) == LED_DISPLAY_CUSTOM:
+                    continue
+                try:
+                    device_program = apply_brightness(program, settings.brightness_for_device(device_id)) if program is not None else program_for_agent_mode(AgentMode.IDLE_READY,
+                        led_count=led_count_for_target(candidate.target),
+                        brightness=settings.brightness_for_device(device_id),
+                        animation_style=selected.style, custom_program=selected.custom_program)
+                    write_led_program(device_program, device_path=candidate.target)
+                    self.last_program_by_target.pop(f'file:{candidate.target}', None)
+                except Exception as exc:
+                    self.output_errors[device_id] = str(exc)
+            self.animation_until = time.monotonic() + duration + 0.15
+
 
     def handle_command(self, command):
         from .program_status import StatusError
@@ -188,7 +241,9 @@ class SidePulseService:
             return value
         kind = command.get('type')
         if kind == 'output_info':
-            return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled}
+            return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled,
+                    'runtime': {**self.runtime.view, 'keep_awake_enabled': self.keep_awake_enabled,
+                        'battery_preview_until': self.battery_preview_until}}
         with self.output_lock:
             if kind == 'output_control':
                 enabled = command.get('enabled', self.outputs_enabled)
@@ -196,10 +251,29 @@ class SidePulseService:
                     raise StatusError('Invalid output enabled value')
                 pause = duration('pause_seconds')
                 preview = duration('battery_preview_seconds')
+                keep_awake = command.get('keep_awake_enabled', self.keep_awake_enabled)
+                if type(keep_awake) is not bool:
+                    raise StatusError('Invalid keep awake enabled value')
                 self.outputs_enabled = enabled
-                self.ui_pause_until = time.monotonic() + pause
-                self.battery_preview_until = time.monotonic() + preview
+                self.keep_awake_enabled = keep_awake
+                if 'pause_seconds' in command:
+                    self.ui_pause_until = time.monotonic() + pause
+                if 'battery_preview_seconds' in command:
+                    self.battery_preview_until = time.monotonic() + preview
+                if not enabled:
+                    for candidate in discover_devices():
+                        try:
+                            from .models import AgentMode
+                            write_led_program(program_for_agent_mode(AgentMode.IDLE_READY,
+                                led_count=led_count_for_target(candidate.target)), device_path=candidate.target)
+                        except Exception as exc:
+                            self.output_errors[candidate.device_id or str(candidate.root)] = str(exc)
+                    self.last_program_by_target.clear()
                 return {'ok': True, 'output_errors': dict(self.output_errors)}
+            if kind == 'play_lid_animation':
+                self.play_lid_animation(command.get('kind'), program=command.get('program'),
+                    duration=command.get('duration_seconds'))
+                return {'ok': True}
             if kind == 'write_led':
                 hold = duration('hold_seconds', 1.5)
                 program, target = command.get('program'), command.get('target')

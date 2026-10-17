@@ -203,5 +203,8 @@ For a failure, capture the exact command or provider action, build IDs, previous
 - [ ] Quit the UI while a session is Working. The daemon continues driving physical LEDs and forwarding individual phone updates.
 - [ ] Reopen the UI. It obtains the same session from the daemon without reading a database or provider logs.
 - [ ] Change brightness/display settings and verify the daemon applies them. A UI preview or lid animation must not be overwritten by the automatic loop during its hold.
+- [ ] Quit only the tray while a session is working. Session LEDs, forwarding, sleep prevention, low-battery safeguards, and history sampling should continue. Reopen the tray and verify it shows the existing daemon state without restarting a preview or duplicating history records.
+- [ ] With the tray closed, test lid close/open animations and plug/unplug battery previews. Each should restore normal output after its configured hold; a sleep-allowed closed lid should keep its final frame until the lid or policy changes.
+- [ ] Stop the daemon and verify its sleep-prevention assertion is released. Restart it and verify the saved sleep policy applies again.
 - [ ] Disable and re-enable LED output from the UI. Session state remains intact and phone session forwarding continues.
 - [ ] Restart the daemon. Its local session list and pending updates start empty. Phone apps retain their last received state until subsequent updates; startup does not send an aggregate reset or snapshot.

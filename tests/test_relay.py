@@ -130,7 +130,6 @@ class SidePulseServiceTests(unittest.TestCase):
         settings.display_for_device.return_value = "custom"
         with (
             patch("sidepulse.service.load_settings", return_value=settings),
-            patch("sidepulse.service.read_battery_snapshot", side_effect=OSError),
             patch("sidepulse.service.discover_devices", return_value=[]),
             patch("sidepulse.links.send_ios_program") as send,
         ):
@@ -150,8 +149,7 @@ class SidePulseServiceTests(unittest.TestCase):
                 )
             )
             with (
-                    patch("sidepulse.service.load_settings", return_value=AgentMonitorSettings()),
-                patch("sidepulse.service.read_battery_snapshot", side_effect=OSError),
+                patch("sidepulse.service.load_settings", return_value=AgentMonitorSettings()),
                 patch(
                     "sidepulse.service.discover_devices",
                     return_value=(DeviceCandidate(root, target, "test"),),
@@ -164,7 +162,7 @@ class SidePulseServiceTests(unittest.TestCase):
 
     def test_daemon_keeps_output_ownership_when_ui_is_running(self):
         service = SidePulseService()
-        with patch('sidepulse.service.discover_devices',return_value=[]), patch.object(service.monitor,'snapshot',wraps=service.monitor.snapshot) as snapshot, patch('sidepulse.service.read_battery_snapshot',side_effect=OSError):
+        with patch('sidepulse.service.discover_devices',return_value=[]), patch.object(service.monitor,'snapshot',wraps=service.monitor.snapshot) as snapshot:
             service.sync_outputs()
         snapshot.assert_called_once()
 
