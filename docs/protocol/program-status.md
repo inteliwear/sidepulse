@@ -135,6 +135,24 @@ For plain OSC statuses and phone presentation, aggregate priority is Error, Bloc
 
 A successful direct LED write pauses automatic phone presentation without deleting status records. The next **newly accepted** update resumes it, even if the aggregate state has the same name as before the manual write. A duplicate update does not resume it. A phone may also resume it on an explicit local presentation change: on iOS, saving Session LED pattern settings (any condition, or re-enabling session LEDs) while sessions exist resumes and re-renders without a new update. Toggling Mac session sync does not invent a new revision or override a manual phone pattern when records have not changed. Reconnect retries pending automatic output, while manual mode stays manual. Failed writes leave automatic output retryable; Android uncertain writes are not blindly repeated. Done expiry is reevaluated while an app can run and on recovery, not by a guaranteed background timer.
 
+### Acknowledging completion
+
+**Acknowledge Done** changes that receiver's current Done session to Idle and
+clears its completion message. The row, identity, source timestamp, sequence,
+and capacity recency are preserved. The action checks the displayed sequence
+and only applies to Done. The Mac also checks the source timestamp, since its
+in-memory sequences restart with the daemon. A stale UI action cannot
+acknowledge a newer report.
+Duplicate/stale reports cannot undo it; any newer accepted report replaces Idle.
+Other sessions retain their priority. Automatic LEDs select Idle when nothing
+higher-priority remains; acknowledgement does not override manual LED control.
+
+On Mac the daemon owns this change, so the tray, `sidepulse status`, and
+`sidepulse live` see the same result. Phones save it in their existing local
+ledger and iOS updates its combined Live Activity. Acknowledgement is local to
+the receiver: it is not forwarded and adds no OSC message or bridge mode.
+The phone's separate Clear action still hides a row until its next newer report.
+
 ## Hook producers
 
 Each interpreted hook reports one complete session state. A permission request reports Blocked; the next accepted hook replaces it with Working, Error, Done, or another explicit state. The daemon does not track individual pending approvals. A SessionEnd hook reports its interpreted completion state. Late notifications cannot revive a completed session, and internal Codex sessions remain suppressed across sparse hooks.

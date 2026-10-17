@@ -740,6 +740,20 @@ class StatusBarController(NSObject):
         menu.popUpMenuPositioningItem_atLocation_inView_(None, (0, height), sender)
 
     @objc.IBAction
+    def acknowledgeSession_(self, sender):
+        status = sender.representedObject()
+        if not isinstance(status, AgentStatus):
+            return
+        try:
+            daemon_command({'type': 'acknowledge_session', 'agent_id': status.agent_id,
+                            'seq': status.seq, 'updated_at': status.updated_at.isoformat()})
+        except Exception as exc:
+            self.set_settings_message(f"Could not acknowledge session: {exc}")
+            return
+        self.close_status_menu()
+        self.refresh_(None)
+
+    @objc.IBAction
     def openSessionWithAction_(self, sender):
         payload = sender.representedObject()
         if not isinstance(payload, dict):
@@ -2857,6 +2871,12 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
                     disambiguate_title=session_title_collision_key(status) in collision_keys,
                 )
             )
+            if status.mode == AgentMode.COMPLETED:
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Acknowledge Done", "acknowledgeSession:", "")
+                item.setTarget_(target)
+                item.setRepresentedObject_(status)
+                item.setIndentationLevel_(1)
+                menu.addItem_(item)
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Devices"))

@@ -68,6 +68,27 @@ def report(state):
     return {'v':1, 'type':'program_status', 'scope':'session', 'status':{'state':state}}
 
 
+def test_acknowledged_done_drives_idle_without_overriding_manual_hold(background):
+    b = background
+    submit_report(report('done'), path=b.path)
+    b.tick(100)
+    done_program = b.writes.call_args
+    done = DaemonMonitor(b.path).snapshot().statuses[0]
+    daemon_command({'type': 'write_led', 'target': str(b.writes.return_value),
+        'program': '#FF0000', 'hold_seconds': 10}, path=b.path)
+    assert daemon_command({'type': 'acknowledge_session', 'agent_id': done.agent_id,
+        'seq': done.seq, 'updated_at': done.updated_at.isoformat()}, path=b.path)['acknowledged']
+    b.tick(105)
+    assert b.writes.call_count == 2
+    b.tick(111)
+    assert b.writes.call_count == 3 and b.writes.call_args != done_program
+    assert DaemonMonitor(b.path).snapshot().aggregate.mode.value == 'idle_ready'
+    submit_report(report('working'), path=b.path)
+    b.tick(112)
+    assert b.writes.call_count == 4
+    assert DaemonMonitor(b.path).snapshot().aggregate.mode.value == 'working'
+
+
 def test_headless_daemon_records_history_and_drives_outputs_through_ui_reconnect(background):
     b=background
     submit_report(report('working'), path=b.path)

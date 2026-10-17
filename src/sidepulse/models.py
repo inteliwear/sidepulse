@@ -78,6 +78,7 @@ class AgentStatus:
     message: str | None = None
     origin: str | None = None
     stale: bool = False
+    seq: int | None = None
 
     @property
     def priority(self) -> int:
@@ -108,6 +109,7 @@ class AgentStatus:
             "message": self.message,
             "origin": self.origin,
             "stale": self.stale,
+            **({"seq": self.seq} if self.seq is not None else {}),
         }
 
 

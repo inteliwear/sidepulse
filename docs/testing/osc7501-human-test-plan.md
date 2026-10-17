@@ -38,8 +38,9 @@ Run one command at a time, allowing the desktop to refresh.
 | L7 | `sidepulse report --scope osc-human-main --state done --msg 'Build complete'` | Done/Completed appears; it is not still Error. |
 | L8 | `sidepulse report --scope osc-human-main --state clear` | The test record disappears and output returns to Idle, assuming no other active records. |
 | L9 | Send Working, then `--state clear`. | Working is removed immediately; it must not turn into a false Done. |
+| L10 | Send Done, then choose **Acknowledge Done** beneath that tray session. | The session remains Idle in the tray, `sidepulse status`, and `sidepulse live`. With no other active session, LEDs select Idle. A newer Working or Done report replaces it. Other receivers remain unchanged. |
 
-An acknowledgement means accepted into the running daemon’s memory. It does not prove remote delivery or a successful hardware write.
+A report submission acknowledgement means accepted into the running daemon’s memory. It does not prove remote delivery or a successful hardware write. **Acknowledge Done** is the separate user action that changes a completed session to Idle.
 
 ### Raw OSC CLI input
 

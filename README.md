@@ -699,6 +699,11 @@ an active session for the full stale window, and the LEDs return to the very
 dim Idle pattern. Idle/session-start records also do not count as active
 sessions.
 
+Use **Acknowledge Done** beneath a completed session in the tray to keep it listed
+as Idle until its next newer update. This changes the Mac daemon's local state;
+it does not send an acknowledgement to other receivers. Other active sessions
+continue to determine the LEDs.
+
 Status detection is strongest when the agent tells the monitor its intended
 handoff state explicitly. A final assistant message can include a hidden marker
 line:

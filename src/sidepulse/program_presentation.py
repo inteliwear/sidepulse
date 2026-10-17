@@ -15,8 +15,8 @@ class ProgramMonitor:
                     if status.mode.value != 'completed' or status.age_seconds(now) <= 1200]
         stale = []
         if any(status_counts_active(s) for s in statuses):
-            stale = [replace(s, stale=True) for s in statuses if not status_counts_active(s)]
-            statuses = [s for s in statuses if status_counts_active(s)]
+            stale = [replace(s, stale=True) for s in statuses if s.mode.value == 'completed']
+            statuses = [s for s in statuses if s.mode.value != 'completed']
         statuses = tuple(sorted(statuses, key=lambda s: (s.priority, -s.updated_at.timestamp(), s.agent_id)))
         aggregate = aggregate_status(statuses, tuple(stale))
         active = sum(status_counts_active(s) for s in statuses)
@@ -43,7 +43,7 @@ class DaemonMonitor:
             fields = {key: row.get(key) for key in ('provider', 'agent_id', 'display_name', 'event_name',
                       'session_id', 'cwd', 'tool_name', 'message', 'origin')}
             return AgentStatus(**fields, mode=AgentMode(row['mode']), updated_at=parse_datetime(row['updated_at']),
-                               stale=row.get('stale', False))
+                               stale=row.get('stale', False), seq=row.get('seq'))
         aggregate = value['aggregate']
         self.output_errors = reply.get('output_errors', {})
         self.runtime = reply.get('runtime', {})

@@ -273,6 +273,27 @@ class ProgramState:
                 self._sessions.pop(key, None)
                 del self._sequences[key]
 
+    @staticmethod
+    def _session_identity(key):
+        return 'program:' + hashlib.sha256(json.dumps(list(key)).encode()).hexdigest()
+
+    def acknowledge_session(self, agent_id, seq, updated_at) -> bool:
+        """Locally acknowledge this exact Done update without publishing or resequencing."""
+        if not isinstance(agent_id, str) or type(seq) is not int or seq < 1 or not isinstance(updated_at, str):
+            raise StatusError('Expected a session identity, sequence, and timestamp')
+        with self.lock:
+            for key, update in self._sessions.items():
+                if self._session_identity(key) != agent_id:
+                    continue
+                timestamp = datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc).isoformat()
+                if update['seq'] != seq or timestamp != updated_at or update['status']['state'] != 'done':
+                    return False
+                update['status'] = {k: v for k, v in update['status'].items() if k != 'msg'}
+                update['status']['state'] = 'idle'
+                self._revision += 1
+                return True
+            return False
+
     def statuses(self) -> tuple[AgentStatus, ...]:
         with self.lock:
             rows = copy.deepcopy(self._sessions)
@@ -288,12 +309,13 @@ class ProgramState:
             origin = context.get('origin')
             if sender != 'local' and context.get('source_name'):
                 origin = f"{origin} · {context['source_name']}" if origin else context['source_name']
-            identity = 'program:' + hashlib.sha256(json.dumps([sender, publisher, scope]).encode()).hexdigest()
+            identity = self._session_identity((sender, publisher, scope))
             result.append(AgentStatus(provider=context.get('provider') or app or 'program', agent_id=identity,
                 display_name=context.get('display_name') or status.get('title') or app or scope, mode=mode,
                 updated_at=datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc),
                 event_name=context.get('event_name') or 'ProgramStatus', session_id=context.get('session_id') or identity,
-                cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender))
+                cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
+                seq=update['seq']))
         return tuple(result)
 
     def close(self):

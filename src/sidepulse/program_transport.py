@@ -150,6 +150,11 @@ class ProgramServer:
                         ack = {'ok': True, 'snapshot': ProgramMonitor(self.state).snapshot().to_dict()}
                         if self.on_command:
                             ack.update(self.on_command({'v': 1, 'type': 'output_info'}))
+                    elif report.get('type') == 'acknowledge_session':
+                        if type(report.get('v')) is not int or report['v'] != 1:
+                            raise StatusError('Unsupported protocol version')
+                        ack = {'ok': True, 'acknowledged': self.state.acknowledge_session(
+                            report.get('agent_id'), report.get('seq'), report.get('updated_at'))}
                     elif report.get('type') in {'output_control', 'write_led', 'play_lid_animation'} and self.on_command:
                         ack = self.on_command(report)
                     else:
