@@ -24,7 +24,9 @@ CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
                   'cwd': 4096, 'origin': 512, 'display_name': 512, 'tool_name': 512,
                   'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16}
 # Leave room for push-provider framing, sender keys, and JSON string escaping.
-MAX_PHONE_STATUS_BYTES = 3000
+MAX_PHONE_STATUS_BYTES = 1800
+MAX_BRIDGE_MESSAGE_BYTES = 2048
+MAX_OUTBOUND_MESSAGE_BYTES = 1024
 MODES = {'idle': AgentMode.IDLE_READY, 'working': AgentMode.WORKING,
          'blocked': AgentMode.WAITING_FOR_INPUT, 'done': AgentMode.COMPLETED,
          'error': AgentMode.BLOCKED_ERROR}
@@ -120,9 +122,17 @@ def validate_update(value: object) -> dict:
     return update
 
 
+def bridge_update(update: dict) -> dict:
+    """Clip outgoing message text without changing the source or OSC validation."""
+    result = validate_update(update)
+    if 'msg' in result['status']:
+        result['status']['msg'] = result['status']['msg'].encode('utf-8')[:MAX_OUTBOUND_MESSAGE_BYTES].decode('utf-8', errors='ignore')
+    return result
+
+
 def phone_update(update: dict) -> dict:
     """Bound one push, never the combined session ledger. IDs are never clipped."""
-    result = {k: copy.deepcopy(v) for k, v in validate_update(update).items() if k != 'context'}
+    result = {k: copy.deepcopy(v) for k, v in bridge_update(update).items() if k != 'context'}
     status = result.get('status', {})
     title = update.get('context', {}).get('title')
     if title and status and status['state'] != 'clear':

@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 import socket
-from .program_status import CONTEXT_LIMITS, validate_status
+from .program_status import CONTEXT_LIMITS, MAX_OUTBOUND_MESSAGE_BYTES, validate_status
 
 
 def clean_text(value: str, limit: int) -> str:
@@ -41,7 +41,7 @@ def hook_report(provider: str, line: dict) -> dict | None:
     if status['state'] == 'blocked':
         status['kind'] = 'permission' if 'permission' in record.event_name.lower() else 'question'
     if interpreted.message:
-        status['msg'] = clean_text(interpreted.message, 2048)
+        status['msg'] = clean_text(interpreted.message, MAX_OUTBOUND_MESSAGE_BYTES)
     title = title_from_event(record)
     if title:
         status['title'] = clean_text(title, 192)

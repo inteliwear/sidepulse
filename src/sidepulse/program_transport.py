@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .program_status import MAX_BYTES, ProgramState, StatusError, encoded
+from .program_status import MAX_BYTES, MAX_BRIDGE_MESSAGE_BYTES, ProgramState, StatusError, bridge_update, encoded, phone_update
 from .providers import default_state_dir, candidate_state_dirs
 
 
@@ -193,7 +193,13 @@ def sender_identity(server: str, channel: str) -> str:
 
 def publish_update(server: str, channel: str, update: dict, *, phone: bool = False) -> None:
     # Existing phone push handlers carry application data under `data`.
+    update = phone_update(update) if phone else bridge_update(update)
     body = encoded({'data': update} if phone else update).encode()
+    while len(body) > MAX_BRIDGE_MESSAGE_BYTES and update['status'].get('msg'):
+        update['status']['msg'] = update['status']['msg'][:-1]
+        body = encoded({'data': update} if phone else update).encode()
+    if len(body) > MAX_BRIDGE_MESSAGE_BYTES:
+        raise StatusError('Status metadata exceeds the 2048-byte bridge limit')
     request = urllib.request.Request(endpoint(server, channel), data=body,
         method='POST', headers={'Content-Type': 'application/json'})
     try:
@@ -230,7 +236,6 @@ class ProgramRelay:
             self.thread.join(timeout=1)
 
     def sync(self):
-        from .program_status import phone_update
         from .links import load_phone_links
         from .relay import load_relay_config
         from .settings import load_settings

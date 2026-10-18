@@ -1,6 +1,6 @@
 # OSC 7501 status integration
 
-Updated October 16, 2026. This plan reflects the simplified implementation on `codex/osc7501-integration` and supersedes the earlier retained-status bridge design.
+Updated October 18, 2026. This plan reflects the simplified implementation on `codex/osc7501-integration` and supersedes the earlier retained-status bridge design.
 
 ## Flow and ownership
 
@@ -32,19 +32,19 @@ Desktop: POST each update to `/api/leds/{channel}` and consume it on the existin
 
 The daemon keeps live sessions, a bounded 4,096-event queue, receipt checks, and delivery cursors in memory. It owns physical LED output even while the UI is running. Hooks submit over the local socket and return; they never open a state store. The UI reads the daemon view and sends controls over that socket. A daemon restart starts empty; reopening the UI retains the running daemon state. No database or state-file fallback is used. Configuration and diagnostic logs remain separate files. A worker checks the in-memory queue every second, retries failures, and preserves ordering per destination.
 
-Queues retain the latest update per sender/publisher/session, at most 10 items per routing key, for at most 24 hours. Missed intermediate updates are possible; offline delivery is best-effort and a lost clear can leave stale state. This accepted tradeoff does not add bridge endpoints, Redis changes, push hints, or snapshot repair.
+Queues retain the latest update per sender/publisher/session, at most 10 items per routing key, for at most 300 seconds. Requests and retained recovery messages are capped at 2048 bytes, including injected recovery metadata. Missed intermediate updates are possible; offline delivery is best-effort and a lost clear can leave stale state. This accepted tradeoff does not add bridge endpoints, Redis changes, push hints, or snapshot repair.
 
 ## Phone presentation and compatibility
 
 Phones advertise `status_protocol: 2`; snapshot-only links need updated apps and renewed pairing. Desktop raw-hook and snapshot messages are ignored; both desktops must use the individual JSON protocol. Phone snapshot parsing and old saved-cache migration are removed. Both apps accept only individual `program_status` updates and the current saved-session format; older caches start fresh.
 
-Each update has its own 3,000-byte encoded budget. Clip only `msg` at Unicode boundaries to fit, preserving IDs, sequence, state, and clear updates. Each receiver retains the 64 most recently updated nonempty sessions across sources, evicting the oldest on overflow rather than rejecting fresh updates. Accepted arrival order is maintained while the daemon runs; eviction preserves replay guards and does not send synthetic clears. Per-phone **Forward sessions** toggles forwarding; the phone picks patterns. Manual pushes remain explicit. Paused syncing resumes pending retained events, without manufacturing state changes.
+Hook adapters and bridge senders cap `msg` at 1,024 UTF-8 bytes before delivery. Existing OSC/JSON input limits stay compatible. Each phone update has its own 1,800-byte encoded budget, reserving space beneath the bridge's 2048-byte limit for injected sender metadata. Clip only `msg` at Unicode boundaries to fit, preserving IDs, sequence, state, and clear updates. Desktop relay messages are also clipped to 2048 bytes; metadata that cannot fit is rejected locally. Each receiver retains the 64 most recently updated nonempty sessions across sources, evicting the oldest on overflow rather than rejecting fresh updates. Accepted arrival order is maintained while the daemon runs; eviction preserves replay guards and does not send synthetic clears. Per-phone **Forward sessions** toggles forwarding; the phone picks patterns. Manual pushes remain explicit. Paused syncing resumes pending retained events, without manufacturing state changes.
 
 ## Scope and verification
 
 Permission approval responses and automatic terminal capture/probing are outside this change. The CLI supports explicit OSC submission without adding a terminal emulator.
 
-Verify field normalization and accounting with shared desktop/Swift/Kotlin fixtures. Exercise real local sockets, existing bridge POST/SSE and phone recovery routes, queue bounds, stale replay, sender restart, session coalescing, oldest eviction, and a maximum 24-hour expiry. Preserve provider parity and local-device output; verify phones receive state only and manual pushes remain available. See [automated evidence](../testing/osc7501-testing.md) and the [human checklist](../testing/osc7501-human-test-plan.md).
+Verify field normalization and accounting with shared desktop/Swift/Kotlin fixtures. Exercise real local sockets, existing bridge POST/SSE and phone recovery routes, queue bounds, stale replay, sender restart, session coalescing, oldest eviction, and a maximum 300-second expiry. Preserve provider parity and local-device output; verify phones receive state only and manual pushes remain available. See [automated evidence](../testing/osc7501-testing.md) and the [human checklist](../testing/osc7501-human-test-plan.md).
 
 No production deployment or physical device validation is implied by local tests.
 
@@ -52,4 +52,4 @@ No production deployment or physical device validation is implied by local tests
 
 Implemented a Sessions summary on Home and a full session list in iOS and Android. Rows are derived from the existing accounting ledger and show the session title, status, message, progress, agent, sender, and update time. Each sender/publisher/session has one row; IDs never create child statuses. Errors and blocked work appear first. Sessions remain visible during manual LED playback and without hardware, restore after restart, and disappear on a valid clear or sender removal. This adds no transport or persistence layer.
 
-Both apps support configurable session LED patterns, direct remote LED writes, and local shortcut writes. A successful manual write owns LED output until a newer accepted session update or an explicit presentation-settings change. iOS also has one combined session Live Activity, independent of LED settings, updated locally when iOS runs the app. No ActivityKit push service is added.
+Both apps support configurable session LED patterns, direct remote LED writes, and local shortcut writes. A successful manual write owns LED output until a newer accepted session update or an explicit presentation-settings change while session LEDs are enabled. iOS also has one combined session Live Activity, independent of LED settings, updated locally when iOS runs the app. No ActivityKit push service is added.

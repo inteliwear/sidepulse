@@ -1,6 +1,6 @@
 # OSC status integration: testing strategy and evidence
 
-Updated October 16, 2026. This section describes the current checkout. Earlier
+Updated October 18, 2026. This section describes the current checkout. Earlier
 results are retained in the collapsed historical notes below and do not establish
 current protocol support, deployment, or installed-device behavior.
 
@@ -20,10 +20,11 @@ current protocol support, deployment, or installed-device behavior.
   become Done through silence; Done is visible for 20 minutes.
 - The existing bridge routes carry individual updates. Its in-memory recovery
   queues keep up to 10 items per key, coalescing by sender/publisher/session,
-  with at most 24-hour retention. Manual phone pushes keep their latest command.
+  with at most 300-second retention and a 2048-byte request/recovery limit.
+  Senders cap `msg` at 1,024 UTF-8 bytes and may shorten it further to fit. Manual phone pushes keep their latest command.
   There is no Redis dependency, snapshot repair, or periodic state resend.
 - Phones select configurable session LED patterns. Direct remote and shortcut
-  writes own LEDs until a newer accepted status or explicit settings change.
+  writes own LEDs until a newer accepted status or explicit settings change while session LEDs are enabled. Disabling session LEDs stops an active session pattern; manual output stays under manual control while disabled.
   Current saved-session data survives relaunch; earlier cache formats start fresh.
 - iOS has one combined local Live Activity, independent of LED output. There is
   no new ActivityKit push service. iOS controls app/background execution.
@@ -67,21 +68,22 @@ xcodebuild -project ../sidepulse-ios/SidePulse/SidePulse.xcodeproj \
 ```
 
 The deployment-target override is local build configuration; it does not change
-the project's release target. The human checklist is
+the project's release target. The iOS 27 minimum is intentional for this unreleased
+app. The human checklist is
 [osc7501-human-test-plan.md](osc7501-human-test-plan.md).
 
 ## Latest recorded verification
 
 | Check | Result |
 | --- | --- |
-| Desktop, including six local bridge integration checks | 914 passed, 1 skipped; 600 subtests passed. 40 existing packaging deprecation warnings. |
-| Daemon/tray ownership after final control-state adjustment | 413 passed; 126 subtests passed. Includes headless runtime behavior, tray lifecycle, previews, hooks, relay and cached UI observations. |
-| Swift package | 84 passed. |
-| Android unit tests | 89 passed. |
+| Desktop, including local bridge integration checks | 932 passed, 1 skipped; 600 subtests passed. 40 existing packaging deprecation warnings. |
+| Swift package | 90 passed, including LED master-off/manual ownership. |
+| Android unit tests | 95 passed, including LED master-off/manual ownership. |
 | Android lint and debug build | Passed. |
-| Android focused emulator session/source/rejected-payload checks | 3 passed after the receive-path cleanup. |
+| Android focused emulator settings/master-switch/source-isolation checks | 3 passed. |
 | iOS simulator app and widget build | Passed. |
-| Rust bridge, last source verification | 44 passed, 1 credential-dependent check ignored; local debug build passed. |
+| Local deployment setup | 2 passed; temporary files only, no services started. |
+| Rust bridge, last source verification | 46 passed, 1 credential-dependent check ignored; local debug build passed. |
 
 The latest cleanups were verified from source locally. They were not deployed to
 production or reinstalled on the physical iPhone. Earlier installs, simulator UI
@@ -96,14 +98,14 @@ The following notes are preserved as build history. Their old commands, test
 counts, database/Redis claims, snapshot behavior, and installation statements
 are not the current contract. Use the current sections above for reproduction.
 
-Current contract: one latest state per source/session, including permissions. IDs are descriptive fields. Bridge recovery coalesces by authorized sender/publisher/scope, retains 10 items per routing key, and expires within 24 hours. The evidence below records successive builds; earlier hierarchy, Redis, snapshot, and persistence behavior is historical and superseded.
+Current contract: one latest state per source/session, including permissions. IDs are descriptive fields. Bridge recovery coalesces by authorized sender/publisher/scope, retains 10 items per routing key, and expires within 300 seconds. The evidence below records successive builds; earlier hierarchy, Redis, snapshot, and persistence behavior is historical and superseded.
 
 > **October 16, 2026 current architecture:** live state and pending updates are owned solely by the daemon in memory. The UI uses its socket; the daemon owns physical LED output. SQLite/shared-state and producer fallback persistence have been removed. Earlier persistence results below are historical.
 
 > **Earlier October 16 transport flow:** hook adapters submit only OSC-style JSON; the daemon, bridge receiver, UI, and default CLI status/watch use that accounted state. Raw hook socket/bridge delivery and live log/transcript reconstruction are removed. Phone and desktop delivery send individual updates. Historical snapshot/replay/capacity results below describe the previous implementation. The current contract is in [program-status.md](../protocol/program-status.md); the human checklist has been updated for individual delivery and source isolation.
 
 
-Updated October 16, 2026. Branch: `codex/osc7501-integration`. The integration now uses the existing bridge routes and queues. Earlier tests for a separate retained-status endpoint were replaced with tests of the simpler transport.
+Updated October 18, 2026. Branch: `codex/osc7501-integration`. The integration now uses the existing bridge routes and queues. Earlier tests for a separate retained-status endpoint were replaced with tests of the simpler transport.
 
 ## Coverage
 
@@ -219,7 +221,7 @@ Full regression: **861 passed, 5 skipped, 607 subtests** (40 existing packaging 
 
 Confirmed decision: each source/session has exactly one current state. Permission/tool IDs remain OSC metadata. Every accepted hook replaces the session state; any clear removes that session. Mobile apps collapse saved multi-record sessions to their latest value and reject incoming legacy snapshots. Forwarded values include available session titles; explicit Done/Error/Clear updates forward complete resulting values so a recovering receiver needs no earlier update.
 
-Bridge queues retain up to 10 items per routing key and replace older queued values for the same authorized sender, publisher, and scope. Newer accepted values move to the end; stale/duplicate sequences do not replace values or refresh TTL. Overflow drops the oldest item. Retention defaults to 86,400 seconds and is capped there; shorter configured expiry is supported. Manual phone pushes retain their latest command alongside session values. All bridge tests and installation were local. No production deployment occurred.
+Bridge queues retain up to 10 items per routing key and replace older queued values for the same authorized sender, publisher, and scope. Newer accepted values move to the end; stale/duplicate sequences do not replace values or refresh TTL. Overflow drops the oldest item. At that verification point retention defaulted to 86,400 seconds; the current implementation supersedes this with a 300-second maximum and 2048-byte request/recovery limit. Manual phone pushes retain their latest command alongside session values. All bridge tests and installation were local. No production deployment occurred.
 
 Verification: desktop **869 passed, 1 skipped, 607 subtests**, including **6 HTTP integration checks against the locally installed bridge**. Swift **82 passed**; Android **90 unit tests passed**, lint/build passed, and both focused session UI tests passed on the emulator. Rust **44 passed, 1 credential-dependent test ignored**, on both macOS and Linux; strict Clippy and Linux release build passed. Linux emulation exposed a timing-sensitive pre-existing health/rate-limit test; its setup now uses a deterministic test-only rejecting limiter. The desktop animation preview was repaired to write through the daemon and retain its preview hold.
 

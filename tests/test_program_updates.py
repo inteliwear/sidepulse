@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import pytest
-from sidepulse.program_status import ProgramState, phone_update, fits_phone_push, validate_update
+from sidepulse.program_status import ProgramState, bridge_update, phone_update, fits_phone_push, validate_update
 
 
 def update(scope='session', seq=1, state='working', publisher='mac', **fields):
@@ -23,14 +23,27 @@ def test_abandoned_sessions_never_block_new_events(tmp_path):
 
 
 @pytest.mark.parametrize('msg', ['🟢' * 512, '\\"' * 1024, 'a' * 2048])
-def test_one_message_budget_clips_only_message(msg):
+@pytest.mark.parametrize('prepare', [bridge_update, phone_update])
+def test_one_message_budget_clips_only_message(msg, prepare):
     event = update(scope='s'*128, publisher='p'*128, msg=msg, id='a'*32+'/'+ 'b'*32+'/'+ 'c'*32, title='t'*192, app='a'*32)
-    clipped = phone_update(event)
-    assert fits_phone_push(clipped)
+    clipped = prepare(event)
+    assert len(clipped['status']['msg'].encode('utf-8')) <= 1024
+    if prepare is phone_update:
+        assert fits_phone_push(clipped)
     assert clipped['status']['msg'] == msg[:len(clipped['status']['msg'])]
     assert {k:v for k,v in event['status'].items() if k != 'msg'} == {k:v for k,v in clipped['status'].items() if k != 'msg'}
     assert event['status']['msg'] == msg
     assert validate_update(clipped) == clipped
+
+
+@pytest.mark.parametrize('prepare', [bridge_update, phone_update])
+@pytest.mark.parametrize(('message', 'expected'), [
+    ('a' * 1024, 'a' * 1024),
+    ('a' * 1025, 'a' * 1024),
+    ('a' * 1023 + '🙂', 'a' * 1023),
+])
+def test_outbound_message_one_kib_boundary(prepare, message, expected):
+    assert prepare(update(msg=message))['status']['msg'] == expected
 
 
 def test_capacity_is_shared_by_local_and_remote(tmp_path):

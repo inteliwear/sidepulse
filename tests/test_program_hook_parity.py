@@ -305,9 +305,9 @@ def test_long_unicode_and_invalid_unicode_hook_text_is_bounded(runtime):
     # A surrogate near the beginning must also be made encodable, rather than
     # silently losing the whole update before the byte limit is reached.
     report = hook_report('claude', {'hook_event_name':'Stop', 'session_id':'surrogate-session',
-                                   'last_assistant_message':'Finished \ud800\x1b'})
+                                   'last_assistant_message':'Finished \ud800\x1b' + '🙂' * 1000})
     store.submit(report)
-    assert report['status']['msg'] == 'Finished ? '
+    assert report['status']['msg'] == 'Finished ? ' + '🙂' * 253
     assert monitor.snapshot().statuses
     for _, event in store.pending_events('receiver'):
         assert validate_update(event) == event

@@ -150,12 +150,12 @@ Use a local bridge test instance and configure both test desktops to use it. Bot
 - [ ] From a single sender, use two publishers with the same scope. They remain separate too.
 - [ ] Send a higher sequence followed by an older one. The older event must not replace or revive state. Repeat after clearing and after restarting the app.
 - [ ] Send a newer event for one session followed by a lower sequence for another session. Both are accepted because ordering is tracked per session.
-- [ ] Use a long Unicode message containing quotes/backslashes. It is clipped to fit one push; state, IDs, and lifecycle remain intact. Many existing sessions must not stop new updates.
+- [ ] Use a long Unicode message containing quotes/backslashes. Its `msg` is clipped to at most 1,024 UTF-8 bytes before sending, and shortened further if needed to fit one push; state, IDs, and lifecycle remain intact. Many existing sessions must not stop new updates.
 - [ ] Try an unknown outer sender key and a valid key placed only inside `data`. Neither authorizes an update. Revoke one paired sender and verify only that sender's records disappear.
 - [ ] Pause syncing, send changes, then resume. Retained pending events arrive; unchanged state is not periodically republished.
 - [ ] Select a manual pattern, then replay a duplicate update. The duplicate must not override the pattern. A newly accepted status may resume the phone's own session rendering.
 - [ ] Change Mac patterns and Battery/Manual modes. Session forwarding continues and the phone's pattern choice is unchanged.
-- [ ] Disconnect the phone and send multiple events. Recovery returns up to 10 queued items, with only the newest state per source/session. Verify clear replaces an older Working update, and queued items expire within 24 hours. Record missed events honestly; no full-state reconstruction is promised.
+- [ ] Disconnect the phone and send multiple events. Recovery returns up to 10 queued items, with only the newest state per source/session. Verify clear replaces an older Working update, queued messages are at most 2048 bytes, and items expire within 300 seconds. Record missed events honestly; no full-state reconstruction is promised.
 - [ ] Upgrade from an earlier saved-cache format: old sessions and replay guards start fresh; new individual updates populate the list. Current-format sessions, dismissals, and replay guards survive relaunch. An old `program_status_snapshot` or removed control message must be rejected without becoming a direct LED write.
 
 A simulator/emulator does not establish physical LED behavior or background APNs/FCM reliability. Record those separately.

@@ -88,6 +88,35 @@ def test_bridge_keeps_only_the_newest_value_per_session(tmp_path):
     finally: receiver.close()
 
 
+@pytest.mark.parametrize('message', ['🙂' * 512, '\\"' * 1024, 'a' * 2048])
+def test_sender_clips_before_bridge_including_phone_recovery_metadata(message):
+    from sidepulse.program_status import encoded
+    value = update()
+    value['publisher'] = 'p' * 128
+    value['scope'] = 's' * 128
+    value['status'] = {'state': 'done', 'msg': message, 'title': 't' * 192}
+    original = copy.deepcopy(value)
+    with bridge() as server:
+        publish_update(server, 'bounded-status', value)
+        received = read_messages(server, 'bounded-status', 1)[0]
+        assert len(encoded(received).encode()) <= 2048
+        assert len(received['status']['msg'].encode()) <= 1024
+        assert received['status']['msg'] and original['status']['msg'].startswith(received['status']['msg'])
+        for device, key in [('apns_' + 'a' * 64, 'k' * 128), ('fcm_fake-registration', 'b' * 32)]:
+            # No provider credentials: 503 proves size validation and retention
+            # succeeded; an oversized request would instead fail with 413.
+            with pytest.raises(StatusError) as failure:
+                publish_update(server, device + '_' + key, value, phone=True)
+            assert failure.value.__cause__.code == 503
+            queued = http(server, '/api/leds/' + device + '/queued')[1][0]
+            assert len(encoded(queued).encode()) <= 2048
+            delivered = queued['data']
+            assert len(delivered['status']['msg'].encode()) <= 1024
+            assert delivered['status']['msg'] and message.startswith(delivered['status']['msg'])
+            assert {**delivered, 'status': {**delivered['status'], 'msg': message}} == original
+        assert value == original
+
+
 def test_phone_queue_keeps_latest_session_and_manual_push_independently():
     with bridge() as server:
         device = 'apns_' + 'a' * 64

@@ -412,7 +412,7 @@ sidepulse report --scope my-build --osc $'\e]7501;state=working:app=build\e\\'
 printf '\033]7501;state=done:app=build\007' | sidepulse report --scope my-build --osc
 ```
 
-The hook adapter or CLI decoder translates input into JSON; the daemon holds the state, drives physical LEDs, and handles remote delivery. Individual status updates travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. Each session has one current state. The updated bridge keeps the latest queued value per source/session, up to 10 items per key for at most 24 hours. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md). Automatic terminal OSC capture is a later phase; explicit CLI ingestion is supported now.
+The hook adapter or CLI decoder translates input into JSON; the daemon holds the state, drives physical LEDs, and handles remote delivery. Individual status updates travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. Each session has one current state. The updated bridge keeps the latest queued value per source/session, up to 10 items per key for at most 300 seconds, with a 2048-byte request/recovery limit. Senders cap `msg` at 1,024 UTF-8 bytes and shorten it further if needed to fit. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md). Automatic terminal OSC capture is a later phase; explicit CLI ingestion is supported now.
 
 ## Battery LEDs
 
