@@ -35,6 +35,7 @@ CODEX_SESSION_INDEX_MAX_LINES = 5000
 COMPLETED_VISIBLE_SECONDS = 20 * 60.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
+PERMISSION_PROMPT_SETTLE_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -1311,6 +1312,17 @@ def status_for_snapshot(
     *,
     post_tool_working_visible_seconds: float,
 ) -> AgentStatus:
+    if (
+        status.mode == AgentMode.WAITING_FOR_INPUT
+        and status.event_name == "PermissionRequest"
+        and PERMISSION_PROMPT_SETTLE_SECONDS >= 0
+        and status.age_seconds(now) < PERMISSION_PROMPT_SETTLE_SECONDS
+    ):
+        # Codex emits PermissionRequest even for auto-approved (sandboxed)
+        # commands, so a fresh request is usually just work in progress.
+        # A real prompt blocks until answered, so it stays unresolved and is
+        # promoted back to Waiting for Input once it outlives the settle window.
+        return _replace_mode(status, AgentMode.WORKING)
     if (
         status.mode == AgentMode.WORKING
         and status.event_name == "PostToolUse"
