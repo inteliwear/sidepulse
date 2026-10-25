@@ -7091,9 +7091,15 @@ class AgentMonitorTests(unittest.TestCase):
             session_id = "019f179b-7fdc-7eb0-a3af-1ca3eb128eee"
             server_command = ".venv/bin/bambucuts server --host 127.0.0.1 --port 5425"
             curl_command = "curl -s http://127.0.0.1:5425/api/status | head -c 1000"
+            # Age the permission request past the settle window so this test
+            # exercises Ask persistence across unrelated tool activity rather
+            # than the fresh-request work-in-progress downgrade.
+            request_time = now - timedelta(
+                seconds=collector_module.PERMISSION_PROMPT_SETTLE_SECONDS + 3
+            )
             events = [
                 {
-                    "logged_at": now.isoformat(),
+                    "logged_at": request_time.isoformat(),
                     "event": {
                         "hook_event_name": "PreToolUse",
                         "session_id": session_id,
@@ -7103,7 +7109,7 @@ class AgentMonitorTests(unittest.TestCase):
                     },
                 },
                 {
-                    "logged_at": (now + timedelta(seconds=1)).isoformat(),
+                    "logged_at": (request_time + timedelta(seconds=1)).isoformat(),
                     "event": {
                         "hook_event_name": "PermissionRequest",
                         "session_id": session_id,
@@ -7113,7 +7119,7 @@ class AgentMonitorTests(unittest.TestCase):
                     },
                 },
                 {
-                    "logged_at": (now + timedelta(seconds=2)).isoformat(),
+                    "logged_at": (request_time + timedelta(seconds=2)).isoformat(),
                     "event": {
                         "hook_event_name": "PreToolUse",
                         "session_id": session_id,
@@ -7123,7 +7129,7 @@ class AgentMonitorTests(unittest.TestCase):
                     },
                 },
                 {
-                    "logged_at": (now + timedelta(seconds=3)).isoformat(),
+                    "logged_at": (request_time + timedelta(seconds=3)).isoformat(),
                     "event": {
                         "hook_event_name": "PostToolUse",
                         "session_id": session_id,
@@ -7223,6 +7229,63 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(snapshot.aggregate.mode, AgentMode.COMPLETED)
         self.assertEqual(snapshot.aggregate.active_count, 0)
         self.assertEqual(snapshot.statuses[0].event_name, "PostToolUse")
+
+    def test_fresh_permission_request_is_shown_as_working(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="codex",
+            agent_id="codex:session:perm-session",
+            display_name="perm-session",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now - timedelta(seconds=5),
+            event_name="PermissionRequest",
+            session_id="perm-session",
+            cwd="/tmp/project",
+            tool_name="Bash",
+        )
+
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=20 * 60,
+            idle_visible_seconds=0,
+        )
+
+        # Codex fires PermissionRequest even for auto-approved (sandboxed)
+        # commands, so a fresh request is usually just work in progress.
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+
+    def test_permission_request_promotes_to_ask_after_settle_window(self) -> None:
+        now = datetime.now(timezone.utc)
+        status = AgentStatus(
+            provider="codex",
+            agent_id="codex:session:perm-session",
+            display_name="perm-session",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=now
+            - timedelta(seconds=collector_module.PERMISSION_PROMPT_SETTLE_SECONDS + 1),
+            event_name="PermissionRequest",
+            session_id="perm-session",
+            cwd="/tmp/project",
+            tool_name="Bash",
+        )
+
+        snapshot = collector_module.snapshot_from_statuses(
+            (status,),
+            sources=(),
+            collected_at=now,
+            stale_after_seconds=3600,
+            tool_running_timeout_seconds=0,
+            completed_visible_seconds=20 * 60,
+            idle_visible_seconds=0,
+        )
+
+        # A real prompt blocks until answered, so it stays unresolved and is
+        # promoted back to Waiting for Input once it outlives the settle window.
+        self.assertEqual(snapshot.aggregate.mode, AgentMode.WAITING_FOR_INPUT)
 
     def test_internal_codex_helper_sessions_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
