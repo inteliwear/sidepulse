@@ -3729,15 +3729,16 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
         battery.setState_(1 if device.display == LED_DISPLAY_BATTERY else 0)
         submenu.addItem_(battery)
 
-    custom = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Manual",
-        "setDeviceDisplayCustom:",
-        "",
-    )
-    custom.setTarget_(target)
-    custom.setRepresentedObject_(device.device_id)
-    custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
-    submenu.addItem_(custom)
+    if device.device_id != VIRTUAL_DEVICE_ID:
+        custom = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Manual",
+            "setDeviceDisplayCustom:",
+            "",
+        )
+        custom.setTarget_(target)
+        custom.setRepresentedObject_(device.device_id)
+        custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
+        submenu.addItem_(custom)
 
     if device.device_id != VIRTUAL_DEVICE_ID and device.remote_link is None:
         submenu.addItem_(NSMenuItem.separatorItem())
