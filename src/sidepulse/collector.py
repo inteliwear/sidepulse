@@ -386,6 +386,7 @@ class LiveAgentMonitor:
         idle_visible_seconds: float = IDLE_VISIBLE_SECONDS,
         post_tool_working_visible_seconds: float = POST_TOOL_WORKING_VISIBLE_SECONDS,
         latest_state_path: Path | None = None,
+        recover_on_init: bool = True,
     ) -> None:
         self.sources = tuple(sources)
         self.recovery_sources = tuple(recovery_sources)
@@ -401,7 +402,8 @@ class LiveAgentMonitor:
         self.metadata_by_status: dict[str, StatusMetadata] = {}
         self.pending_permissions_by_key: dict[str, set[str]] = {}
         self.load_latest_state()
-        self.reconcile_recovery_sources()
+        if recover_on_init:
+            self.reconcile_recovery_sources()
 
     def ingest_record(self, record: HookEvent) -> None:
         with self.lock:
@@ -463,6 +465,9 @@ class LiveAgentMonitor:
         if not self.recovery_sources:
             return
 
+        with self.lock:
+            initial_statuses = dict(self.statuses_by_key)
+
         recovery_monitor = AgentMonitor(
             sources=self.recovery_sources,
             stale_after_seconds=self.stale_after_seconds,
@@ -472,17 +477,26 @@ class LiveAgentMonitor:
             post_tool_working_visible_seconds=self.post_tool_working_visible_seconds,
         )
         recovered_statuses = recovery_monitor._latest_statuses()
-        changed = False
-        for agent_id, recovered in recovered_statuses.items():
-            previous = self.statuses_by_key.get(agent_id)
-            if previous is not None and recovered.updated_at < previous.updated_at:
-                continue
-            if recovered != previous:
-                self.statuses_by_key[agent_id] = recovered
-                changed = True
+        # Parsing can run in a worker while hooks arrive. Merge under the same
+        # lock as ingest_record, and preserve live state on equal timestamps.
+        with self.lock:
+            changed = False
+            for agent_id, recovered in recovered_statuses.items():
+                previous = self.statuses_by_key.get(agent_id)
+                if previous is not None:
+                    if recovered.updated_at < previous.updated_at:
+                        continue
+                    if (
+                        recovered.updated_at == previous.updated_at
+                        and previous is not initial_statuses.get(agent_id)
+                    ):
+                        continue
+                if recovered != previous:
+                    self.statuses_by_key[agent_id] = recovered
+                    changed = True
 
-        if changed:
-            self.write_latest_state()
+            if changed:
+                self.write_latest_state()
 
     def write_latest_state(self) -> None:
         if self.latest_state_path is None:
