@@ -585,7 +585,15 @@ class WindowBuildTests(StatusBarTestCase):
             for index in range(tab_view.numberOfTabViewItems())
         }
 
+        window.setFrameTopLeftPoint_((123, 800))
+
+        def assert_position_preserved():
+            frame = window.frame()
+            self.assertAlmostEqual(frame.origin.x, 123)
+            self.assertAlmostEqual(frame.origin.y + frame.size.height, 800)
+
         tab_view.selectTabViewItem_(items["animations"])
+        assert_position_preserved()
         self.assertEqual(
             window.contentView().frame().size.height,
             sb.SETTINGS_ANIMATIONS_WINDOW_HEIGHT,
@@ -619,6 +627,7 @@ class WindowBuildTests(StatusBarTestCase):
             )
 
         tab_view.selectTabViewItem_(items["agents"])
+        assert_position_preserved()
         self.assertEqual(
             window.contentView().frame().size.height,
             sb.SETTINGS_WINDOW_HEIGHT,
@@ -627,6 +636,8 @@ class WindowBuildTests(StatusBarTestCase):
             window.contentView().frame().size.width,
             sb.SETTINGS_WINDOW_WIDTH,
         )
+        tab_view.selectTabViewItem_(items["behavior"])
+        assert_position_preserved()
 
     def test_setup_window_builds(self):
         window = sb.build_setup_window(self.controller)
