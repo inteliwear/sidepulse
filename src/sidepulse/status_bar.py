@@ -1315,7 +1315,10 @@ class StatusBarController(NSObject):
         current_height = float(window.contentView().frame().size.height)
         if abs(current_width - width) < 0.5 and abs(current_height - height) < 0.5:
             return
+        frame = window.frame()
+        top_left = (float(frame.origin.x), float(frame.origin.y + frame.size.height))
         window.setContentSize_((width, height))
+        window.setFrameTopLeftPoint_(top_left)
         tab_view.setFrame_(
             (
                 (20, SETTINGS_TAB_Y),
@@ -1328,7 +1331,6 @@ class StatusBarController(NSObject):
         message = self.settings_fields.get("message")
         if message is not None:
             message.setFrameSize_((width - 48, 22))
-        window.center()
     def start_agent_animation_preview_timer(self) -> None:
         if self.agent_animation_preview_timer is not None:
             return
