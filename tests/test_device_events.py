@@ -101,6 +101,32 @@ def test_native_listener_starts_and_stops_without_polling():
     assert native.thread is None or not native.thread.is_alive()
 
 
+def test_windows_removed_directory_reported_as_file_still_invalidates_inventory(tmp_path, monkeypatch):
+    from watchdog.events import FileDeletedEvent, DirMovedEvent
+    root = tmp_path / 'mounts'
+    root.mkdir()
+    dot = root / 'SidePulseDot'
+    dot.mkdir()
+    unrelated = root / 'notes.txt'
+    unrelated.write_text('unrelated')
+    monkeypatch.setattr(device_events.sys, 'platform', 'win32')
+    monkeypatch.setenv('SIDEPULSE_MOUNT_ROOTS', str(root))
+    monkeypatch.setattr(device_events, 'default_mount_roots', lambda: (root,))
+    monkeypatch.setattr(device_events, 'native_events', lambda changed: Mock())
+    monkeypatch.setattr(device_events, 'Observer', lambda: Mock(ident=None))
+    events = device_events.DeviceEvents()
+    events.update()
+    renamed = dot.rename(root / 'PulseDot')
+    events.on_any_event(DirMovedEvent(str(dot), str(renamed)))
+    events.changed.clear()
+    unrelated.unlink()
+    events.on_any_event(FileDeletedEvent(str(unrelated)))
+    assert not events.changed.is_set()
+    renamed.rmdir()
+    events.on_any_event(FileDeletedEvent(str(renamed)))
+    assert events.changed.is_set()
+
+
 def test_watcher_start_failure_can_be_cleaned_up(watcher, monkeypatch):
     events, _ = watcher
     events.close()

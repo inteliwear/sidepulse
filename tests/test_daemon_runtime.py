@@ -69,6 +69,23 @@ def report(state):
     return {'v':1, 'type':'program_status', 'scope':'session', 'status':{'state':state}}
 
 
+@pytest.mark.parametrize('platform', ['linux', 'win32'])
+def test_non_mac_daemon_does_not_probe_mac_privileged_helper(monkeypatch, platform):
+    monkeypatch.setattr('sidepulse.daemon_runtime.sys.platform', platform)
+    with patch('sidepulse.daemon_runtime.sleep_helper_installed',
+               side_effect=AssertionError('Mac helper probed')) as helper:
+        service = SidePulseService()
+    helper.assert_not_called()
+    assert not service.runtime.closed_lid_awake.use_system_disable
+
+
+def test_unreadable_sleep_helper_is_unavailable_instead_of_failing_startup():
+    from sidepulse.lid_sleep import sleep_helper_installed
+    path = Mock()
+    path.exists.side_effect = PermissionError('sudoers directory is private')
+    assert sleep_helper_installed(path) is False
+
+
 def test_device_discovery_only_runs_at_start_and_connection_changes(background):
     import threading
     b = background

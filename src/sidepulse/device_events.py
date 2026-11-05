@@ -37,6 +37,7 @@ class DeviceEvents(FileSystemEventHandler):
         self.roots = ()
         self.watches = {}
         self.reset_watches = threading.Event()
+        self.known_directories = set()
 
     def start(self):
         self.update()
@@ -51,6 +52,15 @@ class DeviceEvents(FileSystemEventHandler):
         if sys.platform in {'darwin', 'win32'} and 'SIDEPULSE_MOUNT_ROOTS' not in os.environ:
             roots = ()
         self.roots = tuple(Path(os.path.abspath(root)) for root in roots)
+        if sys.platform == 'win32':
+            # ReadDirectoryChangesW cannot classify a removed child after it
+            # is gone. Remember directories when inventory is refreshed.
+            self.known_directories = set(self.roots)
+            for root in self.roots:
+                try:
+                    self.known_directories.update(path for path in root.iterdir() if path.is_dir())
+                except OSError:
+                    pass
         if self.reset_watches.is_set():
             self.reset_watches.clear()
             self.observer.unschedule_all()
@@ -78,8 +88,19 @@ class DeviceEvents(FileSystemEventHandler):
             self.observer.start()
 
     def on_any_event(self, event):
-        if not event.is_directory or event.event_type not in {'created', 'deleted', 'moved'}:
+        if event.event_type not in {'created', 'deleted', 'moved'}:
             return
+        source = Path(os.path.abspath(event.src_path))
+        directory = event.is_directory or (sys.platform == 'win32' and
+            event.event_type == 'deleted' and source in self.known_directories)
+        if not directory:
+            return
+        if sys.platform == 'win32':
+            self.known_directories.discard(source)
+            if event.event_type == 'created':
+                self.known_directories.add(source)
+            elif event.event_type == 'moved' and event.dest_path:
+                self.known_directories.add(Path(os.path.abspath(event.dest_path)))
         for value in (event.src_path, getattr(event, 'dest_path', '')):
             if not value:
                 continue

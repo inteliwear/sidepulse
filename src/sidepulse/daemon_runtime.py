@@ -122,7 +122,7 @@ class DaemonRuntime:
         self.is_mac = sys.platform == 'darwin'
         self.keep_awake = KeepAwakeController()
         self.closed_lid_awake = ClosedLidAwakeController(
-            use_system_disable=sleep_helper_installed(), use_caffeinate=False)
+            use_system_disable=self.is_mac and sleep_helper_installed(), use_caffeinate=False)
         self.settings = None
         self.last_snapshot = None
         self.last_battery_snapshot = None
