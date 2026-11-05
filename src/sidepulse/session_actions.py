@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from .jetbrains import JetBrainsIDE, jetbrains_launch_for_project
+from .junie_index import junie_session_project_dir
 from .models import AgentStatus
 
 SESSION_OPEN_APP = "app"
@@ -20,6 +22,16 @@ SESSION_OPEN_CHOICES = (
 SESSION_OPEN_APP_SURFACES = ("app", "ui", "transcript")
 SESSION_OPEN_TERMINAL_SURFACES = ("cli", "terminal", "command line")
 SESSION_OPEN_VSCODE_SURFACES = ("vscode", "vs code", "visual studio code")
+
+
+@dataclass(frozen=True)
+class IdeOpenTarget:
+    bundle_id: str
+    project_path: str
+    app_path: str | None = None
+
+
+SessionOpenTarget = tuple[str, str | IdeOpenTarget]
 
 
 def session_deep_link(status: AgentStatus) -> str | None:
@@ -48,28 +60,23 @@ def session_jetbrains_ide(status: AgentStatus) -> JetBrainsIDE | None:
     return launch.ide if launch else None
 
 
-def session_jetbrains_target(
-    status: AgentStatus,
-) -> tuple[str, str, str, str | None] | None:
+def session_jetbrains_target(status: AgentStatus) -> IdeOpenTarget | None:
     project_dir = session_jetbrains_project_dir(status)
     if not project_dir:
         return None
     launch = jetbrains_launch_for_project(project_dir)
     if launch is None:
         return None
-    return (
-        "open",
-        launch.ide.bundle_id,
-        str(Path(project_dir).expanduser()),
-        str(launch.app_path) if launch.app_path else None,
+    return IdeOpenTarget(
+        bundle_id=launch.ide.bundle_id,
+        project_path=str(Path(project_dir).expanduser()),
+        app_path=str(launch.app_path) if launch.app_path else None,
     )
 
 
 def session_jetbrains_project_dir(status: AgentStatus) -> str | None:
     if status.provider.lower() != "junie":
         return None
-    from .collector import junie_session_project_dir
-
     return junie_session_project_dir(status.session_id) or status.cwd
 
 
@@ -93,10 +100,18 @@ def session_resume_command(status: AgentStatus) -> str | None:
 
 
 def default_session_open_action(status: AgentStatus) -> str:
+    default = default_session_open_target(status)
+    return default[0] if default else SESSION_OPEN_TERMINAL
+
+
+def default_session_open_target(
+    status: AgentStatus,
+) -> tuple[str, SessionOpenTarget] | None:
     for action in preferred_session_open_actions(status):
-        if session_open_target(status, action):
-            return action
-    return SESSION_OPEN_TERMINAL
+        target = session_open_target(status, action)
+        if target:
+            return action, target
+    return None
 
 
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
@@ -125,7 +140,7 @@ def normalized_origin(origin: str | None) -> str:
 def session_open_target(
     status: AgentStatus,
     action: str,
-) -> tuple[str, str | tuple[str, str, str | None]] | None:
+) -> SessionOpenTarget | None:
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
         return ("url", url) if url else None
@@ -137,7 +152,7 @@ def session_open_target(
         return ("terminal", command) if command else None
     if action == SESSION_OPEN_JETBRAINS:
         target = session_jetbrains_target(status)
-        return ("ide", (target[1], target[2], target[3])) if target else None
+        return ("ide", target) if target else None
     return None
 
 

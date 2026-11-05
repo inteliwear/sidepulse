@@ -21,6 +21,7 @@ from sidepulse.providers import JUNIE_MONITOR_EVENTS, detect_junie_config, parse
 from sidepulse.jetbrains import JetBrainsIDE, JetBrainsLaunch
 from sidepulse.session_actions import (
     SESSION_OPEN_JETBRAINS,
+    IdeOpenTarget,
     available_session_open_actions,
     default_session_open_action,
     session_jetbrains_target,
@@ -108,7 +109,7 @@ class JunieProviderTests(unittest.TestCase):
         )
         with (
             patch(
-                "sidepulse.collector.junie_session_project_dir",
+                "sidepulse.session_actions.junie_session_project_dir",
                 return_value="/tmp/indexed-project",
             ),
             patch(
@@ -116,25 +117,15 @@ class JunieProviderTests(unittest.TestCase):
                 return_value=JetBrainsLaunch(ide, "/Applications/IntelliJ IDEA.app"),
             ) as resolve,
         ):
-            self.assertEqual(
-                session_jetbrains_target(status),
-                (
-                    "open",
-                    ide.bundle_id,
-                    "/tmp/indexed-project",
-                    "/Applications/IntelliJ IDEA.app",
-                ),
+            expected = IdeOpenTarget(
+                ide.bundle_id,
+                "/tmp/indexed-project",
+                "/Applications/IntelliJ IDEA.app",
             )
+            self.assertEqual(session_jetbrains_target(status), expected)
             self.assertEqual(
                 session_open_target(status, SESSION_OPEN_JETBRAINS),
-                (
-                    "ide",
-                    (
-                        ide.bundle_id,
-                        "/tmp/indexed-project",
-                        "/Applications/IntelliJ IDEA.app",
-                    ),
-                ),
+                ("ide", expected),
             )
             self.assertEqual(
                 session_open_action_label(status, SESSION_OPEN_JETBRAINS),
@@ -171,7 +162,7 @@ class JunieProviderTests(unittest.TestCase):
         )
         with (
             patch(
-                "sidepulse.collector.junie_session_project_dir", return_value=None
+                "sidepulse.session_actions.junie_session_project_dir", return_value=None
             ),
             patch(
                 "sidepulse.session_actions.jetbrains_launch_for_project",
@@ -180,13 +171,13 @@ class JunieProviderTests(unittest.TestCase):
         ):
             self.assertEqual(
                 session_jetbrains_target(status),
-                ("open", ide.bundle_id, status.cwd, None),
+                IdeOpenTarget(ide.bundle_id, status.cwd, None),
             )
             resolve.assert_called_once_with(status.cwd)
 
         with (
             patch(
-                "sidepulse.collector.junie_session_project_dir", return_value=None
+                "sidepulse.session_actions.junie_session_project_dir", return_value=None
             ),
             patch(
                 "sidepulse.session_actions.jetbrains_launch_for_project",

@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import unquote
 
 
 @dataclass(frozen=True)
@@ -61,15 +62,6 @@ JETBRAINS_IDES = (
 )
 
 
-def jetbrains_ide_for_project(
-    project_path: str | Path | None,
-    *,
-    home: Path | None = None,
-) -> JetBrainsIDE | None:
-    launch = jetbrains_launch_for_project(project_path, home=home)
-    return launch.ide if launch else None
-
-
 def jetbrains_launch_for_project(
     project_path: str | Path | None,
     *,
@@ -99,18 +91,10 @@ def jetbrains_launch_for_project(
                     )
                 )
 
-    if recent_matches:
-        _, _, _, ide, settings_dir = max(recent_matches, key=lambda match: match[:3])
-        app_path = app_path_for_settings_directory(ide, settings_dir.name)
-        return JetBrainsLaunch(ide, app_path)
-
-    ide = next(
-        (ide for ide in JETBRAINS_IDES if ide_is_installed(ide.bundle_id)),
-        None,
-    )
-    if ide is None:
+    if not recent_matches:
         return None
-    return JetBrainsLaunch(ide, app_path_for_settings_directory(ide, None))
+    _, _, _, ide, settings_dir = max(recent_matches, key=lambda match: match[:3])
+    return JetBrainsLaunch(ide, app_path_for_settings_directory(ide, settings_dir.name))
 
 
 def recent_project_files(home: Path) -> tuple[tuple[JetBrainsIDE, Path], ...]:
@@ -133,10 +117,6 @@ def recent_project_files(home: Path) -> tuple[tuple[JetBrainsIDE, Path], ...]:
             if recent_projects.is_file():
                 result.append((ide, recent_projects))
     return tuple(result)
-
-
-def read_recent_project_paths(path: Path, home: Path) -> tuple[Path, ...]:
-    return tuple(project.path for project in read_recent_projects(path, home))
 
 
 def read_recent_projects(path: Path, home: Path) -> tuple[RecentProject, ...]:
@@ -198,7 +178,7 @@ def _recent_project_from_value(
     if re.search(r"\$[^$]+\$", candidate):
         return None
     if candidate.startswith("file://"):
-        candidate = candidate.removeprefix("file://")
+        candidate = unquote(candidate.removeprefix("file://"))
     project_path = Path(candidate).expanduser()
     if not project_path.is_absolute():
         return None
@@ -227,18 +207,16 @@ def normalize_project_path(path: str | Path, home: Path) -> Path:
 
 def app_path_for_settings_directory(
     ide: JetBrainsIDE,
-    settings_directory_name: str | None,
+    settings_directory_name: str,
 ) -> Path | None:
-    if settings_directory_name:
-        for app_path in installed_app_paths_for_bundle_id(ide.bundle_id):
-            if app_data_directory_name(app_path) == settings_directory_name:
-                return app_path
+    for app_path in installed_app_paths_for_bundle_id(ide.bundle_id):
+        if app_data_directory_name(app_path) == settings_directory_name:
+            return app_path
 
     running_apps = running_app_paths_for_bundle_id(ide.bundle_id)
-    if settings_directory_name:
-        for app_path in running_apps:
-            if app_data_directory_name(app_path) == settings_directory_name:
-                return app_path
+    for app_path in running_apps:
+        if app_data_directory_name(app_path) == settings_directory_name:
+            return app_path
     return running_apps[0] if running_apps else None
 
 
@@ -284,7 +262,3 @@ def app_data_directory_name(app_path: Path) -> str | None:
         return None
     value = data.get("dataDirectoryName")
     return value if isinstance(value, str) else None
-
-
-def ide_is_installed(bundle_id: str) -> bool:
-    return bool(installed_app_paths_for_bundle_id(bundle_id))

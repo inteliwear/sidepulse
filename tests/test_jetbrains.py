@@ -10,9 +10,14 @@ from unittest.mock import patch
 
 from sidepulse.jetbrains import (
     JETBRAINS_IDES,
-    jetbrains_ide_for_project,
+    JetBrainsIDE,
     jetbrains_launch_for_project,
 )
+
+
+def jetbrains_ide_for_project(project: Path, *, home: Path) -> JetBrainsIDE | None:
+    launch = jetbrains_launch_for_project(project, home=home)
+    return launch.ide if launch else None
 
 
 class JetBrainsIDESelectionTests(unittest.TestCase):
@@ -272,21 +277,17 @@ class JetBrainsIDESelectionTests(unittest.TestCase):
 
         self.assertEqual(ide, JETBRAINS_IDES[0])
 
-    def test_first_installed_ide_is_fallback_without_recent_project_match(self) -> None:
+    def test_returns_none_without_recent_project_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            with patch(
-                "sidepulse.jetbrains.ide_is_installed",
-                side_effect=lambda bundle_id: bundle_id == JETBRAINS_IDES[1].bundle_id,
-            ):
-                ide = jetbrains_ide_for_project(home / "project", home=home)
+            self.write_recent_projects(
+                home,
+                "JetBrains",
+                "IntelliJIdea2025.1",
+                {str(home / "other-project"): 100},
+            )
 
-        self.assertEqual(ide, JETBRAINS_IDES[1])
-
-    def test_returns_none_when_no_ide_is_installed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("sidepulse.jetbrains.ide_is_installed", return_value=False):
-                ide = jetbrains_ide_for_project(Path(tmp) / "project", home=Path(tmp))
+            ide = jetbrains_ide_for_project(home / "project", home=home)
 
         self.assertIsNone(ide)
 
@@ -304,8 +305,7 @@ class JetBrainsIDESelectionTests(unittest.TestCase):
             )
             recent.parent.mkdir(parents=True)
             recent.write_text("<application>")
-            with patch("sidepulse.jetbrains.ide_is_installed", return_value=False):
-                ide = jetbrains_ide_for_project(home / "project", home=home)
+            ide = jetbrains_ide_for_project(home / "project", home=home)
 
         self.assertIsNone(ide)
 
