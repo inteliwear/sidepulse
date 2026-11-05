@@ -103,6 +103,7 @@ from .device_writer import (
     validate_led_text,
 )
 from .firmware_status import FirmwareStatus, FirmwareStatusReader, install_update
+from .update import BuildInfo, GITHUB_MAIN_URL
 from .ipc import UICommandServer
 from .program_transport import daemon_command, write_daemon_program as write_led_program
 from .install import (
@@ -482,6 +483,7 @@ class StatusBarController(NSObject):
             return None
 
         self.settings = load_settings()
+        self.app_build = BuildInfo.current()
         self.open_settings_on_launch = False
         self.monitor = self.build_monitor()
         self.event_server = None
@@ -609,6 +611,10 @@ class StatusBarController(NSObject):
     def forceRefresh_(self, _sender):
         self.firmware_roots = ()
         self.refresh_(None)
+
+    @objc.IBAction
+    def openAppUpdates_(self, _sender):
+        open_url(GITHUB_MAIN_URL)
 
     def check_firmware(self) -> None:
         roots = tuple(
@@ -2871,7 +2877,7 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
     menu = NSMenu.alloc().init()
     menu.setDelegate_(target)
 
-    menu.addItem_(disabled_menu_item("SidePulse"))
+    add_app_info(menu, target)
     menu.addItem_(NSMenuItem.separatorItem())
 
     menu.addItem_(disabled_menu_item("Agents"))
@@ -2938,6 +2944,36 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
 
     return menu
 
+
+def add_app_info(menu, target):
+    build = getattr(target, 'app_build', None) or BuildInfo.current()
+    details = build.version.split('+', 1)[0]
+    try:
+        details += ' · ' + datetime.fromisoformat(build.built_at.replace('Z', '+00:00')).astimezone().strftime('%Y-%m-%d')
+    except ValueError:
+        pass
+    status = getattr(getattr(target, 'monitor', None), 'runtime', {}).get('app_update', {}).get('status', 'not_checked')
+    labels = {'current': 'Up to date with GitHub main', 'available': 'Update available from GitHub main…',
+              'checking': 'Checking GitHub main…', 'unavailable': 'Could not check GitHub main',
+              'not_checked': 'GitHub main check pending'}
+    if status == 'available':
+        details += ' · Update available'
+    title = 'SidePulse  ' + details
+    if status == 'available':
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, 'openAppUpdates:', '')
+        item.setTarget_(target)
+    else:
+        item = disabled_menu_item(title)
+    attributed = NSMutableAttributedString.alloc().initWithString_attributes_(
+        title, {NSFontAttributeName: NSFont.menuFontOfSize_(0)},
+    )
+    attributed.addAttributes_range_({
+        NSFontAttributeName: NSFont.systemFontOfSize_(11),
+        NSForegroundColorAttributeName: NSColor.secondaryLabelColor(),
+    }, (len('SidePulse'), len(title) - len('SidePulse')))
+    item.setAttributedTitle_(attributed)
+    item.setToolTip_(f'{build.version}\n{build.date_label()}\n{labels.get(status, labels["unavailable"])}')
+    menu.addItem_(item)
 
 def build_sleep_prevention_policy_item(policy: str, target: StatusBarController) -> NSMenuItem:
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -5576,6 +5612,9 @@ def add_action_item(
 
 def build_error_menu(exc: Exception, target=None) -> NSMenu:
     menu = NSMenu.alloc().init()
+    if target is not None:
+        add_app_info(menu, target)
+        menu.addItem_(NSMenuItem.separatorItem())
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         f"Daemon unavailable: {exc}",
         None,

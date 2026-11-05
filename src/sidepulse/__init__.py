@@ -72,4 +72,7 @@ try:
 
     __version__ = version("sidepulse")
 except Exception:  # pragma: no cover - only an unpackaged source tree.
-    __version__ = "0+unknown"
+    try:  # Frozen applications can lack distribution metadata.
+        from ._build_info import version as __version__
+    except ImportError:
+        __version__ = "0+unknown"

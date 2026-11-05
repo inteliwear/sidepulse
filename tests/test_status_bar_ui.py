@@ -473,6 +473,25 @@ class MenuBuildTests(StatusBarTestCase):
         actions = {item.title(): str(item.action()) for item in menu.itemArray() if item.action() is not None}
         self.assertEqual(actions, {'Restart daemon': 'restartDaemon:', 'Settings...': 'openSettings:', 'Quit': 'quit:'})
 
+    def test_menu_header_shows_version_build_date_and_main_update(self):
+        build = sb.BuildInfo('0.2.4.dev15+g4735acb1f', '4735acb1f', '2026-10-24T12:30:00Z')
+        with patch.object(self.controller, 'app_build', build), patch.object(
+            self.controller.monitor, 'runtime', {'app_update': {'status': 'available'}}
+        ):
+            for menu in (sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller),
+                         sb.build_error_menu(RuntimeError('offline'), self.controller)):
+                header = menu.itemAtIndex_(0)
+                self.assertEqual(header.title(), 'SidePulse  0.2.4.dev15 · ' + build.date_label().split()[1] + ' · Update available')
+                self.assertTrue(menu.itemAtIndex_(1).isSeparatorItem())
+                self.assertEqual(header.toolTip(), build.version + '\n' + build.date_label() + '\nUpdate available from GitHub main…')
+                self.assertEqual(str(header.action()), 'openAppUpdates:')
+                font, _ = header.attributedTitle().attribute_atIndex_effectiveRange_(sb.NSFontAttributeName, len('SidePulse  '), None)
+                self.assertEqual(font.pointSize(), 11)
+                self.assert_menu_is_wired(menu)
+            with patch.object(sb, 'open_url') as open_url:
+                self.controller.openAppUpdates_(None)
+                open_url.assert_called_once_with(sb.GITHUB_MAIN_URL)
+
     def test_session_options_offer_the_daemon_supplied_mobile_link(self):
         from dataclasses import replace
         status = replace(make_status(), session_link='sidepulse://sessions?publisher=mac&scope=s')

@@ -68,3 +68,10 @@ include = ["sidepulse*", "agent_monitor*", "sidepulse_cli*"]
 
 [tool.setuptools_scm]
 fallback_version = "0"
+version_file = "src/sidepulse/_build_info.py"
+version_file_template = '''
+"""Generated during packaging; do not edit."""
+version = "{version}"
+revision = "{scm_version.node}"
+built_at = "{scm_version.time:%Y-%m-%dT%H:%M:%SZ}"
+'''

@@ -145,6 +145,7 @@ class DaemonRuntime:
         self.next_pro_keepalive = 0.0
         self.devices = []
         self.device_events = None
+        self.app_updates = None
         self.view = {}
 
     def start(self):
@@ -158,6 +159,9 @@ class DaemonRuntime:
             if events:
                 events.close()
             log_runtime(f'device notifications unavailable: {exc}')
+        from .update import DailyUpdateCheck
+        self.app_updates = DailyUpdateCheck()
+        self.app_updates.check_if_due()
 
     @property
     def leds_enabled(self):
@@ -171,6 +175,8 @@ class DaemonRuntime:
     def battery_preview_until(self, value):
         self.service.battery_preview_until = value
     def poll(self):
+        if self.app_updates:
+            self.app_updates.check_if_due()
         self.settings = load_settings()
         self.last_snapshot = self.service.monitor.snapshot()
         now = time.monotonic()
@@ -276,6 +282,7 @@ class DaemonRuntime:
             'keep_awake_active': self.keep_awake.process_running(),
             'closed_lid_awake_active': self.closed_lid_awake.active(),
             'battery_safeguard_active': self.battery_sleep_safeguard_active,
+            'app_update': dict(self.app_updates.state) if self.app_updates else {},
         }
     def close(self):
         if self.device_events:
