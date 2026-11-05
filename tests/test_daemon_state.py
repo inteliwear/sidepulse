@@ -215,6 +215,55 @@ def test_ui_output_controls_do_not_replace_session_state(daemon):
     assert service.outputs_enabled  # Invalid commands are atomic.
 
 
+@pytest.mark.parametrize('use_volume', [False, True])
+def test_manual_write_restores_automatic_output_after_hold(daemon, tmp_path, use_volume):
+    service, _ = daemon
+    target = tmp_path / 'LEDS.LED'
+    service.runtime.devices = [DeviceCandidate(tmp_path, target, 'test', 'dot')]
+    service.program_state.submit(report())
+    with patch('sidepulse.service.load_settings', return_value=AgentMonitorSettings()), \
+         patch('sidepulse.service.write_led_program', return_value=target) as write:
+        service.sync_outputs()
+        automatic = write.call_args.args[0]
+        service.handle_command({'v':1, 'type':'write_led', 'program':'#FF0000',
+                                'target':str(tmp_path if use_volume else target), 'hold_seconds':0})
+        service.sync_outputs()
+    assert write.call_count == 3
+    assert write.call_args.args[0] == automatic
+
+
+def test_automatic_write_failure_is_reported_and_recovery_clears_it(daemon, tmp_path):
+    service, server = daemon
+    target = tmp_path / 'LEDS.LED'
+    service.runtime.devices = [DeviceCandidate(tmp_path, target, 'test', 'dot')]
+    service.program_state.submit(report())
+    monitor = DaemonMonitor(server.path)
+    with patch('sidepulse.service.load_settings', return_value=AgentMonitorSettings()), \
+         patch('sidepulse.service.write_led_program', side_effect=[OSError('Drive unavailable'), target]) as write:
+        service.sync_outputs()
+        assert monitor.snapshot().aggregate.mode == AgentMode.WORKING
+        assert monitor.output_errors == {'dot':'Drive unavailable'}
+        service.sync_outputs()
+        assert monitor.snapshot().aggregate.mode == AgentMode.WORKING
+        assert monitor.output_errors == {}
+        service.sync_outputs()
+        assert write.call_count == 2
+
+
+@pytest.mark.parametrize('command', [
+    {'type':'write_led', 'program':'#FF0000'},
+    {'type':'output_control', 'enabled':False},
+])
+def test_successful_explicit_output_clears_only_its_device_error(daemon, tmp_path, command):
+    service, _ = daemon
+    target = tmp_path / 'LEDS.LED'
+    service.runtime.devices = [DeviceCandidate(tmp_path, target, 'test', 'dot')]
+    service.output_errors = {'dot':'Previous write failed', 'other':'Still failed'}
+    with patch('sidepulse.service.write_led_program', return_value=target):
+        service.handle_command({'v':1, 'target':str(tmp_path), **command})
+    assert service.output_errors == {'other':'Still failed'}
+
+
 @pytest.mark.parametrize('platform',['ios','android'])
 def test_daemon_forwards_individual_local_and_remote_osc_updates(platform):
     from sidepulse.relay import RelayConfig

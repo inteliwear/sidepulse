@@ -69,6 +69,20 @@ is not installed, recovery reports that setup is required. Isolated tests cover
 missing installations, loaded/unloaded Mac jobs, Linux restart, and the tray's
 single recovery worker without running real service commands.
 
+The follow-up checks reproduced a manual-output cache bug: writing to a volume
+directory invalidated the directory's cache key instead of the resolved LED
+file, so automatic status could remain suppressed after the preview hold ended.
+Both file and directory targets now restore automatic output. Successful manual
+or output-disable writes clear the affected device's previous output error.
+The tray shows LED failures beside the device and in its tooltip while retaining
+the real session state; warnings clear when output succeeds or the device leaves.
+
+After these fixes, the full desktop suite passed **1,064 tests**, with **11
+skipped** and **624 subtests passing**. A separate native AppKit run passed all
+**77 UI tests**. The full run preserved the live daemon PID (16139) and its
+normal installed launcher, with no device output errors afterward. Tests of
+failure recovery and manual previews use isolated devices and mocked writers.
+
 The routine session script now selects the current hook-parity and Codex
 question tests instead of a deleted acknowledgment test. The documented
 Codex plan-confirmation limitation in `macos-main-comparison.md` remains open:

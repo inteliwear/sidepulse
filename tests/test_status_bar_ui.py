@@ -472,6 +472,36 @@ class MenuBuildTests(StatusBarTestCase):
         actions = {item.title(): str(item.action()) for item in menu.itemArray() if item.action() is not None}
         self.assertEqual(actions, {'Restart daemon': 'restartDaemon:', 'Settings...': 'openSettings:', 'Quit': 'quit:'})
 
+    def test_device_failure_is_visible_without_changing_session_state(self):
+        device = make_device()
+        snapshot = make_snapshot([make_status()])
+        error = 'Built-in animation is missing: cyan-roll-2.LED'
+        with patch.object(self.controller, 'status_bar_devices', return_value=[device]), \
+             patch.object(self.controller, 'device_errors', {device.device_id:error}):
+            menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn('Devices — LED output failed', titles)
+            warning = next(item for item in menu.itemArray() if item.title() == '⚠ ' + device.name)
+            self.assertEqual(warning.toolTip(), error)
+            self.assertIn(error, titles)
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+            self.controller.device_errors.clear()
+            menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn('Devices', titles)
+            self.assertIn(device.name, titles)
+            self.assertNotIn(error, titles)
+
+    def test_disconnected_device_does_not_show_old_output_failure(self):
+        device = make_device(connected=False)
+        with patch.object(self.controller, 'status_bar_devices', return_value=[device]), \
+             patch.object(self.controller, 'device_errors', {device.device_id:'Old failure'}):
+            menu = sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller)
+        titles = [item.title() for item in walk_menu(menu)]
+        self.assertIn('Devices', titles)
+        self.assertIn(device.name, titles)
+        self.assertNotIn('Old failure', titles)
+
     def test_menu_header_shows_version_build_date_and_main_update(self):
         build = sb.BuildInfo('0.2.4.dev15+g4735acb1f', '4735acb1f', '2026-10-24T12:30:00Z')
         with patch.object(self.controller, 'app_build', build), patch.object(
@@ -1225,6 +1255,17 @@ class StatusIconAnimationTests(StatusBarTestCase):
             self.assertTrue(first.isTemplate())
             self.assertEqual(first.size(), later.size())
             self.assertIs(first, sb.animated_status_icon(state, 0))
+
+    def test_output_failure_tooltip_keeps_actual_working_state(self):
+        self.target.device_errors = {'dot':'Missing animation'}
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertEqual(self.target.current_state, sb.STATE_WORKING)
+        button = self.target.status_item.button()
+        self.assertIn('LED output failed', button.setToolTip_.call_args.args[0])
+        self.assertEqual(button.setAccessibilityLabel_.call_args, button.setToolTip_.call_args)
+        self.target.device_errors.clear()
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertNotIn('LED output failed', button.setToolTip_.call_args.args[0])
 
     def test_provider_badge_pixels_stay_stationary(self):
         # Supply a real provider image independent of installed applications.

@@ -278,6 +278,7 @@ class SidePulseService:
                             from .models import AgentMode
                             write_led_program(program_for_agent_mode(AgentMode.IDLE_READY,
                                 led_count=led_count_for_target(candidate.target)), device_path=candidate.target)
+                            self.output_errors.pop(candidate.device_id or str(candidate.root.expanduser()), None)
                         except Exception as exc:
                             self.output_errors[candidate.device_id or str(candidate.root)] = str(exc)
                     self.last_program_by_target.clear()
@@ -295,6 +296,10 @@ class SidePulseService:
                 self.manual_pause_until = time.monotonic() + hold
                 # Automatic mode must restore even if it matches an older write.
                 self.last_program_by_target.pop(f'file:{target}', None)
+                self.last_program_by_target.pop(f'file:{result}', None)
+                for candidate in self.runtime.devices:
+                    if candidate.target == result:
+                        self.output_errors.pop(candidate.device_id or str(candidate.root.expanduser()), None)
                 return {'ok': True, 'target': str(result)}
             raise StatusError('Unsupported daemon command')
 

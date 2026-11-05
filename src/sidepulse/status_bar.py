@@ -607,12 +607,12 @@ class StatusBarController(NSObject):
         state = state_for_mode(snapshot.aggregate.mode)
         self.observe_connected_devices()
         self.check_firmware()
-        self.set_status(state)
         self.sync_leds(
             snapshot.aggregate.mode,
             battery_snapshot,
             self.active_led_display_kind(battery_snapshot),
         )
+        self.set_status(state)
         self.status_item.setMenu_(build_menu(snapshot, state, self))
 
     @objc.IBAction
@@ -1129,8 +1129,11 @@ class StatusBarController(NSObject):
             return
         button.setTitle_("")
         button.setImage_(image_for_symbol(state.symbol, state.label))
-        button.setToolTip_(f"SidePulse Agent Monitor: {state.label}")
-        button.setAccessibilityLabel_(f"SidePulse Agent Monitor: {state.label}")
+        label = f"SidePulse Agent Monitor: {state.label}"
+        if self.device_errors:
+            label += " — LED output failed"
+        button.setToolTip_(label)
+        button.setAccessibilityLabel_(label)
         self.update_status_icon_animation()
         if previous != state:
             log_status_bar(f"state={state.label}")
@@ -2908,8 +2911,10 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
             menu.addItem_(session_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
-    menu.addItem_(disabled_menu_item("Devices"))
     devices = target.status_bar_devices()
+    errors = getattr(target, 'device_errors', {})
+    failed = any(device.connected and errors.get(device.device_id) for device in devices)
+    menu.addItem_(disabled_menu_item("Devices — LED output failed" if failed else "Devices"))
     for device in devices:
         menu.addItem_(build_device_menu_item(device, target))
     if not devices:
@@ -3000,9 +3005,18 @@ def build_sleep_prevention_policy_item(policy: str, target: StatusBarController)
 
 
 def build_device_menu_item(device: StatusBarDevice, target: StatusBarController) -> NSMenuItem:
-    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(device.name, None, "")
+    error = getattr(target, 'device_errors', {}).get(device.device_id) if device.connected else None
+    title = f"⚠ {device.name}" if error else device.name
+    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
     item.setState_(1 if device.connected else 0)
     submenu = NSMenu.alloc().init()
+    if error:
+        item.setToolTip_(error)
+        warning = disabled_menu_item("LED update failed")
+        warning.setToolTip_(error)
+        submenu.addItem_(warning)
+        submenu.addItem_(disabled_menu_item(error))
+        submenu.addItem_(NSMenuItem.separatorItem())
 
     if device.remote_link is not None:
         capable = device.remote_link.status_protocol == 2
