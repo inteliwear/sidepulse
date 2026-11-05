@@ -241,7 +241,6 @@ def test_evidence_receiver_rejects_invalid_requests_and_saves_exact_bytes(tmp_pa
     import http.client
     import re
     import threading
-    import time
     from http.server import HTTPServer
 
     collector = load("collect")
@@ -251,11 +250,18 @@ def test_evidence_receiver_rejects_invalid_requests_and_saves_exact_bytes(tmp_pa
     def server_factory(address, handler):
         server = HTTPServer(address, handler)
         servers.append(server)
-        ready.set()
         return server
+
+    write_text = Path.write_text
+    def write_launcher(path, *args, **kwargs):
+        result = write_text(path, *args, **kwargs)
+        if path.name == 'collect-results.command':
+            ready.set()
+        return result
 
     monkeypatch.setattr(collector, "HTTPServer", server_factory)
     monkeypatch.setattr(collector, "MAX_BYTES", 1024)
+    monkeypatch.setattr(Path, "write_text", write_launcher)
     # HTTPServer resolves its name during bind; loopback delivery must not
     # depend on the CI runner's reverse-DNS service responding promptly.
     monkeypatch.setattr("socket.getfqdn", lambda host: host)
@@ -263,9 +269,6 @@ def test_evidence_receiver_rejects_invalid_requests_and_saves_exact_bytes(tmp_pa
         result = pool.submit(collector.receive, "127.0.0.1", tmp_path, 10)
         assert ready.wait(3)
         launcher = tmp_path / "collect-results.command"
-        deadline = time.monotonic() + 3
-        while not launcher.exists() and time.monotonic() < deadline:
-            time.sleep(.01)
         text = launcher.read_text()
         path = re.search(r'http://127\.0\.0\.1:\d+(/[^\s]+)', text).group(1)
         connection = http.client.HTTPConnection("127.0.0.1", servers[0].server_port)
