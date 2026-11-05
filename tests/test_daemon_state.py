@@ -181,7 +181,8 @@ def test_daemon_drives_physical_led_while_ui_is_connected(daemon, tmp_path):
     target = tmp_path/'LEDS.LED'
     submit_report(report(),path=server.path)
     assert DaemonMonitor(server.path).snapshot().aggregate.mode == AgentMode.WORKING
-    with patch('sidepulse.service.discover_devices',return_value=[DeviceCandidate(tmp_path,target,'test')]), patch('sidepulse.service.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.service.write_led_program',return_value=target) as write:
+    with patch('sidepulse.daemon_runtime.discover_devices',return_value=[DeviceCandidate(tmp_path,target,'test')]), patch('sidepulse.service.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.service.write_led_program',return_value=target) as write:
+        service.runtime.devices = [DeviceCandidate(tmp_path,target,'test')]
         service.sync_outputs()
         write.assert_called_once()
         assert write.call_args.kwargs['device_path'] == target
@@ -196,7 +197,7 @@ def test_ui_led_writes_and_holds_are_executed_by_daemon(daemon,tmp_path):
         assert write_daemon_program('#FF0000',device_path=target,hold_seconds=10) == target
     write.assert_called_once_with('#FF0000',device_path=target)
     assert service.manual_pause_until > time.monotonic()
-    with patch('sidepulse.service.discover_devices') as discover:
+    with patch('sidepulse.daemon_runtime.discover_devices') as discover:
         service.sync_outputs()
     discover.assert_not_called()
 
@@ -279,7 +280,7 @@ def test_status_cli_reports_stopped_daemon_without_traceback(tmp_path,capsys):
 def test_daemon_retries_a_temporary_socket_start_failure():
     from sidepulse.relay import RelayConfig
     service=SidePulseService()
-    with patch.object(service,'install_signal_handlers'), patch.object(service.program_server,'start',side_effect=[OSError('busy'),setattr(service.program_server, 'running', True)]) as start, patch.object(service.program_server,'stop'), patch.object(service.program_relay,'start'), patch.object(service.program_relay,'stop'), patch.object(service,'sync_receiver'), patch.object(service.runtime,'poll'), patch.object(service.runtime,'close'), patch.object(service,'sync_outputs',side_effect=service.stop), patch.object(service.stop_event,'wait'), patch('sidepulse.service.load_relay_config',return_value=RelayConfig('https://example.test')):
+    with patch.object(service,'install_signal_handlers'), patch.object(service.program_server,'start',side_effect=[OSError('busy'),setattr(service.program_server, 'running', True)]) as start, patch.object(service.program_server,'stop'), patch.object(service.program_relay,'start'), patch.object(service.program_relay,'stop'), patch.object(service,'sync_receiver'), patch.object(service.runtime,'start'), patch.object(service.runtime,'poll'), patch.object(service.runtime,'close'), patch.object(service,'sync_outputs',side_effect=service.stop), patch.object(service.stop_event,'wait'), patch('sidepulse.service.load_relay_config',return_value=RelayConfig('https://example.test')):
         assert service.run() == 0
     assert start.call_count == 2
 

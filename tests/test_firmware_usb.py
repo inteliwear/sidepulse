@@ -98,10 +98,45 @@ def test_usb_upgrade_never_opens_a_file_or_downloads(capsys):
     opened.assert_not_called()
 
 
-def test_enumeration_failure_cleans_up_context():
+def test_enumeration_failure_keeps_shared_context_available(monkeypatch):
     library = MagicMock()
     library.libusb_init.return_value = 0
     library.libusb_get_device_list.return_value = -1
-    with patch.object(usb, '_usb_library', return_value=library), pytest.raises(OSError):
-        usb.enumerate_addresses()
-    library.libusb_exit.assert_called_once()
+    monkeypatch.setattr(usb, '_contexts', {})
+    with patch.object(usb, '_usb_library', return_value=library):
+        with pytest.raises(OSError):
+            usb.enumerate_addresses()
+        library.libusb_get_device_list.return_value = 0
+        assert usb.enumerate_addresses() == []
+    library.libusb_init.assert_called_once()
+    library.libusb_exit.assert_not_called()
+
+
+def test_concurrent_discovery_and_handles_share_context_without_teardown(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import ctypes as C
+
+    library = MagicMock()
+    def initialize(pointer):
+        C.cast(pointer, C.POINTER(C.c_void_p))[0] = C.c_void_p(42)
+        return 0
+    library.libusb_init.side_effect = initialize
+    library.libusb_get_device_list.return_value = 0
+    monkeypatch.setattr(usb, '_contexts', {})
+    def use_usb(_):
+        assert usb.enumerate_addresses() == []
+        # A missing device must release its own resources, never the shared
+        # context another discovery or write is still using.
+        with pytest.raises(OSError, match='found 0'):
+            usb.Device(bus=2, address=1)
+        u, context = usb._usb_context()
+        device = usb.Device.__new__(usb.Device)
+        device.usb, device.context, device.handle = u, context, C.c_void_p(7)
+        device.close(); device.close()
+        return context.value
+    with patch.object(usb, '_usb_library', return_value=library):
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            assert list(pool.map(use_usb, range(32))) == [42] * 32
+    library.libusb_init.assert_called_once()
+    assert library.libusb_close.call_count == 32
+    library.libusb_exit.assert_not_called()

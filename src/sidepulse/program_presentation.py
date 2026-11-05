@@ -29,6 +29,7 @@ class DaemonMonitor:
         self.path = path
         self.output_errors = {}
         self.runtime = {}
+        self.devices = []
         self.outputs_enabled = True
 
     def snapshot(self, include_stale=False):
@@ -47,6 +48,9 @@ class DaemonMonitor:
         aggregate = value['aggregate']
         self.output_errors = reply.get('output_errors', {})
         self.runtime = reply.get('runtime', {})
+        from .device_writer import DeviceCandidate
+        from pathlib import Path
+        self.devices = [DeviceCandidate(**{**row, 'root': Path(row['root']), 'target': Path(row['target'])}) for row in reply.get('devices', [])]
         self.outputs_enabled = reply.get('outputs_enabled', True)
         return MonitorSnapshot(AggregateStatus(AgentMode(aggregate['mode']), aggregate['active_count'],
             aggregate['stale_count'], status(aggregate.get('representative'))),

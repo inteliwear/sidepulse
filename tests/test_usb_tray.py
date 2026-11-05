@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from sidepulse import battery, device_writer as writer, keep_awake, led_status
+from sidepulse import battery, device_writer as writer, led_status
 from sidepulse import usb_control as usb, usb_discovery as discovery
 from sidepulse.models import AgentMode
 
@@ -19,13 +19,11 @@ def reset_state(monkeypatch):
     monkeypatch.delenv('SIDEPULSE_MOUNT_ROOTS', raising=False)
     writer._uncertain_usb_programs.clear()
     writer._usb_acknowledgements.clear()
-    discovery._expires = 0
-    discovery._devices = ()
+    discovery._devices = None
     yield
     writer._uncertain_usb_programs.clear()
     writer._usb_acknowledgements.clear()
-    discovery._expires = 0
-    discovery._devices = ()
+    discovery._devices = None
 
 
 def test_discovery_merges_hidden_dot_and_preserves_stable_identity():
@@ -38,7 +36,7 @@ def test_discovery_merges_hidden_dot_and_preserves_stable_identity():
         second = writer.discover_control_devices()
     assert first[0].root == mounted.root
     assert first[1].root == first[1].target == ROOT
-    assert first[1].device_id == second[1].device_id == 'sidepulse-usb:SPD-000006'
+    assert first[1].device_id == second[1].device_id == 'sidepulse:SPD-000006'
     assert second[1].target == reattached['root']
 
 
@@ -115,10 +113,3 @@ def test_uncertain_usb_ack_is_not_automatically_replayed():
         with pytest.raises(writer.DeviceWriteError, match='automatic replay stopped'):
             writer.write_led_program('#ff0000', device_path=ROOT)
         device.write.assert_called_once()
-
-
-def test_usb_keepalive_never_reads_a_fictional_status_file():
-    controller = keep_awake.KeepAwakeController(status_read_async=False)
-    with patch.object(controller, 'status_reader') as reader:
-        assert controller.poke_status_file(ROOT) is None
-    reader.assert_not_called()

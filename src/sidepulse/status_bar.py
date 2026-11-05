@@ -96,7 +96,6 @@ from .device_writer import (
     MOUNT_ROOT,
     DeviceCandidate,
     DeviceWriteError,
-    discover_devices,
     control_target_exists,
     normalize_led_text,
     path_exists,
@@ -521,7 +520,6 @@ class StatusBarController(NSObject):
         self.firmware_status = {}
         self.firmware_check_in_flight = False
         self.firmware_roots = ()
-        self.firmware_checked_at = 0.0
         self.firmware_upgrade_root = None
         self.firmware_led_hold_until = 0.0
         self.firmware_messages = {}
@@ -609,6 +607,7 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def forceRefresh_(self, _sender):
+        self.firmware_roots = ()
         self.refresh_(None)
 
     def check_firmware(self) -> None:
@@ -618,7 +617,7 @@ class StatusBarController(NSObject):
         )
         if self.firmware_check_in_flight or self.firmware_upgrade_root is not None:
             return
-        if roots == self.firmware_roots and time.monotonic() - self.firmware_checked_at < 60:
+        if roots == self.firmware_roots:
             return
         self.firmware_status = {root: status for root, status in self.firmware_status.items() if root in roots}
         self.firmware_messages = {root: message for root, message in self.firmware_messages.items() if root in roots}
@@ -642,7 +641,6 @@ class StatusBarController(NSObject):
             if root == self.firmware_upgrade_root
         }
         self.firmware_check_in_flight = False
-        self.firmware_checked_at = time.monotonic()
         self.rebuild_firmware_menu()
 
     def rebuild_firmware_menu(self) -> None:
@@ -696,7 +694,6 @@ class StatusBarController(NSObject):
             log_status_bar(f'firmware output resume error: {exc}')
         title = "Reconnect to confirm firmware update" if success else "Firmware upgrade failed"
         self.firmware_messages[Path(root)] = (title, message)
-        self.firmware_checked_at = time.monotonic()
         self.rebuild_firmware_menu()
         alert = NSAlert.alloc().init()
         alert.setMessageText_("Firmware transferred" if success else "Firmware upgrade failed")
@@ -2608,11 +2605,7 @@ class StatusBarController(NSObject):
 
     def status_bar_devices(self, *, remember: bool = True) -> list[StatusBarDevice]:
         entries_by_id: dict[str, StatusBarDevice] = {}
-        try:
-            candidates = discover_devices()
-        except Exception as exc:
-            log_status_bar(f"device discovery error: {exc}")
-            candidates = []
+        candidates = getattr(self.monitor, 'devices', [])
 
         for candidate in candidates:
             device_id = candidate.device_id or device_id_for_root(candidate.root)
@@ -2702,6 +2695,8 @@ class StatusBarController(NSObject):
         self.last_connected_device_signature = signature
         if previous is None or previous == signature:
             return False
+
+        self.firmware_roots = ()
 
         previous_by_id = {entry[0]: entry for entry in previous}
         current_by_id = {entry[0]: entry for entry in signature}

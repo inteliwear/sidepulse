@@ -303,11 +303,11 @@ def discover_devices(
                 mounted_addresses.add(usb_address_for_volume(item.root))
             except (OSError, ValueError, RuntimeError, SubprocessError):
                 pass
-    for info in dots():
+    for info in dots(force=True):
         if info['serial'] in mounted_serials or (info['bus'], info['address']) in mounted_addresses:
             continue
         root = info['root']
-        identity = f"sidepulse-usb:{info['serial']}" if info['serial'] != 'unassigned' else str(root)
+        identity = f"sidepulse:{info['serial']}" if info['serial'] != 'unassigned' else str(root)
         candidates.append(DeviceCandidate(root, root, 'USB control', identity,
                                           'SidePulse Dot', info['version'], info['serial'], 'USB', info['led_count']))
     return candidates
@@ -328,7 +328,9 @@ def describe_mounted_device(candidate: DeviceCandidate) -> DeviceCandidate:
     dot = 'app_version' in fields or 'pulsedot' in name
     pro = 'release_version' in fields or 'sidepulse' in name and not dot
     model = 'SidePulse Dot' if dot else 'SidePulse Pro' if pro else candidate.root.name
-    return replace(candidate, model=model, version=fields.get('app_version' if dot else 'release_version', 'unknown'),
+    serial = fields.get('serial', 'unassigned')
+    identity = f'sidepulse:{serial}' if serial != 'unassigned' else candidate.device_id
+    return replace(candidate, device_id=identity, model=model, version=fields.get('app_version' if dot else 'release_version', 'unknown'),
                    serial=fields.get('serial', 'unassigned'), led_count=2 if dot else 8)
 
 
@@ -374,6 +376,8 @@ def default_mount_roots(
     current_platform = platform or sys.platform
     if current_platform == "darwin":
         return (MOUNT_ROOT,)
+    if current_platform == "win32":
+        return windows_drive_roots()
     if current_platform.startswith("linux"):
         username = (home or Path.home()).name
         return unique_paths(
@@ -388,6 +392,12 @@ def default_mount_roots(
     return (MOUNT_ROOT,)
 
 
+def windows_drive_roots() -> tuple[Path, ...]:
+    import ctypes
+    drives = ctypes.windll.kernel32.GetLogicalDrives()
+    return tuple(Path(f'{chr(65 + bit)}:/') for bit in range(26) if drives & (1 << bit))
+
+
 def unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
     result: list[Path] = []
     for path in paths:
@@ -397,6 +407,9 @@ def unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
 
 
 def iter_mounts(mount_root: Path) -> Iterable[Path]:
+    # A Windows drive letter is itself the volume, not a folder of volumes.
+    if sys.platform == 'win32' and mount_root == Path(mount_root.anchor):
+        return (mount_root,)
     try:
         children = list(mount_root.iterdir())
     except OSError:

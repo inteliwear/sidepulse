@@ -10,8 +10,8 @@ from dataclasses import asdict
 
 from .audit import append_status_history_record, status_history_record
 from .battery import BatterySnapshot, read_battery_snapshot
-from .device_writer import MOUNT_ROOT, discover_devices
-from .keep_awake import KEEPALIVE_FILE_NAME, KeepAwakeController
+from .device_writer import discover_devices, device_write_lock
+from .keep_awake import KeepAwakeController
 from .lid_sleep import (ClosedLidAwakeController, MacSleepSnapshot, external_display_is_active,
     read_lid_closed, read_mac_sleep_snapshot, run_pmset_displaysleepnow,
     sleep_helper_installed)
@@ -22,6 +22,7 @@ from .settings import (load_settings, SLEEP_PREVENTION_ALWAYS, SLEEP_PREVENTION_
 HISTORY_SAMPLE_SECONDS = 15.0
 MAC_SLEEP_POLL_SECONDS = 60.0
 SYSTEM_POLL_ERROR_BACKOFF_SECONDS = 30.0
+PRO_KEEPALIVE_SECONDS = 60.0
 
 
 def log_runtime(message):
@@ -133,7 +134,6 @@ class DaemonRuntime:
         self.last_status_history_error = None
         self.last_keep_awake_error = None
         self.last_closed_lid_awake_error = None
-        self.last_status_read_error = None
         self.battery_sleep_safeguard_active = False
         self.battery_sleep_safeguard_reason = ''
         self.agent_awake_last_mode = None
@@ -142,8 +142,22 @@ class DaemonRuntime:
         self.closed_lid_display_sleep_requested = False
         self.lid_closed_led_hold_active = False
         self.next_lid_poll = self.next_sleep_poll = self.next_history_sample = 0.0
+        self.next_pro_keepalive = 0.0
         self.devices = []
+        self.device_events = None
         self.view = {}
+
+    def start(self):
+        from .device_events import DeviceEvents
+        events = None
+        try:
+            events = DeviceEvents()
+            events.start()
+            self.device_events = events
+        except OSError as exc:
+            if events:
+                events.close()
+            log_runtime(f'device notifications unavailable: {exc}')
 
     @property
     def leds_enabled(self):
@@ -170,12 +184,26 @@ class DaemonRuntime:
         self.last_battery_snapshot = battery
         if battery is not None:
             self.update_battery_power_preview(battery)
+        if self.device_events is None or self.device_events.changed.is_set():
+            if self.device_events:
+                self.device_events.changed.clear()
+            try:
+                self.devices = discover_devices()
+                # Discovery already reads STATUS.TXT; don't read it twice.
+                self.next_pro_keepalive = now + PRO_KEEPALIVE_SECONDS
+                if self.device_events:
+                    self.device_events.update()
+            except Exception as exc:
+                # A missing device must not stop Mac sleep policy or history.
+                self.devices = []
+                log_runtime(f'device discovery failed: {exc}')
+        if self.is_mac and now >= self.next_pro_keepalive:
+            self.next_pro_keepalive = now + PRO_KEEPALIVE_SECONDS
+            self.read_pro_keepalive()
         try:
-            self.devices = discover_devices()
-        except Exception as exc:
-            # A missing device must not stop Mac sleep policy or history.
-            self.devices = []
-            log_runtime(f'device discovery failed: {exc}')
+            self.migrate_device_settings()
+        except OSError:
+            log_runtime('device preferences could not be migrated')
         if self.is_mac:
             # Only the runtime loop mutates sleep controllers, never socket threads.
             self.keep_awake.set_enabled(self.service.keep_awake_enabled)
@@ -201,6 +229,40 @@ class DaemonRuntime:
             mode = self.last_snapshot.aggregate.mode
             self.record_status_history(mode, battery, self.last_mac_sleep_snapshot)
         self.view = self.snapshot()
+
+    def read_pro_keepalive(self):
+        """Keep the Mac SD reader active without scanning or rewriting LEDs."""
+        from .status_reader import read_status_bytes
+
+        for device in self.devices:
+            if device.model != 'SidePulse Pro' or device.connection != 'drive':
+                continue
+            try:
+                with device_write_lock(device.root):
+                    read_status_bytes(device.root / 'STATUS.TXT', max_bytes=512)
+            except OSError as exc:
+                log_runtime(f'Pro keepalive failed for {device.root}: {exc}')
+
+    def migrate_device_settings(self):
+        """Carry existing preferences across USB/storage views of the same serial."""
+        from dataclasses import replace
+        from .settings import save_settings
+        settings = self.settings
+        devices = list(settings.devices)
+        for candidate in self.devices:
+            if not candidate.device_id or candidate.serial == 'unassigned':
+                continue
+            aliases = {str(candidate.root), f'sidepulse-usb:{candidate.serial}'}
+            current = next((item for item in devices if item.device_id == candidate.device_id), None)
+            previous = next((item for item in devices if item.device_id in aliases), None)
+            if previous:
+                devices = [item for item in devices if item.device_id not in aliases]
+                if not current:
+                    devices.append(replace(previous, device_id=candidate.device_id, path=str(candidate.root)))
+        if tuple(devices) != settings.devices:
+            self.settings = replace(settings, devices=tuple(devices))
+            save_settings(self.settings)
+
     def snapshot(self):
         return {
             'battery': asdict(self.last_battery_snapshot) if self.last_battery_snapshot else None,
@@ -216,15 +278,12 @@ class DaemonRuntime:
             'battery_safeguard_active': self.battery_sleep_safeguard_active,
         }
     def close(self):
+        if self.device_events:
+            self.device_events.close()
         try:
             self.closed_lid_awake.release()
         finally:
             self.keep_awake.release()
-    def status_keepalive_targets(self):
-        if self.devices:
-            return [device.target for device in self.devices]
-        return [MOUNT_ROOT / name / KEEPALIVE_FILE_NAME
-            for name in ('SidePulsePro', 'SidePulseDot', 'PulseDot')]
     def accept_lid_state(self, closed):
         if closed is None:
             return
@@ -347,19 +406,6 @@ class DaemonRuntime:
                 log_runtime(f"keep_awake error: {self.last_keep_awake_error}")
 
         self.sync_closed_lid_awake(agents_active=agents_active)
-
-        if not self.leds_enabled:
-            return
-        read_any = False
-        for target in self.status_keepalive_targets():
-            status_path = self.keep_awake.poke_status_file(target)
-            if status_path is not None:
-                read_any = True
-                log_runtime(f"sd_keepalive read={status_path}")
-        if not read_any and self.keep_awake.last_status_error != self.last_status_read_error:
-            self.last_status_read_error = self.keep_awake.last_status_error
-            if self.last_status_read_error:
-                log_runtime(f"sd_keepalive error: {self.last_status_read_error}")
 
     def update_agent_awake_request(self, mode: AgentMode) -> bool:
         current = time.monotonic()

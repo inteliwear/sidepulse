@@ -38,7 +38,6 @@ def background(tmp_path):
         lid = patched('sidepulse.daemon_runtime.read_lid_closed', return_value=False)
         sleep = patched('sidepulse.daemon_runtime.read_mac_sleep_snapshot', return_value=MacSleepSnapshot())
         devices = patched('sidepulse.daemon_runtime.discover_devices', return_value=[candidate])
-        patched('sidepulse.service.discover_devices', return_value=[candidate])
         writes = patched('sidepulse.service.write_led_program', return_value=candidate.target)
         patched('sidepulse.daemon_runtime.append_status_history_record',
             side_effect=lambda record: append_status_history_record(record, path=history))
@@ -47,7 +46,6 @@ def background(tmp_path):
         process = Mock()
         process.poll.return_value = None
         service.runtime.keep_awake.process_factory = Mock(return_value=process)
-        service.runtime.keep_awake.poke_status_file = Mock(return_value=None)
         with tempfile.TemporaryDirectory(prefix='sp-runtime-', dir='/tmp') as directory:
             service.program_server.path = Path(directory)/'status.sock'
             service.program_server.start()
@@ -68,6 +66,101 @@ def report(state):
     return {'v':1, 'type':'program_status', 'scope':'session', 'status':{'state':state}}
 
 
+def test_device_discovery_only_runs_at_start_and_connection_changes(background):
+    import threading
+    b = background
+    events = SimpleNamespace(changed=threading.Event(), close=Mock(), update=Mock())
+    events.changed.set()
+    b.runtime.device_events = events
+    submit_report(report('working'), path=b.path)
+    b.tick(100)
+    original = b.runtime.devices[0]
+    # Status, history, sleep policy and UI reads must not scan volumes or read
+    # device metadata again while the attachments remain unchanged.
+    with patch('sidepulse.status_reader.read_status_bytes') as status_read:
+        for at in range(101, 171):
+            if at == 120:
+                submit_report(report('blocked'), path=b.path)
+            if at == 130:
+                submit_report(report('working'), path=b.path)
+            b.tick(at)
+            DaemonMonitor(b.path).snapshot()
+        status_read.assert_not_called()
+    b.devices.assert_called_once()
+    assert b.writes.call_count == 3
+    events.changed.set()
+    b.devices.return_value = []
+    b.tick(171)
+    assert not b.runtime.devices
+    assert not b.service.last_program_by_target
+    events.changed.set()
+    b.devices.return_value = [original]
+    b.tick(172)
+    assert b.devices.call_count == 3
+    assert b.writes.call_count == 4  # Reattached device receives current state.
+
+
+def test_pro_keepalive_uses_cached_devices_without_replaying_leds(background):
+    import threading
+    b = background
+    root = b.devices.return_value[0].root
+    pro = DeviceCandidate(root / 'Pro', root / 'Pro/LEDS.LED', 'pro', model='SidePulse Pro')
+    dot = DeviceCandidate(root / 'Dot', root / 'Dot/LEDS.LED', 'dot', model='SidePulse Dot')
+    b.devices.return_value = [pro, dot]
+    events = SimpleNamespace(changed=threading.Event(), close=Mock(), update=Mock())
+    events.changed.set()
+    b.runtime.device_events = events
+    submit_report(report('working'), path=b.path)
+    with patch('sidepulse.status_reader.read_status_bytes') as read:
+        b.tick(100)  # Discovery's metadata read starts the 60-second interval.
+        for at in range(101, 160):
+            b.tick(at)
+        read.assert_not_called()
+        writes = b.writes.call_count
+        b.tick(160)
+        read.assert_called_once_with(pro.root / 'STATUS.TXT', max_bytes=512)
+        DaemonMonitor(b.path).snapshot()
+        b.tick(219)
+        assert read.call_count == 1
+        assert b.writes.call_count == writes
+        b.tick(220)
+        assert read.call_count == 2
+        b.devices.assert_called_once()
+
+        events.changed.set()
+        b.devices.return_value = [dot]
+        b.tick(221)
+        b.tick(281)
+        assert read.call_count == 2  # No stale Pro path after disconnection.
+        events.changed.set()
+        b.devices.return_value = [pro, dot]
+        b.tick(282)
+        b.tick(341)
+        assert read.call_count == 2
+        b.tick(342)
+        assert read.call_count == 3
+
+
+def test_pro_keepalive_failure_does_not_stop_other_devices_or_outputs(background, capsys):
+    import threading
+    b = background
+    root = b.devices.return_value[0].root
+    pros = [DeviceCandidate(root / name, root / name / 'LEDS.LED', 'pro', model='SidePulse Pro')
+            for name in ('Pro1', 'Pro2')]
+    b.devices.return_value = pros
+    events = SimpleNamespace(changed=threading.Event(), close=Mock(), update=Mock())
+    events.changed.set()
+    b.runtime.device_events = events
+    b.tick(100)
+    with patch('sidepulse.status_reader.read_status_bytes', side_effect=[OSError('disconnected'), b'ok']) as read:
+        submit_report(report('blocked'), path=b.path)
+        b.tick(160)
+        assert read.call_count == 2
+        assert read.call_args_list[1].args[0] == pros[1].root / 'STATUS.TXT'
+        assert b.writes.call_count == 4  # Ask still reaches both output targets.
+        assert 'Pro keepalive failed' in capsys.readouterr().err
+        b.tick(161)
+        assert read.call_count == 2  # Failures do not turn into per-tick retries.
 
 
 def test_headless_daemon_records_history_and_drives_outputs_through_ui_reconnect(background):
@@ -231,6 +324,8 @@ def test_history_failure_is_reported_and_sampling_recovers(background):
     b.tick(115)
     assert b.runtime.view['history_error'] is None
     assert len(b.history.read_text().splitlines()) == 1
+
+
 
 
 def test_non_mac_daemon_skips_mac_power_controls(background):

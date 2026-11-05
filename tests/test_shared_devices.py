@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 import sidepulse
-from sidepulse import cli, device_list, device_writer as writer, service
+from sidepulse import cli, device_list, device_writer as writer, service, daemon_runtime
 from sidepulse import readonly_control, usb_control as usb, usb_discovery
 
 
@@ -17,7 +17,7 @@ INFO = dict(root=ROOT, bus=2, address=1, serial='SPD-000006', led_count=2,
 
 
 def test_all_frontends_import_the_same_device_and_write_implementations():
-    assert sidepulse.discover_devices is cli.discover_devices is device_list.discover_devices is service.discover_devices is writer.discover_devices
+    assert sidepulse.discover_devices is cli.discover_devices is device_list.discover_devices is daemon_runtime.discover_devices is writer.discover_devices
     assert sidepulse.write_led_program is service.write_led_program is writer.write_led_program
     assert cli.write_normalized_led_program is writer.write_normalized_led_program
     assert writer.discover_control_devices is writer.discover_devices

@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
     "libusb-package>=1.0.26,<2",
+    "watchdog>=6,<7",
     "qrcode>=8,<9",
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",

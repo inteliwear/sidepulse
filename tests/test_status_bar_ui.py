@@ -447,6 +447,9 @@ class FirmwareMenuTests(StatusBarTestCase):
         ) as thread, patch.object(self.controller.firmware_reader, "read") as read:
             self.controller.check_firmware()
             self.controller.check_firmware()
+            self.controller.firmware_check_in_flight = False
+            with patch.object(sb.time, "monotonic", return_value=1_000_000):
+                self.controller.check_firmware()  # Time passing alone never rereads a device.
             thread.assert_called_once()
             self.assertEqual(thread.call_args.kwargs["args"], ((self.device.root,),))
             read.assert_not_called()
@@ -459,9 +462,7 @@ class MenuBuildTests(StatusBarTestCase):
     def setUp(self):
         # Real device discovery would make these tests depend on whatever
         # hardware happens to be plugged in.
-        patcher = patch.object(sb, "discover_devices", return_value=[])
-        self.discover_devices = patcher.start()
-        self.addCleanup(patcher.stop)
+        self.controller.monitor.devices = []
         link_patcher = patch.object(sb, "load_ios_links", return_value=())
         self.load_ios_links = link_patcher.start()
         self.addCleanup(link_patcher.stop)
@@ -482,7 +483,7 @@ class MenuBuildTests(StatusBarTestCase):
 
     def test_storage_disabled_dot_is_connected_and_menu_controls_use_usb(self):
         root = Path('/dev/sidepulse-usb/Dot-002-001')
-        self.discover_devices.return_value = [sb.DeviceCandidate(
+        self.controller.monitor.devices = [sb.DeviceCandidate(
             root, root, 'USB control; storage off', 'sidepulse-usb:SPD-000006',
         )]
         with patch.object(sb, 'save_settings'):

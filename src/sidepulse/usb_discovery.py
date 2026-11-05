@@ -1,19 +1,17 @@
-"""Briefly cache Dot metadata used repeatedly by the tray."""
+"""Cache Dot metadata until an explicit device refresh."""
 from pathlib import Path
 import threading
-import time
 
 from . import usb_control as usb
 
 _lock = threading.Lock()
-_expires = 0.0
-_devices = ()
+_devices = None
 
 
 def dots(*, force=False):
-    global _devices, _expires
+    global _devices
     with _lock:
-        if not force and time.monotonic() < _expires:
+        if not force and _devices is not None:
             return _devices
         devices = []
         try:
@@ -29,7 +27,6 @@ def dots(*, force=False):
             except (ImportError, OSError, ValueError, RuntimeError):
                 continue
         _devices = tuple(devices)
-        _expires = time.monotonic() + 1
         return _devices
 
 

@@ -168,6 +168,6 @@ def test_first_hook_after_socket_starts_is_forwarded(tmp_path):
         finally:
             service.stop()
     config = RelayConfig(server='http://127.0.0.1:1', outbound_channel='target')
-    with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.service.load_relay_config', return_value=config), patch('sidepulse.links.load_phone_links', return_value=[]), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings()), patch('sidepulse.program_transport.publish_update', side_effect=lambda *args, **kwargs: delivered.set()), patch.object(service, 'install_signal_handlers'), patch.object(service.program_server, 'start', side_effect=start_and_submit_hook), patch.object(service.runtime, 'poll', side_effect=poll_and_stop), patch.object(service, 'sync_outputs'):
+    with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.service.load_relay_config', return_value=config), patch('sidepulse.links.load_phone_links', return_value=[]), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings()), patch('sidepulse.program_transport.publish_update', side_effect=lambda *args, **kwargs: delivered.set()), patch.object(service, 'install_signal_handlers'), patch.object(service.program_server, 'start', side_effect=start_and_submit_hook), patch.object(service.runtime, 'start'), patch.object(service.runtime, 'poll', side_effect=poll_and_stop), patch.object(service, 'sync_outputs'):
         assert service.run() == 0
     assert delivered.is_set()

@@ -9,12 +9,15 @@ from pathlib import Path
 import re
 import secrets
 import struct
+import threading
 import time
 
 INDEX = 0x5350
 STATUS_BYTES = 16
 MAX_BYTES = 512
 USB_DEVICE_ROOT = Path('/dev/sidepulse-usb')
+_contexts = {}
+_context_lock = threading.Lock()
 
 
 def address_from_selector(path):
@@ -94,12 +97,27 @@ def _usb_library(library=None):
     return u
 
 
+def _usb_context(library=None):
+    # Keep one context for the process lifetime. Repeated libusb_exit on macOS
+    # can block in darwin_exit, freezing discovery and the daemon's output loop.
+    # Device handles and enumeration lists are still released after each use;
+    # the OS releases the context when this process exits.
+    with _context_lock:
+        if library not in _contexts:
+            u = _usb_library(library)
+            context = C.c_void_p()
+            result = u.libusb_init(C.byref(context))
+            if result < 0:
+                raise OSError(f'USB initialization: {u.libusb_error_name(result).decode()} ({result})')
+            _contexts[library] = (u, context)
+        return _contexts[library]
+
+
 class Device:
     def __init__(self, *, bus: int, address: int, library=None):
-        u = self.usb = _usb_library(library)
-        self.context = C.c_void_p()
+        u, self.context = _usb_context(library)
+        self.usb = u
         self.handle = C.c_void_p()
-        self._check(u.libusb_init(C.byref(self.context)))
         devices = C.POINTER(C.c_void_p)()
         try:
             count = self._check(u.libusb_get_device_list(self.context, C.byref(devices)))
@@ -142,9 +160,6 @@ class Device:
         if self.handle:
             self.usb.libusb_close(self.handle)
             self.handle = C.c_void_p()
-        if self.context:
-            self.usb.libusb_exit(self.context)
-            self.context = C.c_void_p()
 
     def _transfer(self, request_type, request, value, data):
         if not self.handle:
@@ -227,11 +242,8 @@ class Device:
 
 def enumerate_addresses():
     """Return matching USB addresses, with no interface claims or disk access."""
-    u = _usb_library()
-    context = C.c_void_p()
+    u, context = _usb_context()
     devices = C.POINTER(C.c_void_p)()
-    if u.libusb_init(C.byref(context)) < 0:
-        raise OSError('could not initialize USB discovery')
     try:
         count = u.libusb_get_device_list(context, C.byref(devices))
         if count < 0:
@@ -250,4 +262,3 @@ def enumerate_addresses():
     finally:
         if devices:
             u.libusb_free_device_list(devices, 1)
-        u.libusb_exit(context)

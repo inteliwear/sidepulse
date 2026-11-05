@@ -64,7 +64,7 @@ from sidepulse.install import (
     uninstall_grok_hooks,
     update_codex_trusted_hashes,
 )
-from sidepulse.keep_awake import KeepAwakeController, status_file_for_target
+from sidepulse.keep_awake import KeepAwakeController
 from sidepulse.led_status import (
     AgentLedController,
     LedDisplayState,
@@ -2056,7 +2056,8 @@ class AgentMonitorTests(unittest.TestCase):
             'status':{'state':'working'}})
         target = Path('/test/LEDS.LED')
         from sidepulse.device_writer import DeviceCandidate
-        with patch('sidepulse.service.discover_devices', return_value=[DeviceCandidate(target.parent,target,'dot')]), patch('sidepulse.service.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.service.write_led_program',return_value=target) as write:
+        service.runtime.devices = [DeviceCandidate(target.parent,target,'dot')]
+        with patch('sidepulse.daemon_runtime.discover_devices', return_value=[DeviceCandidate(target.parent,target,'dot')]), patch('sidepulse.service.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.service.write_led_program',return_value=target) as write:
             with patch('sidepulse.service.time.monotonic',return_value=100):
                 service.sync_outputs()
                 service.handle_command({'v':1,'type':'write_led','program':'#FF0000',
@@ -4849,32 +4850,6 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(len(processes), 1)
         self.assertTrue(processes[0].terminated)
 
-    def test_keep_awake_reads_status_file_once_per_interval(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            device = Path(tmp) / "SidePulsePro"
-            device.mkdir()
-            status_path = device / "STATUS.TXT"
-            reads: list[Path] = []
-
-            controller = KeepAwakeController(
-                status_read_seconds=60,
-                status_reader=lambda path: reads.append(path),
-                status_read_async=False,
-            )
-
-            self.assertEqual(status_file_for_target(device / "LEDS.LED"), status_path)
-            self.assertEqual(status_file_for_target(device / "STATUS.TXT"), status_path)
-            self.assertEqual(
-                controller.poke_status_file(device / "LEDS.LED", now=0),
-                status_path,
-            )
-            self.assertIsNone(controller.poke_status_file(device / "LEDS.LED", now=30))
-            self.assertEqual(
-                controller.poke_status_file(device / "LEDS.LED", now=61),
-                status_path,
-            )
-            self.assertEqual(reads, [status_path, status_path])
-
     def test_closed_lid_awake_policy_decisions(self) -> None:
         self.assertFalse(
             closed_lid_awake_should_hold(CLOSED_LID_AWAKE_NEVER, agents_active=True)
@@ -5084,12 +5059,12 @@ class AgentMonitorTests(unittest.TestCase):
     def test_daemon_lid_close_hold_suppresses_output_until_conditions_change(self) -> None:
         service = SidePulseService()
         service.runtime.lid_closed_led_hold_active = True
-        with patch.object(service.runtime, 'should_hold_lid_closed_led_state', side_effect=[True, False]), patch('sidepulse.service.discover_devices', return_value=[]) as discover:
+        with patch.object(service.runtime, 'should_hold_lid_closed_led_state', side_effect=[True, False]), patch('sidepulse.daemon_runtime.discover_devices', return_value=[]) as discover:
             service.sync_outputs()
             discover.assert_not_called()
             self.assertTrue(service.runtime.lid_closed_led_hold_active)
             service.sync_outputs()
-            discover.assert_called_once()
+            discover.assert_not_called() # Outputs reuse the runtime discovery result.
             self.assertFalse(service.runtime.lid_closed_led_hold_active)
 
     def test_daemon_sleep_prevention_never_releases_all_sleep_prevention(self) -> None:

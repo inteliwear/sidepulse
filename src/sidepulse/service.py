@@ -9,7 +9,7 @@ import threading
 
 from .battery import program_for_battery
 from .daemon_runtime import DaemonRuntime
-from .device_writer import DeviceWriteError, discover_devices, write_led_program, normalize_led_text, validate_led_text
+from .device_writer import DeviceWriteError, write_led_program, normalize_led_text, validate_led_text
 from .led_status import apply_brightness, led_count_for_target, program_for_agent_mode
 from .relay import (
     RelayConfig,
@@ -50,6 +50,7 @@ class SidePulseService:
     def run(self) -> int:
         self.install_signal_handlers()
         try:
+            self.runtime.start()
             from .program_status import StatusError
             while not self.stop_event.is_set():
                 try:
@@ -141,6 +142,8 @@ class SidePulseService:
             self._sync_outputs()
 
     def _sync_outputs(self) -> None:
+        connected = {candidate.device_id or str(candidate.root.expanduser()) for candidate in self.runtime.devices}
+        self.output_errors = {key: error for key, error in self.output_errors.items() if key in connected}
         now = time.monotonic()
         if not self.outputs_enabled or now < max(self.ui_pause_until, self.manual_pause_until, self.animation_until):
             return
@@ -154,7 +157,7 @@ class SidePulseService:
         battery = self.runtime.last_battery_snapshot
 
         active_targets: set[str] = set()
-        for candidate in discover_devices():
+        for candidate in self.runtime.devices:
             device_id = candidate.device_id or str(candidate.root.expanduser())
             display = settings.display_for_device(device_id)
             if display != LED_DISPLAY_CUSTOM and now < self.battery_preview_until:
@@ -222,7 +225,7 @@ class SidePulseService:
                 duration = animation.duration_seconds
                 if settings.agent_animation_id(state) in (AGENT_ANIMATION_LID_CLOSED, AGENT_ANIMATION_LID_OPEN):
                     duration = default_lid_animation(kind).duration_seconds
-            for candidate in discover_devices():
+            for candidate in self.runtime.devices:
                 device_id = candidate.device_id or str(candidate.root.expanduser())
                 if settings.display_for_device(device_id) == LED_DISPLAY_CUSTOM:
                     continue
@@ -250,6 +253,7 @@ class SidePulseService:
         kind = command.get('type')
         if kind == 'output_info':
             return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled,
+                    'devices': [{**vars(device), 'root': str(device.root), 'target': str(device.target)} for device in self.runtime.devices],
                     'runtime': {**self.runtime.view, 'keep_awake_enabled': self.keep_awake_enabled,
                         'battery_preview_until': self.battery_preview_until}}
         with self.output_lock:
@@ -269,7 +273,7 @@ class SidePulseService:
                 if 'battery_preview_seconds' in command:
                     self.battery_preview_until = time.monotonic() + preview
                 if not enabled:
-                    for candidate in discover_devices():
+                    for candidate in self.runtime.devices:
                         try:
                             from .models import AgentMode
                             write_led_program(program_for_agent_mode(AgentMode.IDLE_READY,
