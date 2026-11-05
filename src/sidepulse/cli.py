@@ -121,6 +121,11 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
                               help="Decode one OSC 7501 line (terminator optional); omit LINE or use - to read stdin. Requires --scope.")
     report.set_defaults(func=cmd_report)
 
+    wrap = subparsers.add_parser("wrap", help="Run a command in a terminal and capture OSC 7501 status.")
+    wrap.add_argument("argv", nargs=argparse.REMAINDER, metavar="COMMAND",
+                      help="Command and its arguments; -- is optional.")
+    wrap.set_defaults(func=cmd_wrap)
+
     version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
     version.set_defaults(func=cmd_version)
     update = subparsers.add_parser("update", help="Update using the one-command setup installer.")
@@ -1386,6 +1391,19 @@ def mode_color(mode) -> str:
         "completed": "32;1",
         "idle_ready": "37",
     }.get(getattr(mode, "value", str(mode)), "37")
+
+
+def cmd_wrap(args: argparse.Namespace) -> int:
+    from .terminal_wrap import run_wrapped
+    command = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
+    if not command:
+        print("Usage: sidepulse wrap COMMAND [ARGS ...]", file=sys.stderr)
+        return 2
+    try:
+        return run_wrapped(command)
+    except (OSError, ValueError) as exc:
+        print(f"Could not wrap command: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_report(args: argparse.Namespace) -> int:

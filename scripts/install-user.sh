@@ -13,6 +13,7 @@ VENV_DIR="$INSTALL_ROOT/venv"
 
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV_DIR/bin/sidepulse" "$BIN_DIR/sidepulse"
+ln -sf "$VENV_DIR/bin/sidepulse" "$BIN_DIR/sp"
 # Remove only aliases owned by this installation, including broken symlinks.
 for legacy in agent-monitor agent-status-bar; do
     if [ -L "$BIN_DIR/$legacy" ] && [ "$(readlink "$BIN_DIR/$legacy")" = "$VENV_DIR/bin/$legacy" ]; then
