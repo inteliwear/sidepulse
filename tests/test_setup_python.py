@@ -30,6 +30,8 @@ class SetupPythonTests(unittest.TestCase):
             "SIDEPULSE_TEST_LOG": str(self.log),
         }
         self.stub("uname", 'printf "Darwin\\n"')
+        self.stub("xcode-select", "exit 0")
+        self.stub("xcrun", "exit 0")
         for name in ("python3", "python3.10", "python3.11", "python3.12", "python3.13", "python3.14"):
             self.stub(name, "exit 1")
         self.managed_python = self.root / "managed python"
@@ -87,6 +89,24 @@ exit 42
         python = self.good_python(self.bin / "python3")
         self.assertEqual(self.run_setup().returncode, 1)
         self.assertEqual(self.calls(), [str(python)])
+
+    def test_missing_developer_tools_explains_recovery_before_any_install(self):
+        self.stub("xcode-select", "exit 2")
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Apple Command Line Tools", result.stderr)
+        self.assertIn("xcode-select --install", result.stderr)
+        self.assertIn("wait for installation to finish", result.stderr)
+        self.assertIn("Run this SidePulse installer again", result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(self.install_root.exists())
+
+    def test_broken_tool_selection_explains_how_to_select_installed_tools(self):
+        self.stub("xcrun", "exit 1")
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sudo xcode-select --switch /Library/Developer/CommandLineTools", result.stderr)
+        self.assertEqual(self.calls(), [])
 
     def test_old_default_finds_versioned_python(self):
         python = self.good_python(self.bin / "python3.12")
