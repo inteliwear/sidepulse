@@ -2168,8 +2168,11 @@ class StatusBarController(NSObject):
                 session_hints=terminal_session_hints(status),
             )
         elif kind == "ide":
-            bundle_id, project_path = value
-            subprocess.Popen(["open", "-b", bundle_id, project_path])
+            bundle_id, project_path, app_path = value
+            if app_path:
+                subprocess.Popen(["open", "-a", app_path, project_path])
+            else:
+                subprocess.Popen(["open", "-b", bundle_id, project_path])
         else:
             self.set_settings_message(f"Unknown open action for {status.display_name}.")
             return

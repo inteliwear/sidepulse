@@ -572,12 +572,12 @@ class WindowBuildTests(StatusBarTestCase):
         )
         self.assert_controls_are_wired(window)
 
-    def test_open_junie_session_in_ide_uses_bundle_identifier(self):
+    def test_open_junie_session_in_ide_uses_bundle_identifier_fallback(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")
         with (
             patch(
                 "sidepulse.status_bar.session_open_target",
-                return_value=("ide", ("com.jetbrains.intellij", "/tmp/junie-project")),
+                return_value=("ide", ("com.jetbrains.intellij", "/tmp/junie-project", None)),
             ),
             patch("sidepulse.status_bar.subprocess.Popen") as popen,
         ):
@@ -589,6 +589,37 @@ class WindowBuildTests(StatusBarTestCase):
 
         popen.assert_called_once_with(
             ["open", "-b", "com.jetbrains.intellij", "/tmp/junie-project"]
+        )
+
+    def test_open_junie_session_in_exact_ide_app_uses_app_path(self):
+        status = make_status(provider="junie", cwd="/tmp/junie-project")
+        with (
+            patch(
+                "sidepulse.status_bar.session_open_target",
+                return_value=(
+                    "ide",
+                    (
+                        "com.jetbrains.intellij",
+                        "/tmp/junie-project",
+                        "/Applications/IntelliJ IDEA 2025.1.app",
+                    ),
+                ),
+            ),
+            patch("sidepulse.status_bar.subprocess.Popen") as popen,
+        ):
+            self.controller.open_session(
+                status,
+                sb.SESSION_OPEN_JETBRAINS,
+                remember=False,
+            )
+
+        popen.assert_called_once_with(
+            [
+                "open",
+                "-a",
+                "/Applications/IntelliJ IDEA 2025.1.app",
+                "/tmp/junie-project",
+            ]
         )
 
     def test_settings_window_resizes_for_compact_animations_tab(self):
