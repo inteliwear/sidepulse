@@ -437,7 +437,6 @@ def cursor_hook_command(
         command = " ".join(
             [
                 shlex.quote(executable),
-                "agent-monitor",
                 "hook-log",
                 "--provider",
                 "cursor",
@@ -490,7 +489,6 @@ def hook_command(
         command = " ".join(
             [
                 shlex.quote(executable),
-                "agent-monitor",
                 "hook-log",
                 "--provider",
                 shlex.quote(provider),

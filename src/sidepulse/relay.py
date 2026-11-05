@@ -9,7 +9,6 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -21,12 +20,10 @@ from .links import (
     iter_sse_messages,
     normalize_server,
 )
-from .providers import HOOK_PROVIDERS, candidate_state_dirs, default_state_dir
 from .settings import default_config_dir
 
 
 RELAY_CONFIG_VERSION = 1
-RELAY_MESSAGE_VERSION = 1
 RELAY_CHANNEL_BYTES = 16
 
 
@@ -48,22 +45,6 @@ class RelayConfig:
 
 def default_relay_config_path() -> Path:
     return default_config_dir() / "relay.json"
-
-
-def default_relay_event_socket_path() -> Path:
-    return relay_socket_path_for_state_dir(default_state_dir())
-
-
-def candidate_relay_event_socket_paths() -> tuple[Path, ...]:
-    return tuple(relay_socket_path_for_state_dir(path) for path in candidate_state_dirs())
-
-
-def relay_socket_path_for_state_dir(state_dir: Path) -> Path:
-    path = state_dir / "relay-events.sock"
-    if len(str(path).encode("utf-8")) <= 96:
-        return path
-    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
-    return Path("/tmp") / f"sidepulse-relay-{os.getuid()}-{digest}.sock"
 
 
 def new_relay_channel() -> str:
@@ -155,93 +136,12 @@ def clean_channel(value: object, *, required: bool = False) -> str:
     return channel
 
 
-def relay_event_message(provider: str, line: dict) -> dict[str, object]:
-    return {
-        "v": RELAY_MESSAGE_VERSION,
-        "type": "agent_event",
-        "event_id": str(uuid.uuid4()),
-        "source": {"name": socket.gethostname()},
-        "provider": provider,
-        "line": line,
-    }
-
-
-def parse_relay_event(value: str) -> tuple[str, dict, str] | None:
-    try:
-        message = json.loads(value)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(message, dict):
-        return None
-    if message.get("v") != RELAY_MESSAGE_VERSION or message.get("type") != "agent_event":
-        return None
-    provider = message.get("provider")
-    line = message.get("line")
-    event_id = message.get("event_id")
-    source = message.get("source")
-    if (
-        provider not in HOOK_PROVIDERS
-        or not isinstance(line, dict)
-        or not isinstance(event_id, str)
-    ):
-        return None
-    source_name = "Remote computer"
-    if isinstance(source, dict):
-        source_name = str(source.get("name") or source_name).strip()[:80] or source_name
-    return provider, annotate_remote_line(provider, line, source_name), event_id
-
-
-def annotate_remote_line(provider: str, line: dict, source_name: str) -> dict:
-    annotated = dict(line)
-    if provider == "codex" and isinstance(line.get("event"), dict):
-        raw = dict(line["event"])
-        annotated["event"] = raw
-    else:
-        raw = annotated
-    raw["sidepulse_relay_source"] = source_name
-    origin = str(raw.get("agent_origin") or raw.get("agentOrigin") or "").strip()
-    raw["agent_origin"] = f"{origin} · {source_name}" if origin else source_name
-    identity = str(
-        raw.get("agent_id")
-        or raw.get("agentId")
-        or raw.get("session_id")
-        or raw.get("sessionId")
-        or "default"
-    )
-    raw["agent_id"] = f"relay:{source_name}:{identity}"
-    return annotated
-
-
-def publish_relay_event(config: RelayConfig, provider: str, line: dict) -> None:
-    if not config.outbound_channel:
-        return
-    body = json.dumps(
-        relay_event_message(provider, line),
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    channel = urllib.parse.quote(clean_channel(config.outbound_channel, required=True), safe="")
-    request = urllib.request.Request(
-        f"{normalize_server(config.server)}/api/leds/{channel}",
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5.0):
-            return
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise LinkError(detail or f"Bridge returned HTTP {exc.code}.") from exc
-    except (OSError, urllib.error.URLError) as exc:
-        raise LinkError(f"Could not reach the bridge: {exc}") from exc
-
-
-def listen_for_relay_events(
+def listen_for_status_updates(
     config: RelayConfig,
     stop: threading.Event,
-    on_event: Callable[[str, dict, str], None],
+    on_update: Callable[[dict], None],
 ) -> None:
+    """Receive only normalized OSC-style updates using the existing bridge SSE."""
     channel = urllib.parse.quote(clean_channel(config.receiver_channel, required=True), safe="")
     url = f"{normalize_server(config.server)}/api/leds/{channel}"
     while not stop.is_set():
@@ -251,8 +151,17 @@ def listen_for_relay_events(
                 for value in iter_sse_messages(response):
                     if stop.is_set():
                         return
-                    parsed = parse_relay_event(value)
-                    if parsed is not None:
-                        on_event(*parsed)
+                    try:
+                        message = json.loads(value)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(message, dict) or message.get('type') != 'program_status':
+                        continue
+                    try:
+                        on_update(message)
+                    except (ValueError, TypeError):
+                        continue
+                    if stop.is_set():
+                        return
         except (OSError, urllib.error.URLError):
             stop.wait(1.0)

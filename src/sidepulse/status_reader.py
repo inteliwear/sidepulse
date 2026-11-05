@@ -1,4 +1,4 @@
-"""Fresh, read-only device status reads, including cached macOS volumes."""
+"""Fresh, read-only device file reads, including cached macOS volumes."""
 from __future__ import annotations
 
 import ctypes
@@ -50,7 +50,7 @@ class _MacFile:
         self.fd = -1
 
     def invalidate_cache(self):
-        """Evict existing cached pages before reading an ordinary status file."""
+        """Evict existing cached pages before reading a device file."""
         if self.fd < 0:
             raise ValueError("channel is closed")
         size = os.fstat(self.fd).st_size
@@ -88,18 +88,18 @@ class _MacFile:
 
 
 
-def read_status_bytes(path: Path) -> bytes:
-    """Read status with the read-only, uncached macOS transport."""
+def read_status_bytes(path: Path, *, max_bytes: int = 4096) -> bytes:
+    """Read a device file with the read-only, uncached macOS transport."""
     if sys.platform == "darwin":
         with _MacFile(path) as stream:
             stream.invalidate_cache()
             data = b""
-            for offset in range(0, 4096, 512):
+            for offset in range(0, max_bytes, 512):
                 block = stream.read_at(offset)
-                data += block
+                data += block[:max_bytes - offset]
                 if len(block) < 512:
                     break
     else:
         with path.open("rb") as stream:
-            data = stream.read(4096)
+            data = stream.read(max_bytes)
     return data

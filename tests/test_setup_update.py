@@ -50,7 +50,7 @@ class SetupUpdateTests(unittest.TestCase):
         cli = textwrap.dedent(f'''
             import json, os, sys
             MARKER = {marker!r}
-            def main():
+            def sidepulse_main():
                 args = sys.argv[1:]
                 with open(os.environ['SIDEPULSE_TEST_LOG'], 'a') as log:
                     log.write(json.dumps([MARKER, args]) + '\\n')
@@ -75,7 +75,9 @@ class SetupUpdateTests(unittest.TestCase):
         files[f'{info}/METADATA'] = metadata
         files[f'{info}/WHEEL'] = 'Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n'
         if name == 'sidepulse':
-            files[f'{info}/entry_points.txt'] = '[console_scripts]\nsidepulse = sidepulse.cli:main\nagent-monitor = sidepulse.cli:main\n'
+            files[f'{info}/entry_points.txt'] = '[console_scripts]\nsidepulse = sidepulse.cli:sidepulse_main\n'
+            if directory.name == 'old':
+                files[f'{info}/entry_points.txt'] += 'agent-monitor = sidepulse.cli:sidepulse_main\nagent-status-bar = sidepulse.cli:sidepulse_main\n'
         files[f'{info}/RECORD'] = ''.join(f'{path},,\n' for path in files) + f'{info}/RECORD,,\n'
         wheel = directory / f'{name}-1.0-py3-none-any.whl'
         with zipfile.ZipFile(wheel, 'w') as archive:
@@ -99,6 +101,8 @@ class SetupUpdateTests(unittest.TestCase):
         config = self.home / 'settings.json'
         config.write_text('{"show_menu_bar_icon": false}')
         self.log.write_text('')
+        for name in ('agent-monitor', 'agent-status-bar'):
+            (self.bin / name).symlink_to(self.install_root / 'venv/bin' / name)
         result = self.install(self.new)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.calls(), [
@@ -107,12 +111,25 @@ class SetupUpdateTests(unittest.TestCase):
         ])
         self.assertEqual(config.read_text(), '{"show_menu_bar_icon": false}')
         self.assertEqual((self.bin / 'sidepulse').resolve(), (self.install_root / 'venv/bin/sidepulse').resolve())
-        self.assertTrue((self.bin / 'agent-monitor').is_file())
+        for name in ('agent-monitor', 'agent-status-bar'):
+            self.assertFalse((self.bin / name).is_symlink())
+            self.assertFalse((self.install_root / 'venv/bin' / name).exists())
         python = self.install_root / 'venv/bin/python'
         output = subprocess.check_output([
             str(python), '-c', 'import sidepulse_fixture_dependency, sidepulse; print(sidepulse.MARKER)',
         ], text=True, cwd=self.root, env=self.env)
         self.assertEqual(output.strip(), 'new')
+
+    def test_update_preserves_unrelated_legacy_named_commands(self):
+        self.assertEqual(self.install(self.old).returncode, 0)
+        other = self.root / 'unrelated-command'
+        other.write_text('unrelated')
+        (self.bin / 'agent-monitor').symlink_to(other)
+        (self.bin / 'agent-status-bar').write_text('custom command')
+        result = self.install(self.new)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.bin / 'agent-monitor').resolve(), other.resolve())
+        self.assertEqual((self.bin / 'agent-status-bar').read_text(), 'custom command')
 
     def test_download_or_build_failure_keeps_existing_installation_running(self):
         self.assertEqual(self.install(self.old).returncode, 0)
@@ -143,6 +160,8 @@ class SetupUpdateTests(unittest.TestCase):
         stubs = self.root / 'stubs'
         stubs.mkdir()
         (stubs / 'uname').write_text('#!/bin/sh\nprintf "Darwin\\n"\n')
+        for name in ('xcode-select', 'xcrun'):
+            (stubs / name).write_text('#!/bin/sh\nexit 0\n')
         launchctl = stubs / 'launchctl'
         launchctl.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''
             import json, os, sys

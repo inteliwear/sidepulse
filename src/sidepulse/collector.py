@@ -214,6 +214,7 @@ class AgentMonitor:
                     previous,
                     status,
                     pending_permissions_by_key.get(status.agent_id, set()),
+                    record=record,
                 ):
                     continue
                 statuses_by_key[status.agent_id] = status
@@ -420,6 +421,7 @@ class LiveAgentMonitor:
                 previous,
                 status,
                 self.pending_permissions_by_key.get(status.agent_id, set()),
+                record=record,
             ):
                 return
             self.statuses_by_key[status.agent_id] = status
@@ -1058,6 +1060,14 @@ def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None)
     )
 
 
+def codex_question_tool(record: HookEvent | AgentStatus) -> str | None:
+    if record.provider == "codex" and record.tool_name:
+        name = record.tool_name.rsplit(".", 1)[-1]
+        if name in {"request_user_input", "request_user_input_async"}:
+            return name
+    return None
+
+
 def mode_for_event(record: HookEvent) -> AgentMode | None:
     event = record.event_name
     raw = record.raw
@@ -1068,6 +1078,9 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if explicit_mode is not None:
         return explicit_mode
 
+    if record.provider == 'codex' and event in {'PostToolUseFailure', 'PermissionDenied'}:
+        # A failed/denied tool call is handled by Codex, not a request for input.
+        return AgentMode.WORKING
     if event in {"PostToolUseFailure", "PermissionDenied", "StopFailure"}:
         return AgentMode.BLOCKED_ERROR
     if event in {"PermissionRequest"}:
@@ -1085,14 +1098,31 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.WORKING
     if event in {"PreToolUse"}:
+        if codex_question_tool(record):
+            return AgentMode.WAITING_FOR_INPUT
         return AgentMode.TOOL_RUNNING
     if event in {"PostToolUse"}:
-        if _tool_response_looks_failed(raw.get("tool_response")):
+        if record.provider != 'codex' and _tool_response_looks_failed(raw.get("tool_response")):
             return AgentMode.BLOCKED_ERROR
+        if codex_question_tool(record) == "request_user_input_async":
+            response = raw.get("tool_response")
+            if isinstance(response, str):
+                try:
+                    response = json.loads(response)
+                except ValueError:
+                    response = None
+            # This acknowledges queuing the question, not receiving an answer.
+            if isinstance(response, dict) and response.get("accepted") is True:
+                return AgentMode.WAITING_FOR_INPUT
         return AgentMode.WORKING
     if event in {"UserPromptSubmit", "PreCompact", "PostCompact", "SubagentStart"}:
         return AgentMode.WORKING
     if event in {"Stop", "SubagentStop"}:
+        if record.provider == "codex" and event == "Stop" and not record.agent_id:
+            from .codex_plan import pending_plan_review
+
+            if pending_plan_review(raw, record.session_id, record.turn_id):
+                return AgentMode.WAITING_FOR_INPUT
         if _assistant_message_asks_question(raw.get("last_assistant_message")):
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.COMPLETED
@@ -1403,7 +1433,20 @@ def should_ignore_status_transition(
     previous: AgentStatus | None,
     current: AgentStatus,
     pending_permission_signatures: set[str],
+    *,
+    record: HookEvent | None = None,
 ) -> bool:
+    if (
+        previous is not None
+        and previous.mode == AgentMode.WAITING_FOR_INPUT
+        and previous.provider == "codex"
+        and (codex_question_tool(previous) or previous.event_name == "Stop")
+        and not codex_question_tool(current)
+        and current.event_name not in {"UserPromptSubmit", "Stop", "SubagentStop", "Interrupt", "SessionEnd", "SessionStart"}
+        and current.mode != AgentMode.BLOCKED_ERROR
+        and (record is None or explicit_mode_for_record(record) is None)
+    ):
+        return True
     if (
         previous is not None
         and previous.mode == AgentMode.COMPLETED
@@ -1640,8 +1683,13 @@ def project_name(cwd: str | None) -> str | None:
         return None
     path = Path(cwd)
     for candidate in (path, *path.parents):
-        if (candidate / ".git").exists():
-            return candidate.name or str(candidate)
+        try:
+            if (candidate / ".git").exists():
+                return candidate.name or str(candidate)
+        except OSError:
+            # Remote paths can exceed this machine's filesystem limits.
+            # Their display metadata must not prevent status accounting.
+            continue
     return path.name or cwd
 
 

@@ -544,6 +544,7 @@ def normalize_event_payload(raw: dict[str, Any], event_name: str, logged_at: Any
     _copy_alias(normalized, "workspaceRoot", "cwd")
     _copy_alias(normalized, "toolName", "tool_name")
     _copy_alias(normalized, "toolInput", "tool_input")
+    _copy_alias(normalized, "toolUseId", "tool_use_id")
     _copy_alias(normalized, "toolResponse", "tool_response")
     _copy_alias(normalized, "lastAssistantMessage", "last_assistant_message")
     _copy_alias(normalized, "notificationType", "notification_type")

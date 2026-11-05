@@ -99,6 +99,8 @@ def status_history_record(
     closed_lid_awake_requested: bool,
     closed_lid_awake_active: bool,
     recorded_at: datetime | None = None,
+    cpu_temperature_c: float | None = None,
+    case_temperature_c: float | None = None,
 ) -> dict[str, object]:
     at = recorded_at or datetime.now(timezone.utc)
     battery_percent = battery.percent if battery is not None else None
@@ -107,6 +109,8 @@ def status_history_record(
         "recorded_at": at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "agent_status": agent_mode,
         "display_status": display_status,
+        "cpu_temperature_c": cpu_temperature_c,
+        "case_temperature_c": case_temperature_c,
         "battery_level": battery_percent,
         "battery_charging": battery.is_charging if battery is not None else None,
         "battery_charged": battery.is_charged if battery is not None else None,

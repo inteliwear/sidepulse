@@ -1,69 +1,95 @@
 from __future__ import annotations
 
-import json
 import signal
-import socket
+import time
+import math
+from pathlib import Path
 import sys
 import threading
-import time
 
-from .battery import program_for_battery, read_battery_snapshot
-from .collector import LiveAgentMonitor, default_sources
-from .device_writer import DeviceWriteError, discover_devices, write_led_program
-from .hook import write_hook_line
-from .ipc import (
-    HookEventServer,
-    candidate_event_socket_paths,
-    default_latest_state_path,
-    send_hook_event,
-)
-from .led_status import led_count_for_target, program_for_agent_mode
-from .links import load_ios_links, send_ios_program
-from .providers import detect_log_path, parse_log_line
+from .battery import program_for_battery
+from .daemon_runtime import DaemonRuntime
+from .device_writer import DeviceWriteError, write_led_program, normalize_led_text, validate_led_text
+from .led_status import apply_brightness, led_count_for_target, program_for_agent_mode
 from .relay import (
     RelayConfig,
-    default_relay_event_socket_path,
-    listen_for_relay_events,
+    listen_for_status_updates,
     load_relay_config,
-    publish_relay_event,
 )
-from .settings import LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM, load_settings
+from .settings import LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM, load_settings, LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN
 
 
 SERVICE_POLL_SECONDS = 1.0
-LINKED_PHONE_DEVICE_PREFIX = "ios/"
 
 
 class SidePulseService:
     def __init__(self, *, poll_seconds: float = SERVICE_POLL_SECONDS) -> None:
         self.poll_seconds = poll_seconds
         self.stop_event = threading.Event()
-        self.local_server = HookEventServer(
-            self.handle_local_event,
-            socket_path=default_relay_event_socket_path(),
-        )
-        self.monitor = LiveAgentMonitor(
-            recovery_sources=default_sources(),
-            latest_state_path=default_latest_state_path(),
-        )
+        from .program_status import ProgramState
+        from .program_transport import ProgramServer, ProgramRelay
+        from .program_presentation import ProgramMonitor
+        self.program_state = ProgramState()
+        self.program_server = ProgramServer(self.program_state, on_command=self.handle_command)
+        self.monitor = ProgramMonitor(self.program_state)
+        self.program_relay = ProgramRelay(self.program_state)
         self.receiver_stop: threading.Event | None = None
         self.receiver_thread: threading.Thread | None = None
         self.receiver_signature: tuple[str, str] | None = None
-        self.seen_event_ids: set[str] = set()
         self.last_program_by_target: dict[str, str] = {}
+        self.output_errors: dict[str, str] = {}
+        self.output_lock = threading.RLock()
+        self.outputs_enabled = True
+        self.keep_awake_enabled = True
+        self.ui_pause_until = 0.0
+        self.manual_pause_until = 0.0
+        self.battery_preview_until = 0.0
+        self.animation_until = 0.0
+        self.runtime = DaemonRuntime(self)
 
     def run(self) -> int:
         self.install_signal_handlers()
-        self.local_server.start()
         try:
+            self.runtime.start()
+            from .program_status import StatusError
             while not self.stop_event.is_set():
+                try:
+                    # Establish destination cursors before accepting the first hook.
+                    self.program_relay.sync(wait=False)
+                    self.program_server.start()
+                    break
+                except (OSError, StatusError) as exc:
+                    self.program_server.stop()
+                    print(f"sidepulse service: status socket unavailable, retrying: {exc}", file=sys.stderr)
+                    self.stop_event.wait(1)
+            if self.stop_event.is_set():
+                return 0
+            self.program_relay.start()
+            while not self.stop_event.is_set():
+                if not self.program_server.running:
+                    self.program_server.stop()
+                    try:
+                        self.program_server.start()
+                    except (OSError, StatusError) as exc:
+                        print(f"sidepulse service: status socket recovery failed: {exc}", file=sys.stderr)
                 config = load_relay_config()
                 self.sync_receiver(config)
-                self.sync_outputs()
+                try:
+                    self.runtime.poll()
+                except Exception as exc:
+                    print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)
+                try:
+                    self.sync_outputs()
+                except Exception as exc:
+                    print(f"sidepulse service: output update failed: {exc}", file=sys.stderr)
                 self.stop_event.wait(self.poll_seconds)
         finally:
-            self.stop_receiver()
-            self.local_server.stop()
+            try:
+                self.stop_receiver()
+                self.program_server.stop()
+                self.program_relay.stop()
+            finally:
+                self.runtime.close()
         return 0
 
     def stop(self) -> None:
@@ -75,22 +101,13 @@ class SidePulseService:
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda _signum, _frame: self.stop())
 
-    def handle_local_event(self, provider: str, line: dict) -> None:
-        self.ingest_event(provider, line)
-        config = load_relay_config()
-        if not config.publishes_events:
-            return
-        try:
-            publish_relay_event(config, provider, line)
-        except Exception as exc:
-            print(f"sidepulse service: relay send failed: {exc}", file=sys.stderr)
-
     def sync_receiver(self, config: RelayConfig) -> None:
         signature = (
             config.server,
             config.receiver_channel,
         ) if config.receives_events else None
-        if signature == self.receiver_signature:
+        if signature == self.receiver_signature and (signature is None or
+                self.receiver_thread is not None and self.receiver_thread.is_alive()):
             return
         self.stop_receiver()
         self.receiver_signature = signature
@@ -98,8 +115,8 @@ class SidePulseService:
             return
         stop = threading.Event()
         thread = threading.Thread(
-            target=listen_for_relay_events,
-            args=(config, stop, self.handle_remote_event),
+            target=listen_for_status_updates,
+            args=(config, stop, lambda update: self.handle_remote_status(config, update)),
             daemon=True,
         )
         self.receiver_stop = stop
@@ -113,49 +130,38 @@ class SidePulseService:
         self.receiver_thread = None
         self.receiver_signature = None
 
-    def handle_remote_event(self, provider: str, line: dict, event_id: str) -> None:
-        if event_id in self.seen_event_ids:
+    def handle_remote_status(self, config: RelayConfig, snapshot: dict) -> None:
+        from .program_transport import sender_identity
+        # A retiring listener must not restore state after the link is changed.
+        if self.receiver_signature != (config.server, config.receiver_channel):
             return
-        self.seen_event_ids.add(event_id)
-        if len(self.seen_event_ids) > 2048:
-            self.seen_event_ids = {event_id}
-        try:
-            write_hook_line(detect_log_path(provider), line)
-        except Exception as exc:
-            print(f"sidepulse service: relay receive failed: {exc}", file=sys.stderr)
-            return
-        self.ingest_event(provider, line)
-        send_hook_event(provider, line)
-
-    def ingest_event(self, provider: str, line: dict) -> None:
-        try:
-            record = parse_log_line(
-                provider,
-                json.dumps(line, separators=(",", ":"), ensure_ascii=False),
-            )
-            if record is not None:
-                self.monitor.ingest_record(record)
-        except Exception:
-            pass
+        self.program_state.receive_update(sender_identity(config.server, config.receiver_channel), snapshot)
 
     def sync_outputs(self) -> None:
-        if status_bar_monitor_available():
+        with self.output_lock:
+            self._sync_outputs()
+
+    def _sync_outputs(self) -> None:
+        connected = {candidate.device_id or str(candidate.root.expanduser()) for candidate in self.runtime.devices}
+        self.output_errors = {key: error for key, error in self.output_errors.items() if key in connected}
+        now = time.monotonic()
+        if not self.outputs_enabled or now < max(self.ui_pause_until, self.manual_pause_until, self.animation_until):
             return
+        if self.runtime.lid_closed_led_hold_active:
+            if self.runtime.should_hold_lid_closed_led_state():
+                return
+            self.runtime.lid_closed_led_hold_active = False
         settings = load_settings()
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
-        battery = None
-        try:
-            battery = read_battery_snapshot(
-                full_charge_watts=settings.battery_full_charge_watts,
-            )
-        except Exception:
-            pass
+        battery = self.runtime.last_battery_snapshot
 
         active_targets: set[str] = set()
-        for candidate in discover_devices():
-            device_id = str(candidate.root.expanduser())
+        for candidate in self.runtime.devices:
+            device_id = candidate.device_id or str(candidate.root.expanduser())
             display = settings.display_for_device(device_id)
+            if display != LED_DISPLAY_CUSTOM and now < self.battery_preview_until:
+                display = LED_DISPLAY_BATTERY
             if display == LED_DISPLAY_CUSTOM:
                 continue
             if display == LED_DISPLAY_BATTERY and battery is not None:
@@ -174,7 +180,8 @@ class SidePulseService:
                         animation_style=animation.style,
                         custom_program=animation.custom_program,
                     )
-                except DeviceWriteError:
+                except DeviceWriteError as exc:
+                    self.output_errors[device_id] = str(exc)
                     continue
             key = f"file:{candidate.target}"
             active_targets.add(key)
@@ -183,53 +190,119 @@ class SidePulseService:
             try:
                 write_led_program(program, device_path=candidate.target)
             except Exception as exc:
+                self.output_errors[device_id] = str(exc)
                 print(f"sidepulse service: device write failed: {exc}", file=sys.stderr)
                 continue
-            self.last_program_by_target[key] = program
-
-        for link in load_ios_links():
-            device_id = f"{LINKED_PHONE_DEVICE_PREFIX}{link.link_id}"
-            if settings.display_for_device(device_id) == LED_DISPLAY_CUSTOM:
-                continue
-            animation = settings.agent_animation(mode)
-            try:
-                program = program_for_agent_mode(
-                    mode,
-                    led_count=8,
-                    animation_style=animation.style,
-                    custom_program=animation.custom_program,
-                )
-            except DeviceWriteError:
-                continue
-            key = f"phone:{link.link_id}"
-            active_targets.add(key)
-            if self.last_program_by_target.get(key) == program:
-                continue
-            data: dict[str, object] = {"source": {"name": socket.gethostname()}}
-            try:
-                send_ios_program(link, program, data=data)
-            except Exception as exc:
-                print(f"sidepulse service: phone push failed: {exc}", file=sys.stderr)
-                continue
+            self.output_errors.pop(device_id, None)
             self.last_program_by_target[key] = program
 
         for key in set(self.last_program_by_target) - active_targets:
             self.last_program_by_target.pop(key, None)
 
+    def play_lid_animation(self, kind, *, program=None, duration=None):
+        if kind not in (LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN):
+            from .program_status import StatusError
+            raise StatusError('Invalid lid animation')
+        if program is not None:
+            if not isinstance(program, str):
+                raise ValueError('Invalid animation program')
+            program = normalize_led_text(program)
+            validate_led_text(program)
+            if type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 3600:
+                raise ValueError('Invalid animation duration')
+        with self.output_lock:
+            if not self.outputs_enabled or time.monotonic() < max(self.ui_pause_until, self.manual_pause_until):
+                return
+            settings = load_settings()
+            animation = settings.lid_animation(kind)
+            # Lid presets and custom profiles share the configured animation state.
+            from .settings import ANIMATION_STATE_LID_CLOSED, ANIMATION_STATE_LID_OPEN
+            from .models import AgentMode
+            state = ANIMATION_STATE_LID_CLOSED if kind == LID_ANIMATION_CLOSED else ANIMATION_STATE_LID_OPEN
+            selected = settings.agent_animation(state)
+            if program is None:
+                from .settings import AGENT_ANIMATION_LID_CLOSED, AGENT_ANIMATION_LID_OPEN, default_lid_animation
+                duration = animation.duration_seconds
+                if settings.agent_animation_id(state) in (AGENT_ANIMATION_LID_CLOSED, AGENT_ANIMATION_LID_OPEN):
+                    duration = default_lid_animation(kind).duration_seconds
+            for candidate in self.runtime.devices:
+                device_id = candidate.device_id or str(candidate.root.expanduser())
+                if settings.display_for_device(device_id) == LED_DISPLAY_CUSTOM:
+                    continue
+                try:
+                    device_program = apply_brightness(program, settings.brightness_for_device(device_id)) if program is not None else program_for_agent_mode(AgentMode.IDLE_READY,
+                        led_count=led_count_for_target(candidate.target),
+                        brightness=settings.brightness_for_device(device_id),
+                        animation_style=selected.style, custom_program=selected.custom_program)
+                    write_led_program(device_program, device_path=candidate.target)
+                    self.last_program_by_target.pop(f'file:{candidate.target}', None)
+                except Exception as exc:
+                    self.output_errors[device_id] = str(exc)
+            self.animation_until = time.monotonic() + duration + 0.15
+
+
+    def handle_command(self, command):
+        from .program_status import StatusError
+        if type(command.get('v')) is not int or command['v'] != 1:
+            raise StatusError('Unsupported protocol version')
+        def duration(name, default=0.0):
+            value = command.get(name, default)
+            if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 3600:
+                raise StatusError('Invalid output control duration')
+            return value
+        kind = command.get('type')
+        if kind == 'output_info':
+            return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled,
+                    'devices': [{**vars(device), 'root': str(device.root), 'target': str(device.target)} for device in self.runtime.devices],
+                    'runtime': {**self.runtime.view, 'keep_awake_enabled': self.keep_awake_enabled,
+                        'battery_preview_until': self.battery_preview_until}}
+        with self.output_lock:
+            if kind == 'output_control':
+                enabled = command.get('enabled', self.outputs_enabled)
+                if type(enabled) is not bool:
+                    raise StatusError('Invalid output enabled value')
+                pause = duration('pause_seconds')
+                preview = duration('battery_preview_seconds')
+                keep_awake = command.get('keep_awake_enabled', self.keep_awake_enabled)
+                if type(keep_awake) is not bool:
+                    raise StatusError('Invalid keep awake enabled value')
+                self.outputs_enabled = enabled
+                self.keep_awake_enabled = keep_awake
+                if 'pause_seconds' in command:
+                    self.ui_pause_until = time.monotonic() + pause
+                if 'battery_preview_seconds' in command:
+                    self.battery_preview_until = time.monotonic() + preview
+                if not enabled:
+                    for candidate in self.runtime.devices:
+                        try:
+                            from .models import AgentMode
+                            write_led_program(program_for_agent_mode(AgentMode.IDLE_READY,
+                                led_count=led_count_for_target(candidate.target)), device_path=candidate.target)
+                            self.output_errors.pop(candidate.device_id or str(candidate.root.expanduser()), None)
+                        except Exception as exc:
+                            self.output_errors[candidate.device_id or str(candidate.root)] = str(exc)
+                    self.last_program_by_target.clear()
+                return {'ok': True, 'output_errors': dict(self.output_errors)}
+            if kind == 'play_lid_animation':
+                self.play_lid_animation(command.get('kind'), program=command.get('program'),
+                    duration=command.get('duration_seconds'))
+                return {'ok': True}
+            if kind == 'write_led':
+                hold = duration('hold_seconds', 1.5)
+                program, target = command.get('program'), command.get('target')
+                if not isinstance(program, str) or not isinstance(target, str) or not target:
+                    raise StatusError('Invalid LED write command')
+                result = write_led_program(program, device_path=Path(target))
+                self.manual_pause_until = time.monotonic() + hold
+                # Automatic mode must restore even if it matches an older write.
+                self.last_program_by_target.pop(f'file:{target}', None)
+                self.last_program_by_target.pop(f'file:{result}', None)
+                for candidate in self.runtime.devices:
+                    if candidate.target == result:
+                        self.output_errors.pop(candidate.device_id or str(candidate.root.expanduser()), None)
+                return {'ok': True, 'target': str(result)}
+            raise StatusError('Unsupported daemon command')
+
 
 def run_service() -> int:
     return SidePulseService().run()
-
-
-def status_bar_monitor_available() -> bool:
-    for path in candidate_event_socket_paths():
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(0.05)
-        try:
-            client.connect(str(path.expanduser()))
-            return True
-        except OSError:
-            continue
-        finally:
-            client.close()
-    return False

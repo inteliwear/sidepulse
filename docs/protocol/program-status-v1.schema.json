@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SidePulse program status v1 producer contract",
+  "description": "Local reports and individual forwarded updates use OSC fields. Network updates require publisher, seq, and updated_at. Each source/session has one current state; status IDs are metadata. Message size limits apply per update.",
+  "$defs": {
+    "status": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "error",
+            "clear"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}(/[A-Za-z0-9_.+-]{1,32}){0,7}$",
+          "description": "Descriptive OSC identifier; does not create a separate session state. Clear removes the session regardless of ID."
+        },
+        "app": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9_.+-]{1,32}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 192
+        },
+        "msg": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "kind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth"
+          ]
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "description": "Limits on strings are UTF-8 byte limits in receivers. Unknown fields are ignored."
+    },
+    "presentationContext": {
+      "type": "object",
+      "description": "Optional bounded desktop presentation metadata outside OSC status fields; omitted from phone updates. Limits are UTF-8 bytes in receivers.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "agent_id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "origin": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "tool_name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "mode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "event_name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "source_name": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "title_source": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "session"
+          ],
+          "description": "Producer distinguishes a prompt summary from an authoritative native session title."
+        }
+      }
+    }
+  },
+  "type": "object",
+  "required": [
+    "v",
+    "type",
+    "scope",
+    "status"
+  ],
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "program_status"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    },
+    "context": {
+      "$ref": "#/$defs/presentationContext"
+    },
+    "unless_state": {
+      "const": "done"
+    },
+    "unless_kind": {
+      "enum": ["permission", "question", "auth"]
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "updated_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 253402300799999
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "publisher"
+        ]
+      },
+      "then": {
+        "required": [
+          "seq",
+          "updated_at"
+        ]
+      }
+    }
+  ]
+}

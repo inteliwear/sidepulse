@@ -1,0 +1,383 @@
+"""OSC 7501 semantics carried as JSON; no provider heuristics in this module."""
+from __future__ import annotations
+
+import hashlib
+import copy
+import json
+import re
+import threading
+import os
+import time
+from collections import OrderedDict
+import uuid
+import urllib.parse
+from datetime import datetime, timezone
+
+from .models import AgentMode, AgentStatus
+
+STATES = {'idle', 'working', 'blocked', 'done', 'error', 'clear'}
+KINDS = {'permission', 'question', 'auth'}
+SEGMENT = re.compile(r'[A-Za-z0-9_.+-]{1,32}\Z')
+MAX_BYTES = 65536
+MAX_SESSIONS = 64
+CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
+                  'cwd': 4096, 'origin': 512, 'display_name': 512, 'tool_name': 512,
+                  'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16}
+# Leave room for push-provider framing, sender keys, and JSON string escaping.
+MAX_PHONE_STATUS_BYTES = 1800
+MAX_BRIDGE_MESSAGE_BYTES = 2048
+MAX_OUTBOUND_MESSAGE_BYTES = 1024
+MODES = {'idle': AgentMode.IDLE_READY, 'working': AgentMode.WORKING,
+         'blocked': AgentMode.WAITING_FOR_INPUT, 'done': AgentMode.COMPLETED,
+         'error': AgentMode.BLOCKED_ERROR}
+
+
+class StatusError(ValueError):
+    pass
+
+
+def text(value: object, limit: int, field: str) -> str:
+    if not isinstance(value, str):
+        raise StatusError(f'{field} must be a string')
+    try:
+        size = len(value.encode('utf-8'))
+    except UnicodeError as exc:
+        raise StatusError(f'{field} must be UTF-8') from exc
+    if size > limit or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+        raise StatusError(f'{field} exceeds its limit or contains control characters')
+    return value
+
+
+def identifier(value: object, field: str = 'scope') -> str:
+    result = text(value, 128, field)
+    if not result:
+        raise StatusError(f'{field} must not be empty')
+    return result
+
+
+def integer(value: object, field: str, minimum: int = 0) -> int:
+    if type(value) is not int or not minimum <= value <= 9007199254740991:
+        raise StatusError(f'{field} must be a safe nonnegative integer')
+    return value
+
+
+def validate_status(value: object) -> dict:
+    if not isinstance(value, dict) or not isinstance(value.get('state'), str) or value.get('state') not in STATES:
+        raise StatusError('Unknown or missing state')
+    state = value['state']
+    result = {'state': state}
+    if 'id' in value:
+        record_id = text(value['id'], 128, 'id')
+        parts = record_id.split('/')
+        if len(parts) > 8 or not all(SEGMENT.fullmatch(p) for p in parts):
+            raise StatusError('Invalid record id')
+        result['id'] = record_id
+    for field, limit in [('msg', 2048), ('title', 192)]:
+        if field in value:
+            result[field] = text(value[field], limit, field)
+    if 'app' in value:
+        app = text(value['app'], 32, 'app')
+        if SEGMENT.fullmatch(app):
+            result['app'] = app
+    if state == 'blocked' and isinstance(value.get('kind'), str) and value.get('kind') in KINDS:
+        result['kind'] = value['kind']
+    progress = value.get('progress')
+    if state in {'working', 'blocked'} and type(progress) is int and 0 <= progress <= 100:
+        result['progress'] = progress
+    return result
+
+
+def validate_context(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise StatusError('Invalid presentation context')
+    return {key: text(value[key], limit, key) for key, limit in CONTEXT_LIMITS.items() if key in value}
+
+
+def encoded(value: object) -> str:
+    result = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False, sort_keys=True)
+    if len(result.encode('utf-8')) > MAX_BYTES:
+        raise StatusError('Status message exceeds 65536 bytes')
+    return result
+
+
+def fits_phone_push(update: dict) -> bool:
+    # FCM transports the nested object as a JSON string; budget that larger form.
+    return len(json.dumps({'data': encoded(update)}, ensure_ascii=False).encode('utf-8')) <= MAX_PHONE_STATUS_BYTES
+
+
+def validate_update(value: object) -> dict:
+    if not isinstance(value, dict) or type(value.get('v')) is not int or value['v'] != 1:
+        raise StatusError('Unsupported status update')
+    encoded(value)
+    if value.get('type') != 'program_status':
+        raise StatusError('Unsupported status update')
+    update = {'v': 1, 'type': 'program_status', 'publisher': identifier(value.get('publisher'), 'publisher'),
+              'scope': identifier(value.get('scope')), 'seq': integer(value.get('seq'), 'seq', 1),
+              'updated_at': integer(value.get('updated_at'), 'updated_at')}
+    if update['updated_at'] > 253402300799999:
+        raise StatusError('updated_at out of range')
+    update['status'] = validate_status(value.get('status'))
+    if 'context' in value:
+        update['context'] = validate_context(value['context'])
+    return update
+
+
+def bridge_update(update: dict) -> dict:
+    """Clip outgoing message text without changing the source or OSC validation."""
+    result = validate_update(update)
+    if 'msg' in result['status']:
+        result['status']['msg'] = result['status']['msg'].encode('utf-8')[:MAX_OUTBOUND_MESSAGE_BYTES].decode('utf-8', errors='ignore')
+    context = result.pop('context', {})
+    title = context.get('title')
+    if title and result['status']['state'] != 'clear':
+        result['status'].setdefault('title', title.encode('utf-8')[:192].decode('utf-8', errors='ignore'))
+    # Keep native session identity for future provider links, not bulky paths or labels.
+    identity = {key: context[key] for key in ('provider', 'session_id') if key in context}
+    if identity:
+        result['context'] = identity
+    return result
+
+
+def phone_update(update: dict) -> dict:
+    """Bound one push, never the combined session ledger. IDs are never clipped."""
+    result = {k: copy.deepcopy(v) for k, v in bridge_update(update).items() if k != 'context'}
+    status = result.get('status', {})
+    title = update.get('context', {}).get('title')
+    if title and status and status['state'] != 'clear':
+        status.setdefault('title', title.encode('utf-8')[:192].decode('utf-8', errors='ignore'))
+    # Account for JSON escaping and FCM's nested JSON string as well as UTF-8.
+    while not fits_phone_push(result) and status.get('msg'):
+        status['msg'] = status['msg'][:-1]
+    if not fits_phone_push(result):
+        raise StatusError('Status update exceeds phone push budget')
+    return result
+
+
+def installation_publisher(path=None) -> str:
+    """An installation identity survives hostname and network-interface changes."""
+    from .settings import default_config_dir
+    import tempfile
+    path = path or default_config_dir() / 'publisher-id'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        with tempfile.NamedTemporaryFile(dir=path.parent, mode='w', delete=False) as temporary:
+            # Seed once from the previous identity so upgrading does not duplicate
+            # existing phone sessions. Later host/network changes no longer affect it.
+            import socket
+            temporary.write(str(uuid.uuid5(uuid.NAMESPACE_OID,
+                f"sidepulse:{socket.gethostname()}:{uuid.getnode()}:{os.getuid()}")))
+        try:
+            os.link(temporary.name, path)
+        except FileExistsError:
+            pass
+        finally:
+            os.unlink(temporary.name)
+    return str(uuid.UUID(path.read_text().strip()))
+
+
+class ProgramState:
+    """One current update per source/session, owned in memory by the daemon."""
+    def __init__(self, *, publisher: str | None = None):
+        self.publisher = publisher or installation_publisher()
+        self.lock = threading.RLock()
+        self._sessions = OrderedDict()
+        # Clear records keep a replay guard within the same bounded latest-session set.
+        self._sequences = OrderedDict()
+        self._suppressed = set()
+        self._revision = 0
+        self._receipts = OrderedDict()
+        self._events = OrderedDict()
+        self._cursors = {}
+        self._event_serial = time.time_ns() // 1000
+
+    def submit(self, report: dict) -> dict:
+        if not isinstance(report, dict):
+            raise StatusError('Report must be an object')
+        if report.get('type') != 'program_status':
+            raise StatusError('Unsupported message type')
+        request = encoded(report)
+        guard_kind = report.get('unless_kind')
+        if 'unless_kind' in report and (not isinstance(guard_kind, str) or guard_kind not in KINDS):
+            raise StatusError('Unknown blocked kind guard')
+        receipt = report.get('request_id')
+        if receipt is not None:
+            identifier(receipt, 'request_id')
+        with self.lock:
+            if receipt in self._receipts:
+                old_request, ack = self._receipts[receipt]
+                if old_request != request:
+                    raise StatusError('request_id reused for a different report')
+                return copy.deepcopy(ack)
+            now = int(datetime.now(timezone.utc).timestamp() * 1000)
+            scope = identifier(report.get('scope'))
+            key = ('local', self.publisher, scope)
+            suppressed = report.get('_hook_suppressed') is True or scope in self._suppressed
+            update = validate_update({**report, 'publisher': self.publisher,
+                'seq': self._sequences.get(key, 0) + 1, 'updated_at': now,
+                **({'status': {'state': 'clear'}} if suppressed else {})})
+            previous = self._sessions.get(key)
+            ignored = (report.get('unless_state') == 'done' and previous is not None
+                       and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
+            ignored = ignored or (previous is not None
+                and guard_kind is not None
+                and previous['status']['state'] == 'blocked'
+                and previous['status'].get('kind') == guard_kind)
+            if ignored:
+                self._expire_done(now)
+            else:
+                sequence = report.get('seq', update['seq'])
+                if type(sequence) is not int or sequence != update['seq']:
+                    raise StatusError('Sequence gap or duplicate; submit without seq locally')
+                self._apply_update('local', update)
+                if suppressed:
+                    self._suppressed.add(scope)
+                self._revision += 1
+            ack = {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
+            if receipt:
+                self._receipts[receipt] = (request, ack)
+                while len(self._receipts) > MAX_SESSIONS:
+                    self._receipts.popitem(last=False)
+            return copy.deepcopy(ack)
+
+    def _apply_update(self, sender, update):
+        key = (sender, update['publisher'], update['scope'])
+        previous = self._sessions.get(key)
+        if sender == 'local' and previous and previous['status']['state'] == 'done' and update['updated_at'] - previous['updated_at'] > 1200000:
+            previous = None
+        if update['status']['state'] != 'clear' and 'context' in update:
+            context = dict(update['context'])
+            previous_context = previous.get('context', {}) if previous else {}
+            if previous_context.get('title') and context.get('title_source') != 'session':
+                context['title'] = previous_context['title']
+            for field in ('cwd', 'origin', 'title'):
+                if field not in context and field in previous_context:
+                    context[field] = previous_context[field]
+            if context.get('title') or context.get('cwd'):
+                from .collector import display_name_from_parts, project_name
+                short_id = (context.get('agent_id') or context.get('session_id') or '')[:8]
+                context['display_name'] = display_name_from_parts(project_name(context.get('cwd')), context.get('title'), short_id, context.get('display_name') or '')
+            update = {**update, 'context': validate_context(context)}
+        # Prepare and validate the complete forwarded value before changing state.
+        self._append_event(sender, update)
+        if sender == 'local':
+            self._expire_done(update['updated_at'])
+        self._sequences.pop(key, None)
+        self._sequences[key] = update['seq']
+        self._sessions.pop(key, None)
+        if update['status']['state'] != 'clear':
+            self._sessions[key] = update
+        while len(self._sessions) > MAX_SESSIONS:
+            self._sessions.popitem(last=False)
+        while len(self._sequences) > MAX_SESSIONS * 2:
+            oldest, _ = self._sequences.popitem(last=False)
+            self._sessions.pop(oldest, None)
+            if oldest[0] == 'local':
+                self._suppressed.discard(oldest[2])
+
+    def _expire_done(self, now):
+        for key, update in list(self._sessions.items()):
+            if key[:2] == ('local', self.publisher) and update['status']['state'] == 'done' and now - update['updated_at'] > 1200000:
+                del self._sessions[key]
+
+    def _append_event(self, sender, update):
+        outgoing = dict(update)
+        outgoing['publisher'] = self.forward_publisher(sender, update['publisher'])
+        # Epoch-based sequences keep increasing across daemon restarts while
+        # matching the safe-integer range accepted by mobile clients.
+        serial = max(self._event_serial + 1, time.time_ns() // 1000)
+        outgoing['seq'] = serial
+        outgoing = validate_update(outgoing)
+        self._event_serial = serial
+        key = (sender, update['publisher'], update['scope'])
+        self._events.pop(key, None)
+        self._events[key] = (serial, sender, outgoing)
+        while len(self._events) > MAX_SESSIONS:
+            self._events.popitem(last=False)
+
+    def forward_publisher(self, sender, publisher):
+        if sender == 'local':
+            return publisher
+        return hashlib.sha256(json.dumps([self.publisher, sender, publisher]).encode()).hexdigest()
+
+    def pending_events(self, target: str, *, local_only: bool = False):
+        with self.lock:
+            cursor = self._cursors.get(target, 0)
+            return [(number, copy.deepcopy(body)) for number, sender, body in self._events.values()
+                    if number > cursor and (not local_only or sender == 'local')][:128]
+
+    def start_delivery(self, target):
+        """A newly enabled destination starts with the next arriving update."""
+        with self.lock:
+            self._cursors[target] = self._event_serial
+
+    def event_is_pending(self, target, number):
+        with self.lock:
+            return (number > self._cursors.get(target, 0)
+                    and any(event[0] == number for event in self._events.values()))
+
+    def acknowledge_event(self, target, number):
+        with self.lock:
+            self._cursors[target] = max(number, self._cursors.get(target, 0))
+
+    def retain_targets(self, targets):
+        with self.lock:
+            self._cursors = {key: value for key, value in self._cursors.items() if key in targets}
+
+    def receive_update(self, sender: str, value: object) -> bool:
+        update = validate_update(value)
+        with self.lock:
+            key = (sender, update['publisher'], update['scope'])
+            if self._sequences.get(key, 0) >= update['seq']:
+                return False
+            self._apply_update(sender, update)
+            return True
+
+    def retain_senders(self, senders):
+        with self.lock:
+            for key in list(self._sequences):
+                sender, publisher, scope = key
+                if sender in senders:
+                    continue
+                self._append_event(sender, {'v': 1, 'type': 'program_status', 'status': {'state': 'clear'},
+                    'publisher': publisher, 'scope': scope, 'updated_at': int(datetime.now(timezone.utc).timestamp() * 1000)})
+                self._sessions.pop(key, None)
+                del self._sequences[key]
+
+    @staticmethod
+    def _session_identity(key):
+        return 'program:' + hashlib.sha256(json.dumps(list(key)).encode()).hexdigest()
+
+    def statuses(self) -> tuple[AgentStatus, ...]:
+        with self.lock:
+            rows = copy.deepcopy(self._sessions)
+        result = []
+        for (sender, publisher, scope), update in sorted(rows.items()):
+            status = update['status']
+            app = status.get('app')
+            context = update.get('context', {})
+            mode = MODES[status['state']]
+            detail_mode = context.get('mode')
+            if mode == AgentMode.WORKING and detail_mode in {'tool_running', 'long_task_progress'}:
+                mode = AgentMode(detail_mode)
+            origin = context.get('origin')
+            if sender != 'local' and context.get('source_name'):
+                origin = f"{origin} · {context['source_name']}" if origin else context['source_name']
+            identity = self._session_identity((sender, publisher, scope))
+            result.append(AgentStatus(provider=context.get('provider') or app or 'program', agent_id=identity,
+                display_name=context.get('display_name') or status.get('title') or app or scope, mode=mode,
+                updated_at=datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc),
+                event_name=context.get('event_name') or 'ProgramStatus', session_id=context.get('session_id') or identity,
+                cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
+                seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(
+                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote)))
+        return tuple(result)
+
+    def close(self):
+        with self.lock:
+            self._sessions.clear()
+            self._sequences.clear()
+            self._suppressed.clear()
+            self._receipts.clear()
+            self._events.clear()
+            self._cursors.clear()
+            self._revision = 0

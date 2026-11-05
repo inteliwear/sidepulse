@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from sidepulse.cli import sidepulse_main
-from sidepulse.ipc import HookEventServer, request_settings_window
+from sidepulse.ipc import UICommandServer, request_settings_window
 from sidepulse.settings import AgentMonitorSettings, load_settings, save_settings
 
 
@@ -67,8 +67,8 @@ class SettingsAccessTests(unittest.TestCase):
             for has_ui in (False, True):
                 open_settings = Mock()
                 on_event = Mock()
-                server = HookEventServer(
-                    on_event, socket_path=path,
+                server = UICommandServer(
+                    socket_path=path,
                     on_open_settings=open_settings if has_ui else None,
                 )
                 try:
@@ -108,3 +108,27 @@ class SettingsAccessTests(unittest.TestCase):
             patch("sys.stderr"),
         ):
             self.assertEqual(sidepulse_main(["settings"]), 1)
+
+
+class PhoneSessionSyncSettingsTests(unittest.TestCase):
+    def test_phone_sync_defaults_and_round_trip_are_independent_of_display(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            for display in ('agent', 'battery', 'custom'):
+                path.write_text('{"led_display": "' + display + '"}')
+                settings = load_settings(path)
+                self.assertTrue(settings.sync_sessions_to_phone('phone'))
+                settings = settings.with_phone_session_sync('phone', False)
+                save_settings(settings, path)
+                loaded = load_settings(path)
+                self.assertFalse(loaded.sync_sessions_to_phone('phone'))
+                self.assertTrue(loaded.sync_sessions_to_phone('other'))
+                self.assertEqual(loaded.led_display, display)
+
+    def test_malformed_phone_sync_settings_do_not_break_loading(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            for value in (False, [], 'bad', {'phone': 'false'}):
+                path.write_text(json.dumps({'phone_session_sync': value}))
+                self.assertTrue(load_settings(path).sync_sessions_to_phone('phone'))

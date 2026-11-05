@@ -63,7 +63,7 @@ def requirement_name(spec: str) -> str:
     ``"pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'"`` -> ``pyobjc-framework-cocoa``
     """
     head = spec.split(";", 1)[0].strip()
-    head = re.split(r"[<>=!~\[\s]", head, 1)[0]
+    head = re.split(r"[<>=!~\[\s]", head, maxsplit=1)[0]
     return normalize_dist_name(head)
 
 
@@ -383,22 +383,34 @@ class VersionTests(unittest.TestCase):
         self.assertIn("version", project["dynamic"])
         self.assertNotIn("version", project)
 
-    def test_metadata_and_dunder_version_agree(self):
-        try:
-            import sidepulse
-        except ModuleNotFoundError:
-            self.skipTest("sidepulse is not installed in this environment")
-        from importlib.metadata import version
+    def test_build_stamp_records_version_revision_and_timestamp(self):
+        from sidepulse import _build_info
+        from datetime import datetime
+        self.assertTrue(_build_info.version)
+        self.assertRegex(_build_info.revision, r'^g[0-9a-f]{7,40}$')
+        self.assertIsNotNone(datetime.fromisoformat(_build_info.built_at.replace('Z', '+00:00')).tzinfo)
 
-        try:
-            installed = version("sidepulse")
-        except PackageNotFoundError:
-            self.skipTest("sidepulse is not installed in this environment")
-        self.assertEqual(
-            installed,
-            sidepulse.__version__,
-            "installed metadata and sidepulse.__version__ disagree",
-        )
+    def test_frozen_app_can_report_version_without_distribution_metadata(self):
+        script = '''
+from unittest.mock import patch
+from importlib.metadata import PackageNotFoundError
+with patch('importlib.metadata.version', side_effect=PackageNotFoundError):
+    import sidepulse
+    from sidepulse._build_info import version
+    assert sidepulse.__version__ == version
+'''
+        result = subprocess.run([sys.executable, '-c', script], cwd=REPO_ROOT,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_metadata_and_dunder_version_agree(self):
+        # Other packaging tests can regenerate editable metadata after this
+        # process imported sidepulse. Compare at one fresh import boundary.
+        result = subprocess.run([sys.executable, '-c',
+            'import sidepulse; from importlib.metadata import version; '
+            'assert sidepulse.__version__ == version("sidepulse")'],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PackageDataTests(unittest.TestCase):
