@@ -132,10 +132,10 @@ Instead, `Stop` has `last_assistant_message: null` and
 `permission_mode: "default"` even though the UI is in Plan mode. The synthetic
 session transcript separately retains a Plan-mode turn context and an
 assistant `<proposed_plan>` response, followed by `task_complete` with a null
-message. SidePulse currently treats that Stop as completed. A null Stop alone
+message. SidePulse at the time treated that Stop as completed. A null Stop alone
 is insufficient evidence to classify every such event as a question.
 
-This remains an **unfixed finding**, distinct from the repaired async-question
+This was an **unfixed finding** at the time, distinct from the repaired async-question
 state. No product code was changed during this follow-up. A future fix must
 also account for accepting, dismissing, or staying in Plan mode, rather than
 just changing every empty Stop into a permanent wait.
@@ -156,6 +156,52 @@ as `waiting_for_input`; do not label it completed to obtain a pass.
 Evidence root:
 `build/macos-vm/dialog-check/sidepulse-vm-results/dialog-check-20261027/`.
 The test VM was shut down and the host service restored after testing.
+
+## Plan-confirmation fix verification, 2026-11-05
+
+The local `codex/osc7501-integration` tree based on `031c581` now recovers a
+pending plan from a bounded, regular local rollout file when a root Codex Stop
+arrives. It requires the matching session filename, current turn, Plan-mode
+context, and a nonempty final `<proposed_plan>` block. Ordinary answers, quoted
+examples, aborted turns, subagents, and missing or unsupported evidence retain
+their normal classification. At most 2 MiB is read, and transcript contents
+are not forwarded to receivers.
+
+A separate clone of **SidePulse Agents Ready**, named **SidePulse Plan
+Confirmation 2026-11-05**, ran the fixed package with real signed-in Codex CLI
+**0.164.0** on macOS 27.2. This is subsequent evidence, not part of the earlier
+fresh-install/main-upgrade matrix. Seven installation/replay checks passed.
+The real recording contains 419 screenshots, intact screenshot hashes, no
+recording error, and an agent exit code of zero. Seventeen samples were labeled
+from the terminal screenshots before reading the detected modes:
+
+| Scenario | Observed result |
+| --- | --- |
+| Three native “Implement this plan?” menus | `waiting_for_input`, matching all sampled menus |
+| “No, stay in Plan mode” and Escape | Pending plan remains `waiting_for_input` |
+| New instruction followed by an ordinary `ready` answer | Returns to `completed` in both cases |
+| “Yes, implement this plan” | Starts execution; real `sleep 3` runs; final answer is `completed` |
+
+The strict visual review is **16/17 matching, failed overall**: frame 400 was
+independently labeled `working` from the Working footer, while SidePulse
+reported `tool_running` during the background shell command. This separate
+phase mismatch is preserved, not relabeled to obtain a green report. All eight
+sampled pending-plan states and all seven sampled completions matched.
+
+Codex emits no hook when Escape or “No” merely dismisses the menu. The indicator
+therefore represents the pending plan awaiting the next instruction, rather
+than exact popup visibility. A new prompt or implementation starts work, and
+an ordinary final answer completes it. The implementation does not poll the
+screen or change Codex. Fresh-context acceptance and newer Codex versions were
+not visually retested. Physical LED appearance and native USB were not tested.
+
+Evidence: `build/macos-vm/plan-fix-20261105/`, including the frozen payload and
+manifest, predefined `scenarios.json`, and collected recording
+`guest/sidepulse-vm-results/plan-fix-20261105/20261105-104312-visual-codex-e2a0ec/`.
+The original failed October recording remains unchanged. Regression validation
+passed **384 tests and 59 subtests**, including **24 plan tests**. The VM is
+stopped; the host service and tray are running again. Changes are local and
+uncommitted.
 
 ## Relevant code differences before the fix
 

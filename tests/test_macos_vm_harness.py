@@ -77,6 +77,44 @@ def test_live_requires_actual_fixture_read(tmp_path):
         check.live_evidence("claude", records, snapshots, tmp_path, "secret-fixture", "done")
 
 
+def test_replay_waits_for_legacy_state_file_and_same_session(tmp_path, monkeypatch):
+    harness = check.Harness(tmp_path / "result")
+    expected = {"snapshot": {"statuses": [{"provider": "claude", "session_id": "new", "mode": "working"}]}}
+    replies = iter([FileNotFoundError("not written yet"),
+                    json.JSONDecodeError("partial write", "{", 1),
+                    {"snapshot": {"statuses": [{"provider": "claude", "session_id": "old", "mode": "working"}]}},
+                    expected])
+    def snapshot():
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+    monkeypatch.setattr(harness, "snapshot", snapshot)
+    monkeypatch.setattr(check.time, "sleep", lambda _: None)
+    assert harness.wait_mode("claude", "new", "working") == expected
+
+
+def test_missing_legacy_state_still_times_out(tmp_path, monkeypatch):
+    harness = check.Harness(tmp_path / "result")
+    ticks = iter([0, 0, 1, 11])
+    monkeypatch.setattr(check.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(check.time, "sleep", lambda _: None)
+    def missing():
+        raise FileNotFoundError("never written")
+    monkeypatch.setattr(harness, "snapshot", missing)
+    with pytest.raises(AssertionError, match="did not reach"):
+        harness.wait_mode("claude", "new", "working")
+
+
+def test_invalid_legacy_state_is_not_hidden_as_startup_delay(tmp_path, monkeypatch):
+    harness = check.Harness(tmp_path / "result")
+    def invalid():
+        raise ValueError("Invalid legacy live monitor state")
+    monkeypatch.setattr(harness, "snapshot", invalid)
+    with pytest.raises(ValueError, match="Invalid"):
+        harness.wait_mode("claude", "new", "working")
+
+
 def test_codex_package_preserves_helpers_and_resources(tmp_path):
     import io
     import tarfile

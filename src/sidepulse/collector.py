@@ -1118,6 +1118,11 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"UserPromptSubmit", "PreCompact", "PostCompact", "SubagentStart"}:
         return AgentMode.WORKING
     if event in {"Stop", "SubagentStop"}:
+        if record.provider == "codex" and event == "Stop" and not record.agent_id:
+            from .codex_plan import pending_plan_review
+
+            if pending_plan_review(raw, record.session_id, record.turn_id):
+                return AgentMode.WAITING_FOR_INPUT
         if _assistant_message_asks_question(raw.get("last_assistant_message")):
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.COMPLETED
@@ -1434,7 +1439,8 @@ def should_ignore_status_transition(
     if (
         previous is not None
         and previous.mode == AgentMode.WAITING_FOR_INPUT
-        and codex_question_tool(previous)
+        and previous.provider == "codex"
+        and (codex_question_tool(previous) or previous.event_name == "Stop")
         and not codex_question_tool(current)
         and current.event_name not in {"UserPromptSubmit", "Stop", "SubagentStop", "Interrupt", "SessionEnd", "SessionStart"}
         and current.mode != AgentMode.BLOCKED_ERROR

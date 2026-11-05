@@ -85,9 +85,20 @@ failure recovery and manual previews use isolated devices and mocked writers.
 
 The routine session script now selects the current hook-parity and Codex
 question tests instead of a deleted acknowledgment test. The documented
-Codex plan-confirmation limitation in `macos-main-comparison.md` remains open:
+Codex plan-confirmation limitation in `macos-main-comparison.md` remained open at that point:
 some native confirmation screens have no corresponding hook event. No new
 VM, physical LED appearance, mobile, or production-bridge pass is claimed here.
+
+Subsequent real UTM installation and main-to-OSC upgrade checks for `031c581`
+are recorded in [the macOS VM results](macos-vm.md#installation-and-main-upgrade-verification--november-5-2026).
+Fresh installation, migration, same-version reinstallation, and both OS reboot
+paths passed. These runs cover installed hooks and filesystem access, without
+authenticated live-agent or physical LED claims.
+
+The subsequent [November 5 plan-confirmation fix and real Codex verification](macos-main-comparison.md#plan-confirmation-fix-verification-2026-11-05)
+detects the native plan menu and verifies acceptance, Escape, and staying in
+Plan mode. Its strict screenshot review retains one separate working/tool-running
+mismatch; this is not an all-green visual run.
 
 ## Reproduce locally
 

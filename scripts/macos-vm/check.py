@@ -184,7 +184,13 @@ class Harness:
     def wait_mode(self, provider, session, mode):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            reply = self.snapshot()
+            try:
+                reply = self.snapshot()
+            except (FileNotFoundError, json.JSONDecodeError):
+                # Main creates its legacy state file asynchronously after the
+                # first hook; a missing or in-progress write is not a result.
+                time.sleep(.15)
+                continue
             if any(r.get("provider") == provider and r.get("session_id") == session
                    and r["mode"] == mode for r in state_rows(reply)):
                 return reply
@@ -346,10 +352,12 @@ def main():
             harness.check("refresh-hooks", lambda: harness.command("setup", [harness.cli, "setup"]))
         harness.check("service", lambda: harness.command("service", [harness.cli, "service", "status"]))
         harness.check("menu-bar", lambda: harness.command("menu-bar", ["launchctl", "print", f"gui/{os.getuid()}/io.sidepulse.agentstatus"]))
-        harness.check("daemon", lambda: harness.snapshot()["ok"])
         harness.check("shared-device", harness.device)
         for provider in PROVIDERS:
             harness.check(f"replay-{provider}", lambda p=provider: harness.replay(p))
+        # Legacy main has no state-query socket and may not persist an empty
+        # snapshot. Observe it after the replays have created real session state.
+        harness.check("daemon", lambda: harness.snapshot()["ok"])
         if args.live:
             for provider in PROVIDERS:
                 harness.check(f"live-{provider}", lambda p=provider: harness.live(p))
