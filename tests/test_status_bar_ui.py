@@ -1155,6 +1155,8 @@ class WindowBuildTests(StatusBarTestCase):
             self.assertTrue(animated_rows)
             for row in animated_rows:
                 self.assertIsInstance(row, sb.AgentAnimationMenuItemView)
+                self.assertIsNone(row.animation_preview.wasm_controller)
+                row.viewWillDraw()
                 self.assertIsNotNone(row.animation_preview.wasm_controller)
                 self.assertIsNone(row.animation_preview.wasm_error)
         finally:
@@ -1165,7 +1167,13 @@ class WindowBuildTests(StatusBarTestCase):
         self.assertFalse(window.isVisible(), "building a window must not show it")
 
     def test_show_settings_window_brings_it_forward_and_starts_previews(self):
-        self.controller.show_settings_window()
+        self.controller.settings_window = None
+        with patch.object(sb, 'read_status_history_records') as read_history:
+            self.controller.show_settings_window()
+            read_history.assert_not_called()
+            tabs = self.controller.settings_fields['tabs']
+            tabs.selectTabViewItemWithIdentifier_('history')
+            read_history.assert_called_once()
         try:
             self.assertTrue(self.controller.settings_window.isVisible())
             self.assertIsNotNone(self.controller.agent_animation_preview_timer)

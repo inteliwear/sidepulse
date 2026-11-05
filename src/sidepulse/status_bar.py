@@ -286,6 +286,7 @@ class AgentAnimationMenuItemView(NSView):
             self.popup = None
             self.mode = None
             self.animation_id = None
+            self.preview_program = None
             self.label = add_label(self, "", 10, 7, 106, 20)
             self.animation_preview = VirtualLedView.alloc().initWithFrame_(
                 ((122, 2), (72, 28))
@@ -306,7 +307,14 @@ class AgentAnimationMenuItemView(NSView):
         self.mode = str(mode)
         self.animation_id = str(animation_id)
         self.label.setStringValue_(str(label))
-        self.animation_preview.setProgram_(str(program))
+        self.preview_program = str(program)
+
+    def viewWillDraw(self):
+        # Menu rows need a WASM player only when their popup is actually drawn.
+        if self.preview_program is not None:
+            self.animation_preview.setProgram_(self.preview_program)
+            self.preview_program = None
+        objc.super(AgentAnimationMenuItemView, self).viewWillDraw()
 
     def mouseDown_(self, _event):
         popup = self.popup
@@ -1241,6 +1249,8 @@ class StatusBarController(NSObject):
         if window is None:
             return
         identifier = str(tab_item.identifier())
+        if identifier == 'history' and self.settings_window is not None:
+            self.refresh_history_chart()
         height = (
             SETTINGS_ANIMATIONS_WINDOW_HEIGHT
             if identifier == "animations"
@@ -1589,7 +1599,9 @@ class StatusBarController(NSObject):
                 timeframe_popup,
                 self.settings.history_timeframe_seconds,
             )
-        self.refresh_history_chart()
+        tabs = self.settings_fields.get('tabs')
+        if tabs is not None and str(tabs.selectedTabViewItem().identifier()) == 'history':
+            self.refresh_history_chart()
 
     def refresh_history_chart(self) -> None:
         chart = self.settings_fields.get("status_history_chart")
@@ -4275,6 +4287,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     message = add_label(content, "", 24, 12, width - 48, 22)
 
     target.settings_fields = {
+        "tabs": tab_view,
         "codex_hook_status": codex_status,
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
