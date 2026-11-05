@@ -2610,8 +2610,8 @@ class StatusBarController(NSObject):
         self.next_daemon_recovery = time.monotonic() + 60
         def recover():
             try:
-                from .service_launch import install_service
-                result = install_service(start=True)
+                from .service_launch import restart_service
+                result = restart_service()
                 if not result.started:
                     log_status_bar('Daemon could not be restarted: ' + result.detail)
             except Exception as exc:

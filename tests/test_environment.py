@@ -398,8 +398,9 @@ from unittest.mock import patch
 from sidepulse.cli import sidepulse_main
 from sidepulse.service_launch import ServiceInstallResult
 sys.argv = ['sidepulse', 'status-bar', 'start', '--foreground']
-with patch('sidepulse.service_launch.install_service', return_value=
-           ServiceInstallResult(Path(), False, False, 'isolated packaging test')):
+result = ServiceInstallResult(Path(), False, False, 'isolated packaging test')
+with patch('sidepulse.service_launch.install_service', return_value=result), \
+     patch('sidepulse.service_launch.restart_service', return_value=result):
     sidepulse_main()
 '''
         process = subprocess.Popen(

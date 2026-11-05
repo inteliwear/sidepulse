@@ -58,10 +58,16 @@ tests, including native Mac menu/window tests.
 The clean-install GUI startup test exposed an isolation bug: automatic daemon
 recovery could replace the logged-in user's launchd service with the temporary
 test installation. Removing the test directory then left that process without
-its packaged animations. The test now mocks service installation and isolates
+its packaged animations. The test now mocks service installation/recovery and isolates
 its configuration, state and data paths. A complete suite run retained the live
 daemon's original PID. After restoring the normal service, both connected Dot
 and Pro LED files matched the Working programs and reported no output errors.
+
+Daemon recovery now restarts the already-installed launchd job or systemd unit;
+it never rewrites the launcher to use the caller's installation. If the service
+is not installed, recovery reports that setup is required. Isolated tests cover
+missing installations, loaded/unloaded Mac jobs, Linux restart, and the tray's
+single recovery worker without running real service commands.
 
 The routine session script now selects the current hook-parity and Codex
 question tests instead of a deleted acknowledgment test. The documented

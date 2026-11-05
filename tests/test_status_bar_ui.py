@@ -1437,6 +1437,19 @@ if __name__ == "__main__":
 
 
 class TrayDaemonOwnershipTests(unittest.TestCase):
+    def test_recovery_restarts_existing_service_without_installing(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch('sidepulse.service_launch.restart_service') as restart, \
+             patch('sidepulse.service_launch.install_service') as install, \
+             patch.object(sb.threading, 'Thread') as thread:
+            target.restartDaemon_(None)
+            target.restartDaemon_(None)
+            self.assertEqual(thread.call_count, 1)
+            thread.call_args.kwargs['target']()
+        restart.assert_called_once_with()
+        install.assert_not_called()
+        self.assertFalse(target.daemon_recovery_running)
+
     def test_quitting_tray_does_not_stop_daemon_behavior(self):
         target = sb.StatusBarController.alloc().init()
         with patch.object(sb, 'NSApp') as app, patch.object(sb, 'daemon_command') as command:
