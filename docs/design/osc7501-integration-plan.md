@@ -14,6 +14,7 @@ CLI input:      raw OSC or JSON → daemon (same accounting and delivery path)
 
 - The hook adapter translates provider events to OSC-compatible status fields. It owns provider-specific interpretation, IDs, and explicit completion/clear states.
 - The CLI decodes one raw OSC line or accepts JSON/status flags. OSC terminators are optional for explicit CLI ingestion. Text becomes plain UTF-8 in JSON.
+- `sidepulse wrap COMMAND` (also `sp wrap COMMAND`) runs a macOS/Linux PTY relay, captures complete OSC reports, answers capability queries locally, and forwards normalized JSON through one bounded background worker. Each invocation has a unique scope; its terminal output never waits on the daemon.
 - The daemon owns live records in memory and allocates sequences/revisions. Hooks submit locally and return quickly; a sender worker handles asynchronous delivery and retries.
 - The existing bridge carries JSON messages using its existing routes and queues. It recognizes session identity and sequence only to replace queued values; it does not account sessions or choose animations.
 - Receiving daemons and phone apps validate individual updates, account independent sessions, ignore stale sequences, and render locally. The desktop UI is a daemon client, not another accounting owner. Desktop UI presentation derives entirely from accounted JSON state. Raw hook socket delivery, raw bridge envelopes, alias deduplication, and log/transcript recovery are removed from the live path.
@@ -42,7 +43,7 @@ Hook adapters and bridge senders cap `msg` at 1,024 UTF-8 bytes before delivery.
 
 ## Scope and verification
 
-Permission approval responses and automatic terminal capture/probing are outside this change. The CLI supports explicit OSC submission without adding a terminal emulator.
+Permission approval responses are outside this change. The CLI supports explicit OSC submission and terminal capture through `wrap`, without adding a screen emulator. Capture preserves the existing one-state-per-session contract; OSC child IDs remain metadata. Wrap each agent inside its Herdr pane rather than relying on the outer multiplexer to re-emit reports.
 
 Verify field normalization and accounting with shared desktop/Swift/Kotlin fixtures. Exercise real local sockets, existing bridge POST/SSE and phone recovery routes, queue bounds, stale replay, sender restart, session coalescing, oldest eviction, and a maximum 300-second expiry. Preserve provider parity and local-device output; verify phones receive state only and manual pushes remain available. See [automated evidence](../testing/osc7501-testing.md) and the [human checklist](../testing/osc7501-human-test-plan.md).
 

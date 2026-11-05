@@ -42,6 +42,9 @@ installs the menu-bar app and hardware helpers. On Linux, it automatically
 uses CLI-only mode for mounted SidePulse devices and iPhone/Android linking and push. Run
 `sidepulse update` to upgrade to the newest version from GitHub.
 
+`sp` is a short alias for `sidepulse`; for example, `sp status` runs
+`sidepulse status`.
+
 Setup also installs a headless SidePulse service. It runs through a LaunchAgent
 named **SidePulse Background Service** in macOS background activity settings,
 and a user systemd service on Linux. Setup restarts the service, so an
@@ -55,6 +58,11 @@ animations, battery-change previews, and status-history recording. These keep
 running when the tray is closed. The tray displays daemon observations and sends
 explicit user controls; quitting the tray does not release the daemon's sleep
 controls. Stopping the daemon releases them.
+
+History samples every 15 seconds and includes CPU and case temperatures in °C
+on Macs with readable SMC sensors. CPU uses a die/package sensor; case uses the
+palm-rest skin sensor. The History tab plots both. Missing sensors are recorded
+as `null` and older history remains readable; temperatures start with this build.
 
 ### 2. Install into your own Python environment
 
@@ -155,6 +163,15 @@ battery and manual LED displays over USB. USB device preferences follow the
 Dot's production serial when its connection address changes.
 
 ### Updating
+
+The Mac tray title shows a small version and local build date after SidePulse.
+Hover for the full version, build timestamp and GitHub `main` check result.
+The daemon checks in the
+background once every 24 hours while running and caches the result across
+restarts. A development branch ahead of `main` is considered up to date.
+When `main` has changes missing from the build, **Update available** appears in
+the title; clicking it opens the commit history. An offline or failed check is
+reported in the tooltip. Checking does not install updates or change the current branch.
 
 ```sh
 sidepulse update
@@ -412,7 +429,21 @@ sidepulse report --scope my-build --osc $'\e]7501;state=working:app=build\e\\'
 printf '\033]7501;state=done:app=build\007' | sidepulse report --scope my-build --osc
 ```
 
-The hook adapter or CLI decoder translates input into JSON; the daemon holds the state, drives physical LEDs, and handles remote delivery. Individual status updates travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. Each session has one current state. The updated bridge keeps the latest queued value per source/session, up to 10 items per key for at most 300 seconds, with a 2048-byte request/recovery limit. Senders cap `msg` at 1,024 UTF-8 bytes and shorten it further if needed to fit. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md). Automatic terminal OSC capture is a later phase; explicit CLI ingestion is supported now.
+To capture OSC 7501 from an interactive command on macOS or Linux:
+
+```sh
+sidepulse wrap codex
+sp wrap claude
+```
+
+`sp` is the short alias for `sidepulse`. Everything after `wrap` is the command
+and its arguments; `--` is optional. The wrapper preserves keyboard interaction,
+terminal resizing, and the command's exit code. It captures emitted OSC 7501
+reports and answers capability queries. The program must emit OSC 7501 to produce
+status updates; the wrapper does not infer status from screen text. In Herdr,
+run the wrapper inside each agent pane so reports retain separate identities.
+
+The hook adapter, CLI decoder, or terminal wrapper translates input into JSON; the daemon holds the state, drives physical LEDs, and handles remote delivery. Individual status updates travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. Each session has one current state. The updated bridge keeps the latest queued value per source/session, up to 10 items per key for at most 300 seconds, with a 2048-byte request/recovery limit. Senders cap `msg` at 1,024 UTF-8 bytes and shorten it further if needed to fit. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md).
 
 ## Battery LEDs
 
@@ -693,16 +724,16 @@ to register this event. Transcript monitoring is not required.
 `PostToolUse` keeps the session Working while the assistant finishes its answer.
 A subsequent producer update is required to mark it Done; silence does not infer completion.
 
+Codex tool failures and denied tool calls also stay Working while Codex handles
+them. They do not flash Ask. Input/approval requests, explicit error statuses,
+and session-level `StopFailure` events still need attention. A separate pending
+question remains Ask until it is answered or otherwise resolved.
+
 `Completed` remains visible for 20 minutes so the status bar and LEDs can show
 Done long enough to be noticed. After that it drops out instead of counting as
 an active session for the full stale window, and the LEDs return to the very
 dim Idle pattern. Idle/session-start records also do not count as active
 sessions.
-
-Use **Acknowledge Done** beneath a completed session in the tray to keep it listed
-as Idle until its next newer update. This changes the Mac daemon's local state;
-it does not send an acknowledgement to other receivers. Other active sessions
-continue to determine the LEDs.
 
 Status detection is strongest when the agent tells the monitor its intended
 handoff state explicitly. A final assistant message can include a hidden marker
@@ -855,9 +886,21 @@ clamshell mode and SidePulse's no-external-display fallback, is documented in
 | When Agents Work | Keep the Mac awake while agents are Working / Tool Running / Progressing, plus the existing five-minute Ask / Done / Error grace period. |
 | Always | Keep the closed-lid sleep override active while the status-bar app is running. |
 
-The status-bar app still keeps the SidePulse Pro/SidePulse Dot volume active by reading
-`STATUS.TXT` with the existing uncached, read-only macOS transport on each connected device at least once per minute. The
-closed-lid policy uses the SidePulse sleep helper when it is installed. The PKG
+The daemon caches connected devices and refreshes discovery on USB or mount
+notifications: Disk Arbitration/IOKit on macOS, mount-table/USB events on Linux,
+and device broadcasts on Windows. Native filesystem notifications also watch
+Linux mount folders and custom `SIDEPULSE_MOUNT_ROOTS` on all three platforms.
+Normal Mac/Windows volumes use only native device notifications. Windows uses
+drive letters as volumes. LED writes and file reads do not trigger discovery.
+Device metadata is read during discovery or an explicit firmware check. On Mac,
+the daemon also reads one uncached 512-byte sector of each connected Pro's
+`STATUS.TXT` every 60 seconds to keep the SD reader active. Discovery counts as
+a fresh read and resets that interval. This uses the cached device list and
+existing daemon cycle, without periodic volume scans or LED writes. Dots do
+not receive these keepalive reads. If notification setup fails, the daemon logs
+the failure and falls back to scanning so connections can still be found.
+
+The closed-lid policy uses the SidePulse sleep helper when it is installed. The PKG
 installer sets this up automatically; source/dev installs can run the one-time
 setup command:
 
@@ -974,6 +1017,10 @@ install into it. Set `SIDEPULSE_SKIP_CLEAN_INSTALL=1` to skip them while
 iterating; CI always runs them.
 
 ### Releasing
+
+For fresh-macOS installer and real Claude/Codex integration checks, use the
+[UTM test harness](docs/testing/macos-vm.md). It bundles the current working tree,
+supports a shared `/Volumes/SidePulse`, and produces JSON/JUnit reports.
 
 Build and verify the wheel and source archive locally:
 

@@ -1,6 +1,6 @@
 # OSC status integration: testing strategy and evidence
 
-Updated October 18, 2026. This section describes the current checkout. Earlier
+Updated October 19, 2026. This section describes the current checkout. Earlier
 results are retained in the collapsed historical notes below and do not establish
 current protocol support, deployment, or installed-device behavior.
 
@@ -9,22 +9,23 @@ current protocol support, deployment, or installed-device behavior.
 - Hooks submit one `program_status` JSON update to the local daemon. There are
   no batches, scope-end/reset messages, or hook-side state fallback.
 - The daemon owns one current value per sender/publisher/session in memory,
-  physical LED output, replay guards, and the 4,096-event forwarding queue.
+  physical LED output, bounded replay guards, and one latest outbound value per session (64 total).
   UI, `sidepulse status`, and `sidepulse live` query that daemon.
 - Mac sleep control, grace periods, battery safeguards, power/lid observations,
   output timing, and 15-second history sampling run in the daemon. The tray
   reads cached observations and issues explicit controls. Closing it leaves
   daemon behavior running; daemon shutdown releases sleep controls.
 - Each receiver keeps at most 64 nonempty sessions. New accepted updates win;
-  oldest sessions are evicted while sequence guards remain. Working does not
+  oldest sessions are evicted; sequence guards cover the latest 128 sessions. Working does not
   become Done through silence; Done is visible for 20 minutes.
 - The existing bridge routes carry individual updates. Its in-memory recovery
   queues keep up to 10 items per key, coalescing by sender/publisher/session,
-  with at most 300-second retention and a 2048-byte request/recovery limit.
+  with at most 300-second retention and a 2048-byte phone request/recovery limit.
+  Opaque desktop channels allow 64 KiB for old sender/receiver pairs; updated OSC senders still use 2 KiB.
   Senders cap `msg` at 1,024 UTF-8 bytes and may shorten it further to fit. Manual phone pushes keep their latest command.
   There is no Redis dependency, snapshot repair, or periodic state resend.
 - Phones select configurable session LED patterns. Direct remote and shortcut
-  writes own LEDs until a newer accepted status or explicit settings change while session LEDs are enabled. Disabling session LEDs stops an active session pattern; manual output stays under manual control while disabled.
+  writes and newly accepted enabled statuses each get one output attempt. Only Ask is on by default. Hidden states, startup, reconnect, and failed attempts do not replay or replace output. Manual Off is one attempt.
   Current saved-session data survives relaunch; earlier cache formats start fresh.
 - iOS has one combined local Live Activity, independent of LED output. There is
   no new ActivityKit push service. iOS controls app/background execution.
@@ -34,12 +35,39 @@ current protocol support, deployment, or installed-device behavior.
 | Layer | Current checks |
 | --- | --- |
 | OSC / CLI | Raw OSC arguments/stdin, BEL/ST/omitted terminators, Unicode/base64, field and size limits, rejection, retries; identical status/live views and removed-command rejection. |
+| Terminal wrapper | Every stream split, binary output, query interception, invalid/oversized/nested sequences, bounded coalescing, unique scopes, live-state clearing, real PTY keyboard/resize/signals/suspend/restore, redirected input, missing executable, terminal EOF, and preserved exit codes. |
 | Daemon | Shared individual-update fixtures, one state per session, source isolation and active counts, ordering, clears, eviction, malformed-update rejection, concurrency, fresh restart, no database or fallback files. |
 | Hooks | Five providers compared with the baseline interpreter; real hook → socket → receiver tests; sparse metadata, notifications, suppression, failures, fast fail-open submission. |
 | UI / physical output boundary | Daemon queries and reconnect without side effects; headless sleep grace, low-battery safeguards, lid frames/restoration, history sampling, manual preview expiry, firmware pauses, cached observation errors, and daemon shutdown cleanup. |
 | Local bridge | Real isolated POST/SSE and APNs/FCM recovery routes; coalescing, stale retries, ten-item capacity, expiry, and CLI → daemon → bridge → receiver flow. No production calls or provider credentials. |
-| Mobile | Identical `program-updates.json` fixtures; persistence, multi-source isolation, dismissals, replay/eviction guards, configurable patterns, manual ownership, object/string envelopes, and rejected legacy payloads never becoming LED writes. |
-| iOS activity | Combined summary counts, priority, bounded text, and app/widget compilation; full phone tap/background behavior remains a human check. |
+| Mobile | Identical `program-updates.json` fixtures; persistence, multi-source isolation, dismissals, replay/eviction guards, configurable patterns, quiet one-shot output, session links, object/string envelopes, and rejected legacy payloads never becoming LED writes. |
+| iOS activity | Priority-only eight-light visualization, no session text exported, and app/widget compilation; physical Lock Screen/background behavior remains a human check. |
+
+## Routine session checks
+
+Run `scripts/test-sessions.sh` from the desktop repo for the focused local workflow. It covers real hooks and sockets, isolated local bridge HTTP routes, independent delivery/backoff, headless daemon behavior, and mobile parsing/accounting/link contracts plus app compilation. It requires the existing sibling checkouts and platform build tools. It does not contact production, send real push notifications, or write real devices.
+
+The full suite below also covers unrelated device, firmware, sleep, packaging, and pattern features. Those tests are retained; the routine workflow avoids running all of them for every session change. Obsolete expectations about event-history replay and reconnect output retries have been updated rather than preserving removed behavior.
+
+## Repository review — November 5, 2026
+
+The desktop suite passed 1,050 tests, with 11 skipped and 624 subtests passing.
+The review also checks each commit's staged source separately with its relevant
+tests, including native Mac menu/window tests.
+
+The clean-install GUI startup test exposed an isolation bug: automatic daemon
+recovery could replace the logged-in user's launchd service with the temporary
+test installation. Removing the test directory then left that process without
+its packaged animations. The test now mocks service installation and isolates
+its configuration, state and data paths. A complete suite run retained the live
+daemon's original PID. After restoring the normal service, both connected Dot
+and Pro LED files matched the Working programs and reported no output errors.
+
+The routine session script now selects the current hook-parity and Codex
+question tests instead of a deleted acknowledgment test. The documented
+Codex plan-confirmation limitation in `macos-main-comparison.md` remains open:
+some native confirmation screens have no corresponding hook event. No new
+VM, physical LED appearance, mobile, or production-bridge pass is claimed here.
 
 ## Reproduce locally
 
@@ -76,16 +104,16 @@ app. The human checklist is
 
 | Check | Result |
 | --- | --- |
-| Desktop, including local bridge integration checks | 932 passed, 1 skipped; 600 subtests passed. 40 existing packaging deprecation warnings. |
-| Swift package | 90 passed, including LED master-off/manual ownership. |
-| Android unit tests | 95 passed, including LED master-off/manual ownership. |
+| Desktop, including local bridge integration checks | 938 passed, 1 skipped; 600 subtests passed. Local bridge integration included. |
+| Swift package | 91 passed, including bounded accounting, one-shot output, and session links. |
+| Android unit tests | 96 passed, including bounded accounting, one-shot output, and session links. |
 | Android lint and debug build | Passed. |
-| Android focused emulator settings/master-switch/source-isolation checks | 3 passed. |
+| Android focused emulator settings/master-switch/source-isolation checks | 4 passed, including repeated session-link opening. |
 | iOS simulator app and widget build | Passed. |
 | Local deployment setup | 2 passed; temporary files only, no services started. |
-| Rust bridge, last source verification | 46 passed, 1 credential-dependent check ignored; local debug build passed. |
+| Rust bridge, last source verification | 48 passed, 1 credential-dependent check ignored; local debug build passed. |
 
-The latest cleanups were verified from source locally. They were not deployed to
+Verification recorded October 19, 2026. The focused scripts/test-sessions.sh workflow also passed. iOS session-link navigation was checked in an isolated simulator. The latest cleanups were verified from source locally. They were not deployed to
 production or reinstalled on the physical iPhone. Earlier installs, simulator UI
 checks, and physical push evidence below apply to the specific earlier builds.
 Automated checks do not establish current physical USB output, installed hook
@@ -105,7 +133,7 @@ Current contract: one latest state per source/session, including permissions. ID
 > **Earlier October 16 transport flow:** hook adapters submit only OSC-style JSON; the daemon, bridge receiver, UI, and default CLI status/watch use that accounted state. Raw hook socket/bridge delivery and live log/transcript reconstruction are removed. Phone and desktop delivery send individual updates. Historical snapshot/replay/capacity results below describe the previous implementation. The current contract is in [program-status.md](../protocol/program-status.md); the human checklist has been updated for individual delivery and source isolation.
 
 
-Updated October 18, 2026. Branch: `codex/osc7501-integration`. The integration now uses the existing bridge routes and queues. Earlier tests for a separate retained-status endpoint were replaced with tests of the simpler transport.
+Updated October 19, 2026. Branch: `codex/osc7501-integration`. The integration now uses the existing bridge routes and queues. Earlier tests for a separate retained-status endpoint were replaced with tests of the simpler transport.
 
 ## Coverage
 
@@ -221,7 +249,7 @@ Full regression: **861 passed, 5 skipped, 607 subtests** (40 existing packaging 
 
 Confirmed decision: each source/session has exactly one current state. Permission/tool IDs remain OSC metadata. Every accepted hook replaces the session state; any clear removes that session. Mobile apps collapse saved multi-record sessions to their latest value and reject incoming legacy snapshots. Forwarded values include available session titles; explicit Done/Error/Clear updates forward complete resulting values so a recovering receiver needs no earlier update.
 
-Bridge queues retain up to 10 items per routing key and replace older queued values for the same authorized sender, publisher, and scope. Newer accepted values move to the end; stale/duplicate sequences do not replace values or refresh TTL. Overflow drops the oldest item. At that verification point retention defaulted to 86,400 seconds; the current implementation supersedes this with a 300-second maximum and 2048-byte request/recovery limit. Manual phone pushes retain their latest command alongside session values. All bridge tests and installation were local. No production deployment occurred.
+Bridge queues retain up to 10 items per routing key and replace older queued values for the same authorized sender, publisher, and scope. Newer accepted values move to the end; stale/duplicate sequences do not replace values or refresh TTL. Overflow drops the oldest item. At that verification point retention defaulted to 86,400 seconds; the current implementation supersedes this with a 300-second maximum, a 2048-byte phone request/recovery limit, and a 64 KiB allowance on opaque desktop channels for existing old sender/receiver pairs. Manual phone pushes retain their latest command alongside session values. All bridge tests and installation were local. No production deployment occurred.
 
 Verification: desktop **869 passed, 1 skipped, 607 subtests**, including **6 HTTP integration checks against the locally installed bridge**. Swift **82 passed**; Android **90 unit tests passed**, lint/build passed, and both focused session UI tests passed on the emulator. Rust **44 passed, 1 credential-dependent test ignored**, on both macOS and Linux; strict Clippy and Linux release build passed. Linux emulation exposed a timing-sensitive pre-existing health/rate-limit test; its setup now uses a deterministic test-only rejecting limiter. The desktop animation preview was repaired to write through the daemon and retain its preview hold.
 
@@ -241,3 +269,119 @@ Installer tests verify upgrades remove owned legacy aliases while preserving
 unrelated commands. Hook command tests cover the shared frozen-app entry point.
 
 </details>
+
+## Mac USB output stall — October 21
+
+Physical Mac daemon PID 98923 continued accepting hook/status IPC while its main
+loop was blocked in libusb_exit → darwin_exit → pthread_cond_wait. Its battery,
+lid and output observations had stopped refreshing. A native sample is saved
+locally at /tmp/sidepulse-daemon-stuck-sample.txt.
+
+USB discovery and direct devices now share one lazily initialized, thread-safe
+context for the process lifetime. Device handles and enumeration lists still
+close normally; discovery/handle cleanup no longer tears down the Darwin USB
+context. The operating system reclaims that bounded context at process exit.
+
+Validation: 143 targeted USB/discovery/output/runtime tests pass. A read-only
+physical stress check completed 100 concurrent discovery/status cycles with one
+context and unchanged LED command/application counters. Installed locally and
+restarted the wedged daemon. Fresh battery/lid observations resumed. Both
+SPD-000006 and SPP-000002 changed Working → Ask → Working; uncached LEDS.LED
+readback matched each expected program and output_errors stayed empty. The
+temporary session was cleared. No firmware changes or bridge deployment.
+
+## Device reads on demand — October 22
+
+Mac daemon discovery now follows native USB and Disk Arbitration notifications
+on one blocking CFRunLoop, replacing per-tick volume scans and device probes.
+The connected-device list stays in daemon memory between attachment/mount
+changes. Explicit CLI discovery and firmware/storage operations still refresh
+when requested. USB metadata no longer expires every second. Removed the
+STATUS.TXT keepalive reader, its async reader threads, compatibility helpers
+and obsolete keepalive tests. The tray no longer rereads firmware every minute;
+checks run on connection changes or explicit Refresh.
+
+Validation: full suite 953 passed, 10 skipped, 608 subtests; 71 native Mac UI
+tests passed after the tray change. Real macOS disk-image mount/unmount events
+were observed, followed by no idle events, and the observer stopped cleanly.
+A real inventory probe discovered SPD-000006 and SPP-000002 with two initial
+STATUS reads; 30 subsequent runtime ticks performed zero extra discovery calls,
+STATUS reads or USB enumerations. Installed locally and restarted daemon/tray.
+Both physical devices then followed Working → Ask → Working with uncached
+program readback matching and no output errors. Test session cleared.
+
+## Cross-platform device notifications — October 22
+
+Device inventory invalidation now has one shared interface and native backends:
+Disk Arbitration/IOKit on macOS, blocking mount-table/USB uevents on Linux, and
+a hidden Windows window receiving device broadcasts. A shared watchdog observer
+watches Linux mount folders and custom SIDEPULSE_MOUNT_ROOTS on all platforms.
+Normal Mac/Windows volume changes use their native notifications, avoiding
+extra watches inside mounted drives. Windows discovery treats drive letters as
+volumes. Missing custom roots are watched through their nearest existing parent
+and watches move as folders appear. File reads, LED writes and STATUS.TXT
+changes do not invalidate inventory. Only discovery/explicit checks read device
+metadata. Startup notification failures are logged and retain the existing
+scan fallback.
+
+Validation: full suite 960 passed, 11 skipped, 618 subtests; targeted filesystem
+and runtime tests 20 passed, 1 Windows-only skip; 71 native Mac UI tests passed.
+The filesystem suite also passed inside Linux (7 passed, 1 Windows-only skip).
+Real Linux tmpfs mount/unmount notifications were received without creating or
+removing mount-point folders. Mac default discovery created no filesystem
+watchers on mounted drives, stayed quiet at idle, and shut down cleanly. Updated
+package installed locally; both physical Mac devices followed Ask → Working
+with uncached LEDS.LED readback and no output errors. Test session cleared.
+Added a macOS/Linux/Windows CI matrix for real filesystem events, native listener
+startup/shutdown, and Windows broadcast/drive-root checks. Windows execution
+still needs its CI runner; no Windows host was available locally. No bridge
+deployment or firmware changes.
+
+## Pro SD keepalive restored — October 24
+
+Restored a Mac-only Pro keepalive in the existing daemon cycle: read one
+uncached 512-byte sector from each connected Pro's STATUS.TXT every 60 seconds,
+using the cached device list and the shared device I/O lock. Discovery already
+reads STATUS.TXT, so it resets the interval. Dots are excluded. There is no
+extra timer/thread, volume scan, LED write, or session change. A failed read is
+logged and does not prevent reads for other Pros or normal output updates;
+it is retried on the next 60-second interval, rather than every daemon tick.
+
+Validation: 75 targeted runtime/filesystem/read-only-control tests passed with
+one Windows-only skip; full suite 962 passed, 11 skipped, 618 subtests passed.
+Tests cover cadence, cached inventory, quiet outputs, disconnect/reconnect,
+and read failure isolation. A real uncached read on SPP-000002 completed in
+0.8 ms, skipped the connected Dot, and left the Pro's LED program unchanged.
+
+## Tray build identity and daily main check — October 29
+
+The tray title shows a small version and local build date after SidePulse,
+with full version, timestamp and check result in its tooltip. An available
+update appears on the same line and opens GitHub when clicked; there are no
+extra information rows. Existing setuptools-scm packaging generates a build stamp carrying
+the version, source revision and UTC build time; frozen applications can use it
+when distribution metadata is absent. The header also shows the daemon-owned
+GitHub main check, including in the unavailable-daemon menu.
+
+The daemon starts one background check when due and keeps the result in
+app-update.json across restarts. Successes and failures both wait 24 hours
+before another automatic attempt. Comparison uses commit ancestry, including
+local history for unpublished editable branches. An ahead branch is current;
+a behind/diverged branch with missing main commits offers the GitHub commit
+history. Offline/unknown comparisons never claim to be current. Checking does
+not fetch into the checkout, merge, install or change LED/session state.
+
+Validation: full suite 1,021 passed, 11 skipped, 621 subtests; 72 native Mac UI
+tests and 255 native core tests passed. Updated packaging/update checks passed
+(29 tests, 134 subtests), including frozen metadata fallback. Tests cover
+unpublished branch ancestry, packaged comparisons, 24-hour persistence,
+offline failures, changed builds, and the menu action. A real unauthenticated
+GitHub check found main ffb1d3c2f3eed3b7e80e32d7876a7e1d67bd5dfb already
+contained in this branch (nine local commits ahead). Normal daemon IPC exposes
+the current result; connected Dot/Pro still report no output errors.
+
+A built wheel was inspected and contains the version/revision/timestamp stamp.
+After local daemon/tray restart, the native menu header reports version
+0.2.4.dev15+g4735acb1f.d20261030, Built 2026-10-29 23:38 PDT, and Up to date
+with GitHub main. The real cached check timestamp stayed unchanged through a
+second daemon restart, confirming no repeat network check.

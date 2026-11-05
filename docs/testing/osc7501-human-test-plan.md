@@ -11,6 +11,7 @@ Allow roughly 15 minutes for local smoke tests, 15–20 minutes per phone, and 2
 - [ ] Attach a SidePulse device to the receiving computer. Attach a device to each phone when testing that phone's output. Record the device model and firmware version.
 - [ ] Pair each updated phone to the test bridge again. Older links do not receive automatic state or colors; manual LED pushes still work and are not evidence that status accounting works.
 - [ ] Set devices to agent/status display rather than Battery or Custom. Pause other agent sessions or use a clean test installation so unrelated statuses do not win aggregation.
+- [ ] Verify fresh mobile settings enable only Ask. Enable Working and Done when checking their LED patterns in the full matrix.
 - [ ] Keep phone apps in the foreground for initial tests. Test background behavior separately.
 - [ ] Save the table below and mark every case Pass, Fail, or Not tested. Do not record full pairing tokens or sender keys in screenshots or bug reports.
 
@@ -38,9 +39,8 @@ Run one command at a time, allowing the desktop to refresh.
 | L7 | `sidepulse report --scope osc-human-main --state done --msg 'Build complete'` | Done/Completed appears; it is not still Error. |
 | L8 | `sidepulse report --scope osc-human-main --state clear` | The test record disappears and output returns to Idle, assuming no other active records. |
 | L9 | Send Working, then `--state clear`. | Working is removed immediately; it must not turn into a false Done. |
-| L10 | Send Done, then choose **Acknowledge Done** beneath that tray session. | The session remains Idle in the tray, `sidepulse status`, and `sidepulse live`. With no other active session, LEDs select Idle. A newer Working or Done report replaces it. Other receivers remain unchanged. |
 
-A report submission acknowledgement means accepted into the running daemon’s memory. It does not prove remote delivery or a successful hardware write. **Acknowledge Done** is the separate user action that changes a completed session to Idle.
+A report submission acknowledgement means accepted into the running daemon’s memory. It does not prove remote delivery or a successful hardware write.
 
 ### Raw OSC CLI input
 
@@ -152,8 +152,8 @@ Use a local bridge test instance and configure both test desktops to use it. Bot
 - [ ] Send a newer event for one session followed by a lower sequence for another session. Both are accepted because ordering is tracked per session.
 - [ ] Use a long Unicode message containing quotes/backslashes. Its `msg` is clipped to at most 1,024 UTF-8 bytes before sending, and shortened further if needed to fit one push; state, IDs, and lifecycle remain intact. Many existing sessions must not stop new updates.
 - [ ] Try an unknown outer sender key and a valid key placed only inside `data`. Neither authorizes an update. Revoke one paired sender and verify only that sender's records disappear.
-- [ ] Pause syncing, send changes, then resume. Retained pending events arrive; unchanged state is not periodically republished.
-- [ ] Select a manual pattern, then replay a duplicate update. The duplicate must not override the pattern. A newly accepted status may resume the phone's own session rendering.
+- [ ] Pause syncing, send changes, then resume. Changes from while forwarding was off do not arrive later. Only subsequent updates are forwarded.
+- [ ] Select a manual pattern, then replay a duplicate update. The duplicate must not override the pattern. A newly accepted enabled status may trigger the phone's own session rendering.
 - [ ] Change Mac patterns and Battery/Manual modes. Session forwarding continues and the phone's pattern choice is unchanged.
 - [ ] Disconnect the phone and send multiple events. Recovery returns up to 10 queued items, with only the newest state per source/session. Verify clear replaces an older Working update, queued messages are at most 2048 bytes, and items expire within 300 seconds. Record missed events honestly; no full-state reconstruction is promised.
 - [ ] Upgrade from an earlier saved-cache format: old sessions and replay guards start fresh; new individual updates populate the list. Current-format sessions, dismissals, and replay guards survive relaunch. An old `program_status_snapshot` or removed control message must be rejected without becoming a direct LED write.
@@ -209,3 +209,83 @@ For a failure, capture the exact command or provider action, build IDs, previous
 - [ ] Stop the daemon and verify its sleep-prevention assertion is released. Restart it and verify the saved sleep policy applies again.
 - [ ] Disable and re-enable LED output from the UI. Session state remains intact and phone session forwarding continues.
 - [ ] Restart the daemon. Its local session list and pending updates start empty. Phone apps retain their last received state until subsequent updates; startup does not send an aggregate reset or snapshot.
+
+## Review follow-up: physical acceptance still to do
+
+October 20 device check: USB developer services and remote app launch now work
+on the iPhone. Xcode screenshots confirm a fresh Needs approval status and the
+session deep link filtering to exactly its row. The app reports Dot disconnected.
+Live Activity lifecycle automation is waiting on the phone’s explicit XCTest
+passcode confirmation. Android debug/test APKs build, but the supplied debugging
+endpoint times out and the Pixel is not visible over USB/mDNS. No production
+bridge deployment or physical LED success is claimed.
+
+October 19 follow-up: the current iOS 27 app and widget build and pass signed
+APNs-environment verification. Installation on the unlocked iPhone 16 Pro Max
+succeeded through the alternate installer after reconnecting. Apple developer-disk-image
+preparation still fails (`CoreDevice 12010`, `InternalError`), blocking remote
+launch/screenshots. After manual launch, fresh Working and Ask statuses were
+confirmed in the physical phone’s ledger through the real Claude hook, isolated
+daemon Unix socket, local bridge, and APNs. No ActivityKit start error was logged.
+Visual Live Activity confirmation, Dot output, and background lifecycle checks
+remain pending. No Android device is currently connected.
+
+The local automated follow-up passes 941 desktop tests plus 600 subtests and
+50 bridge tests. It covers forwarding off/on during a slow send, the first
+hook at daemon startup, Ask after acknowledgement, opaque legacy desktop
+messages up to 64 KiB, unchanged 2 KiB phone limits, and daily size statistics.
+
+- [ ] Cold-launch/reconnect each phone with persisted Working/Done/Ask rows. Rows stay listed, but no LED command is replayed. Default settings signal only Ask.
+- [ ] Unplug Dot while a signal arrives, then reconnect. There is no failure notification or automatic retry. A fresh enabled update can try once.
+- [ ] Press manual Off; it sends one command and is not repeatedly enforced. A later Shortcut/manual command stays in effect until another eligible write.
+- [ ] Copy a mobile session link on Mac or phone. Open it on both phones; only matching rows appear. Return to all sessions and open the same link again. Missing/cleared rows show an explanation. Opening links must not change LEDs or accounting.
+- [ ] iOS Live Activity displays eight lights only: no session title, message, path, count, or app detail on the Lock Screen/Dynamic Island. Test stale appearance, accessibility text size, and tap-through.
+- [ ] Manually dismiss/end the iOS activity; send a fresh Ask. Verify a new activity can start while the app is active. Also test the system’s long-running activity limit and multiple leftover activities. No lifecycle fix is assumed until reproduced.
+- [ ] Leave Done older than 20 minutes in the background, foreground the app, and confirm it immediately stops contributing to Live Activity.
+- [ ] With two paired keys, recover each separately. Bare-token requests fail; one key never returns or consumes the other key’s records. Provider acceptance alone is not proof of device receipt or LED output.
+- [ ] Test real APNs/FCM delivery in foreground/background, Direct remote write, and Shortcuts with attached authorized hardware. Record platform/build/firmware and any missed notifications separately.
+
+October 20 later device pass: Android 0.2.3/build 7 is installed and the Dot is
+connected. Local Shortcut-style success and Off actions received firmware applied
+acknowledgements (commands 3 and 4). The Mac’s saved Pixel sender key is absent
+from the phone’s active keys; remote FCM receiver checks await permission for a
+temporary test key. The iPhone’s later local LED URL could not launch because
+it had locked again; no iPhone hardware success is claimed.
+
+
+October 20 authorized Android end-to-end pass: created a temporary sender key
+through the Pixel UI, then revoked it after testing. Both original keys and
+saved output settings were preserved. Actual Claude hooks passed through an
+isolated daemon/socket and a loopback Rust bridge over real FCM to the phone.
+Working, Ask, Done and Clear reached accounting. Dot firmware acknowledged Ask,
+Done, acknowledgement/clear Off, direct remote success, and final manual Off
+(commands 5–15). Disabled Working left the manual pattern unchanged. Correctly
+wrapped duplicate/stale updates caused no extra LED write; Clear survived their
+replay, and a fresh Ask restored the session. Done acknowledgement kept Idle,
+and the session deep link filtered one row. After revocation, a fresh update
+could not restore a row or write LEDs. The Mac’s old saved Pixel link was not
+changed and still needs re-pairing for normal forwarding. Physical unplug/replug,
+background lifecycle and iPhone LED/Live Activity checks remain pending.
+
+
+October 20 unlocked iPhone follow-up: the actual local hook/daemon/loopback
+bridge/APNs Ask wrote 29 bytes to LEDS.LED. A direct remote success push wrote
+36 bytes and was recorded as a foreground push. Done was confirmed in accounting;
+the disabled-state sends caused no replacement of the manual program. Replaying
+the already-received Ask and an older sequence caused no additional file write.
+iOS confirms the filesystem write rather than firmware application. Physical
+XCTest timed out enabling automation mode. Live Activity visual confirmation and
+a native Shortcut action are awaiting the user’s device checks. The unsupported
+sidepulse://write URL was not counted as a Shortcut test; native App Intents are
+the intended iOS Shortcut path. No production bridge deployment.
+
+
+October 20 user-assisted acceptance: the user confirmed eight static dark-red
+Live Activity lights and ran the native Blink action. The phone recorded
+`Shortcut: Pulse Red (Wrote LEDS.LED)` at 20:04:57Z, with a 48-byte write.
+All three core foreground paths are verified: session-driven LEDs, remote manual
+LEDs and native Shortcuts. Foreground cleanup confirmed the test session cleared
+and a remote 4-byte Off write at 20:06:01Z. Continuous flashing is not implemented
+in Live Activity; existing stale dimming reduces opacity to 35% after five minutes.
+Physical manual dismissal/restart lifecycle remains an open check. No behavior
+was changed during this device pass and no production bridge was deployed.
