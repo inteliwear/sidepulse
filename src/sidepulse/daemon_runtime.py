@@ -16,6 +16,7 @@ from .lid_sleep import (ClosedLidAwakeController, MacSleepSnapshot, external_dis
     read_lid_closed, read_mac_sleep_snapshot, run_pmset_displaysleepnow,
     sleep_helper_installed)
 from .models import AgentMode
+from .temperature import TemperatureReader
 from .settings import (load_settings, SLEEP_PREVENTION_ALWAYS, SLEEP_PREVENTION_AGENTS,
     SLEEP_PREVENTION_NEVER, LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN)
 
@@ -146,6 +147,7 @@ class DaemonRuntime:
         self.devices = []
         self.device_events = None
         self.app_updates = None
+        self.temperatures = TemperatureReader()
         self.view = {}
 
     def start(self):
@@ -285,6 +287,7 @@ class DaemonRuntime:
             'app_update': dict(self.app_updates.state) if self.app_updates else {},
         }
     def close(self):
+        self.temperatures.close()
         if self.device_events:
             self.device_events.close()
         try:
@@ -348,6 +351,7 @@ class DaemonRuntime:
                 ),
                 closed_lid_awake_requested=bool(self.closed_lid_awake.last_requested),
                 closed_lid_awake_active=bool(self.closed_lid_awake.active()),
+                **(self.temperatures.read() if self.is_mac else {}),
             )
             append_status_history_record(record)
         except Exception as exc:

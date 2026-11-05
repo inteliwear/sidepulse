@@ -760,7 +760,6 @@ class StatusBarController(NSObject):
                 height = 0
         menu.popUpMenuPositioningItem_atLocation_inView_(None, (0, height), sender)
 
-
     @objc.IBAction
     def openSessionWithAction_(self, sender):
         payload = sender.representedObject()
@@ -2987,6 +2986,7 @@ def add_app_info(menu, target):
     item.setToolTip_(f'{build.version}\n{build.date_label()}\n{labels.get(status, labels["unavailable"])}')
     menu.addItem_(item)
 
+
 def build_sleep_prevention_policy_item(policy: str, target: StatusBarController) -> NSMenuItem:
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         SLEEP_PREVENTION_LABELS[policy],
@@ -3459,6 +3459,8 @@ def draw_status_history_chart(bounds, records, timeframe_seconds: float | None =
         ("Agent", "agent"),
         ("Battery", "battery"),
         ("Charger", "charger"),
+        ("CPU °C", "cpu_temperature_c"),
+        ("Case °C", "case_temperature_c"),
         ("SidePulse", "sidepulse"),
         ("macOS Sleep", "mac_sleep"),
         ("Lid", "lid"),
@@ -3541,6 +3543,12 @@ def draw_status_history_chart(bounds, records, timeframe_seconds: float | None =
                 row_y + row_height / 2 - 7,
                 value_width - 8.0,
             )
+        elif kind in {"cpu_temperature_c", "case_temperature_c"}:
+            color = chart_color("#E87522" if kind == "cpu_temperature_c" else "#B54CAB", 0.95)
+            draw_history_line(points, kind, 120.0, start, end, chart_x, chart_width,
+                row_y + row_height * 0.16, row_height * 0.68, color, NSColor.clearColor())
+            draw_current_history_value(points, kind, "°", chart_x + chart_width + 8.0,
+                row_y + row_height / 2 - 7, value_width - 8.0)
         elif kind == "sidepulse":
             draw_history_segments(
                 points,
@@ -3669,13 +3677,18 @@ def draw_current_history_value(
     y: float,
     width: float,
 ) -> None:
-    value = latest_numeric_history_value(points, key)
+    if key in {'cpu_temperature_c', 'case_temperature_c'}:
+        value = numeric_history_value(points[-1][1].get(key)) if points else None
+    else:
+        value = latest_numeric_history_value(points, key)
     if value is None:
         text = "-"
     elif suffix == "%":
         text = f"{value:.0f}%"
     elif suffix == "W":
         text = f"{value:.0f}W"
+    elif suffix == "°":
+        text = f"{value:.1f}°"
     else:
         text = f"{value:g}{suffix}"
     draw_chart_text(text, x, y, width, 14)
@@ -4269,7 +4282,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_button(history_tab, "Refresh", 32, 42, 90, 28, target, "refreshHistoryChart:")
     add_label(
         history_tab,
-        "Rows: agent display, battery %, charger W, SidePulse awake, macOS sleep, lid.",
+        "CPU: die/package °C · Case: palm-rest skin °C · Missing sensors stay blank.",
         134,
         46,
         480,

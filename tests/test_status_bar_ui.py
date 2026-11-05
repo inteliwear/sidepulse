@@ -467,7 +467,6 @@ class MenuBuildTests(StatusBarTestCase):
         self.load_ios_links = link_patcher.start()
         self.addCleanup(link_patcher.stop)
 
-
     def test_unavailable_daemon_menu_keeps_recovery_settings_and_quit(self):
         menu = sb.build_error_menu(RuntimeError('offline'), self.controller)
         actions = {item.title(): str(item.action()) for item in menu.itemArray() if item.action() is not None}
@@ -1165,6 +1164,29 @@ class WindowBuildTests(StatusBarTestCase):
     def test_settings_window_is_not_visible(self):
         window = sb.build_settings_window(self.controller)
         self.assertFalse(window.isVisible(), "building a window must not show it")
+
+    def test_history_chart_displays_temperatures_and_accepts_older_records(self):
+        chart = sb.StatusHistoryChartView.alloc().initWithFrame_(((0, 0), (612, 250)))
+        for temperatures in ({}, {'cpu_temperature_c': 75.5, 'case_temperature_c': 32.1}):
+            chart.setRecords_([{'recorded_at': '2026-10-30T07:00:00Z', **temperatures}])
+            image = NSImage.alloc().initWithSize_((612, 250))
+            image.lockFocus()
+            try:
+                with patch.object(sb, 'draw_chart_text', wraps=sb.draw_chart_text) as labels:
+                    chart.drawRect_(chart.bounds())
+                text = [call.args[0] for call in labels.call_args_list]
+                self.assertIn('CPU °C', text)
+                self.assertIn('Case °C', text)
+                self.assertIn('75.5°' if temperatures else '-', text)
+                if temperatures:
+                    self.assertIn('32.1°', text)
+                    missing = {'cpu_temperature_c': None, 'case_temperature_c': None}
+                    with patch.object(sb, 'draw_chart_text') as latest_label:
+                        sb.draw_current_history_value([(0, temperatures), (15, missing)],
+                            'cpu_temperature_c', '°', 0, 0, 50)
+                    self.assertEqual(latest_label.call_args.args[0], '-')
+            finally:
+                image.unlockFocus()
 
     def test_show_settings_window_brings_it_forward_and_starts_previews(self):
         self.controller.settings_window = None

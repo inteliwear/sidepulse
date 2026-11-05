@@ -37,6 +37,8 @@ def background(tmp_path):
         battery = patched('sidepulse.daemon_runtime.read_battery_snapshot', return_value=BatterySnapshot(percent=80))
         lid = patched('sidepulse.daemon_runtime.read_lid_closed', return_value=False)
         sleep = patched('sidepulse.daemon_runtime.read_mac_sleep_snapshot', return_value=MacSleepSnapshot())
+        temperatures = patched('sidepulse.daemon_runtime.TemperatureReader').return_value
+        temperatures.read.return_value = {'cpu_temperature_c': 65.5, 'case_temperature_c': 32.0}
         devices = patched('sidepulse.daemon_runtime.discover_devices', return_value=[candidate])
         writes = patched('sidepulse.service.write_led_program', return_value=candidate.target)
         patched('sidepulse.daemon_runtime.append_status_history_record',
@@ -56,6 +58,7 @@ def background(tmp_path):
             try:
                 yield SimpleNamespace(service=service, runtime=service.runtime, clock=clock,
                     settings=settings, battery=battery, lid=lid, sleep=sleep, devices=devices,
+                    temperatures=temperatures,
                     writes=writes, tick=tick, history=history, path=service.program_server.path)
             finally:
                 service.program_server.stop()
@@ -326,6 +329,14 @@ def test_history_failure_is_reported_and_sampling_recovers(background):
     assert len(b.history.read_text().splitlines()) == 1
 
 
+def test_temperature_readings_follow_existing_history_interval_without_tray(background):
+    b = background
+    for at in (100, 101, 114, 115):
+        b.tick(at)
+    assert b.temperatures.read.call_count == 2
+    records = [json.loads(line) for line in b.history.read_text().splitlines()]
+    assert len(records) == 2
+    assert all(record['cpu_temperature_c'] == 65.5 and record['case_temperature_c'] == 32 for record in records)
 
 
 def test_non_mac_daemon_skips_mac_power_controls(background):
@@ -335,6 +346,7 @@ def test_non_mac_daemon_skips_mac_power_controls(background):
     b.battery.assert_not_called()
     b.lid.assert_not_called()
     b.sleep.assert_not_called()
+    b.temperatures.read.assert_not_called()
     assert len(b.history.read_text().splitlines()) == 1
     assert b.writes.call_count == 1
 
