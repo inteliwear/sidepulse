@@ -470,7 +470,11 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
         session_id=_first_string(normalized_raw, "session_id", "sessionId"),
         turn_id=_first_string(normalized_raw, "turn_id", "turnId"),
         agent_id=_first_string(normalized_raw, "agent_id", "agentId"),
-        cwd=_first_string(normalized_raw, "cwd", "workspaceRoot"),
+        cwd=(
+            _first_string(normalized_raw, "project_path", "projectPath", "cwd")
+            if provider == "junie"
+            else _first_string(normalized_raw, "cwd", "workspaceRoot")
+        ),
         tool_name=_first_string(normalized_raw, "tool_name", "toolName"),
         message=_first_string(
             normalized_raw,
@@ -539,6 +543,7 @@ def normalize_event_payload(raw: dict[str, Any], event_name: str, logged_at: Any
         normalized.setdefault("logged_at", logged_at)
 
     _copy_alias(normalized, "sessionId", "session_id")
+    _copy_alias(normalized, "projectPath", "project_path")
     _copy_alias(normalized, "turnId", "turn_id")
     _copy_alias(normalized, "agentId", "agent_id")
     _copy_alias(normalized, "workspaceRoot", "cwd")

@@ -18,9 +18,11 @@ from .models import (
     parse_datetime,
     provider_label,
 )
+from .junie_index import junie_session_project_dir, junie_session_title
 from .origin import origin_label_from_payload
 from .providers import detect_log_path, parse_log_line
 from .settings import AgentMonitorSettings, load_settings
+from .text_utils import read_recent_lines, truncate_text
 
 
 CODEX_TRANSCRIPT_PROVIDER = "codex-transcripts"
@@ -1020,6 +1022,8 @@ def update_metadata(metadata: StatusMetadata, record: HookEvent) -> None:
 def is_provider_session_title(record: HookEvent, title: str) -> bool:
     if record.provider == "codex":
         return title == codex_session_title(record.session_id)
+    if record.provider == "junie":
+        return title == junie_session_title(record.session_id)
     return False
 
 
@@ -1339,6 +1343,16 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
                     session_id[:8],
                     display_name,
                 )
+        elif provider == "junie" and session_id:
+            title = junie_session_title(session_id)
+            cwd = junie_session_project_dir(session_id) or cwd
+            if title:
+                display_name = display_name_from_parts(
+                    project_name(cwd),
+                    title,
+                    session_id[:8],
+                    display_name,
+                )
 
         mode = AgentMode(str(data["mode"]))
         updated_at = parse_datetime(data["updated_at"])
@@ -1445,30 +1459,6 @@ def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
     return any(prompt in text for prompt in internal_prompts)
 
 
-def read_recent_lines(path: Path, max_lines: int) -> list[str]:
-    if max_lines <= 0:
-        return []
-
-    chunk_size = 8192
-    chunks: list[bytes] = []
-    newline_count = 0
-
-    with path.open("rb") as handle:
-        handle.seek(0, 2)
-        position = handle.tell()
-        while position > 0 and newline_count <= max_lines:
-            read_size = min(chunk_size, position)
-            position -= read_size
-            handle.seek(position)
-            chunk = handle.read(read_size)
-            chunks.append(chunk)
-            newline_count += chunk.count(b"\n")
-
-    data = b"".join(reversed(chunks))
-    lines = data.decode("utf-8", errors="replace").splitlines()
-    return lines[-max_lines:]
-
-
 def _replace_stale(status: AgentStatus, stale: bool) -> AgentStatus:
     if status.stale == stale:
         return status
@@ -1510,6 +1500,10 @@ def _replace_mode(status: AgentStatus, mode: AgentMode) -> AgentStatus:
 def title_from_event(record: HookEvent) -> str | None:
     if record.provider == "codex":
         title = codex_session_title(record.session_id)
+        if title:
+            return title
+    elif record.provider == "junie":
+        title = junie_session_title(record.session_id)
         if title:
             return title
 
@@ -1643,16 +1637,6 @@ def project_name(cwd: str | None) -> str | None:
         if (candidate / ".git").exists():
             return candidate.name or str(candidate)
     return path.name or cwd
-
-
-def truncate_text(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    trimmed = text[: max_len - 1].rstrip()
-    boundary = max(trimmed.rfind(" "), trimmed.rfind(","), trimmed.rfind(";"))
-    if boundary >= max_len // 2:
-        trimmed = trimmed[:boundary].rstrip()
-    return f"{trimmed}..."
 
 
 def _tool_response_looks_failed(response: object) -> bool:

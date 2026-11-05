@@ -5,17 +5,194 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
-from sidepulse.collector import AgentMonitor, SourceSpec
+from sidepulse.collector import (
+    AgentMonitor,
+    LiveAgentMonitor,
+    SourceSpec,
+    agent_status_from_dict,
+)
 from sidepulse.cli import build_parser
 from sidepulse.hook import normalize_junie_payload
 from sidepulse.install import install_junie_hooks, uninstall_junie_hooks
 from sidepulse.models import AgentMode, AgentStatus
-from sidepulse.providers import JUNIE_MONITOR_EVENTS, detect_junie_config
-from sidepulse.session_actions import session_resume_command
+from sidepulse.providers import JUNIE_MONITOR_EVENTS, detect_junie_config, parse_log_line
+from sidepulse.jetbrains import JetBrainsIDE, JetBrainsLaunch
+from sidepulse.session_actions import (
+    SESSION_OPEN_JETBRAINS,
+    IdeOpenTarget,
+    available_session_open_actions,
+    default_session_open_action,
+    session_jetbrains_target,
+    session_open_action_label,
+    session_open_target,
+    session_resume_command,
+)
 
 
 class JunieProviderTests(unittest.TestCase):
+    def test_junie_project_path_takes_precedence_over_hook_cwd(self) -> None:
+        record = parse_log_line(
+            "junie",
+            json.dumps(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "junie-session",
+                    "cwd": "/Users/example/.junie",
+                    "project_path": "/Users/example/work/project",
+                }
+            ),
+        )
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.cwd, "/Users/example/work/project")
+
+    def test_junie_index_supplies_session_title_and_project_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            project = home / "work" / "project"
+            index = home / ".junie" / "sessions" / "index.jsonl"
+            index.parent.mkdir(parents=True)
+            index.write_text(
+                json.dumps(
+                    {
+                        "sessionId": "junie-session",
+                        "taskName": "Improve session opening",
+                        "projectDir": str(project),
+                    }
+                )
+                + "\n"
+            )
+            with patch("sidepulse.collector.Path.home", return_value=home):
+                record = parse_log_line(
+                    "junie",
+                    json.dumps(
+                        {
+                            "hook_event_name": "UserPromptSubmit",
+                            "session_id": "junie-session",
+                            "cwd": "/Users/example/.junie",
+                            "project_path": str(project),
+                            "prompt": "A fallback prompt title",
+                        }
+                    ),
+                )
+                monitor = LiveAgentMonitor(sources=())
+                monitor.ingest_record(record)
+                status = monitor.statuses_by_key[record.status_key]
+                restored = agent_status_from_dict(
+                    {
+                        **status.to_dict(),
+                        "cwd": "/Users/example/.junie",
+                        "display_name": "Junie session junie-se",
+                    }
+                )
+
+            self.assertIn("Improve session opening", status.display_name)
+            self.assertNotIn("A fallback prompt title", status.display_name)
+            self.assertEqual(restored.cwd, str(project))
+            self.assertIn("Improve session opening", restored.display_name)
+
+    def test_junie_jetbrains_action_uses_index_project_and_labels_selected_ide(self) -> None:
+        status = AgentStatus(
+            provider="junie",
+            agent_id="junie:session:session-123",
+            display_name="Junie session",
+            mode=AgentMode.COMPLETED,
+            updated_at=datetime.now(timezone.utc),
+            event_name="Stop",
+            session_id="session-123",
+            cwd="/tmp/hook-directory",
+        )
+        ide = JetBrainsIDE(
+            "IntelliJ IDEA", "com.jetbrains.intellij", "JetBrains", "IntelliJIdea"
+        )
+        with (
+            patch(
+                "sidepulse.session_actions.junie_session_project_dir",
+                return_value="/tmp/indexed-project",
+            ),
+            patch(
+                "sidepulse.session_actions.jetbrains_launch_for_project",
+                return_value=JetBrainsLaunch(ide, "/Applications/IntelliJ IDEA.app"),
+            ) as resolve,
+        ):
+            expected = IdeOpenTarget(
+                ide.bundle_id,
+                "/tmp/indexed-project",
+                "/Applications/IntelliJ IDEA.app",
+            )
+            self.assertEqual(session_jetbrains_target(status), expected)
+            self.assertEqual(
+                session_open_target(status, SESSION_OPEN_JETBRAINS),
+                ("ide", expected),
+            )
+            self.assertEqual(
+                session_open_action_label(status, SESSION_OPEN_JETBRAINS),
+                "Open in IntelliJ IDEA",
+            )
+            self.assertEqual(
+                default_session_open_action(
+                    AgentStatus(
+                        **{
+                            **status.__dict__,
+                            "origin": "Junie in JetBrains IDE",
+                        }
+                    )
+                ),
+                SESSION_OPEN_JETBRAINS,
+            )
+        resolve.assert_called_with("/tmp/indexed-project")
+
+    def test_junie_jetbrains_action_falls_back_to_cwd_and_hides_when_unavailable(
+        self,
+    ) -> None:
+        status = AgentStatus(
+            provider="junie",
+            agent_id="junie:session:session-456",
+            display_name="Junie session",
+            mode=AgentMode.COMPLETED,
+            updated_at=datetime.now(timezone.utc),
+            event_name="Stop",
+            session_id="session-456",
+            cwd="/tmp/project-from-cwd",
+        )
+        ide = JetBrainsIDE(
+            "IntelliJ IDEA", "com.jetbrains.intellij", "JetBrains", "IntelliJIdea"
+        )
+        with (
+            patch(
+                "sidepulse.session_actions.junie_session_project_dir", return_value=None
+            ),
+            patch(
+                "sidepulse.session_actions.jetbrains_launch_for_project",
+                return_value=JetBrainsLaunch(ide, None),
+            ) as resolve,
+        ):
+            self.assertEqual(
+                session_jetbrains_target(status),
+                IdeOpenTarget(ide.bundle_id, status.cwd, None),
+            )
+            resolve.assert_called_once_with(status.cwd)
+
+        with (
+            patch(
+                "sidepulse.session_actions.junie_session_project_dir", return_value=None
+            ),
+            patch(
+                "sidepulse.session_actions.jetbrains_launch_for_project",
+                return_value=None,
+            ),
+        ):
+            self.assertNotIn(
+                SESSION_OPEN_JETBRAINS,
+                available_session_open_actions(status),
+            )
+
+        claude_status = AgentStatus(
+            **{**status.__dict__, "provider": "claude"}
+        )
+        self.assertIsNone(session_open_target(claude_status, SESSION_OPEN_JETBRAINS))
     def test_installer_preserves_existing_config_and_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
