@@ -423,6 +423,12 @@ class PackageDataTests(unittest.TestCase):
                         f"package-data pattern {pattern!r} matches nothing in {package}",
                     )
 
+    def test_junie_icons_are_included_in_package_data(self):
+        package_data = load_pyproject()["tool"]["setuptools"]["package-data"]
+        patterns = package_data["sidepulse.resources"]
+        self.assertIn("icons/*.png", patterns)
+        self.assertIn("icons/*.svg", patterns)
+
 
 if __name__ == "__main__":
     unittest.main()
