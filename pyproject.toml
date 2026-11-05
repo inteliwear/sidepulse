@@ -35,6 +35,7 @@ dependencies = [
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
     "pyobjc-framework-WebKit>=10; sys_platform == 'darwin'",
     "pyobjc-framework-ScriptingBridge>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ServiceManagement>=10; sys_platform == 'darwin'",
 ]
 
 [project.urls]
@@ -64,7 +65,7 @@ where = ["src"]
 include = ["sidepulse*", "agent_monitor*", "sidepulse_cli*"]
 
 [tool.setuptools.package-data]
-"sidepulse.resources" = ["sd_eject_guard.c", "sdled.wasm", "animations/*.LED"]
+"sidepulse.resources" = ["sd_eject_guard.c", "magsafe.c", "sdled.wasm", "animations/*.LED"]
 
 [tool.setuptools_scm]
 fallback_version = "0"
