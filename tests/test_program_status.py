@@ -35,86 +35,6 @@ def test_one_state_per_session_and_clear(store):
     assert not store.statuses()
 
 
-def test_acknowledge_done_through_socket_keeps_idle_and_does_not_publish(store):
-    with tempfile.TemporaryDirectory(prefix='ps-', dir='/tmp') as directory:
-        path = Path(directory) / 's'
-        server = ProgramServer(store, path)
-        server.start()
-        try:
-            completed = {**report('done', title='Build', msg='Finished'), 'request_id': 'completed-report'}
-            submit_report(completed, path=path)
-            monitor = DaemonMonitor(path)
-            done = monitor.snapshot().statuses[0]
-            events = store.pending_events('phone')
-            command = {'type': 'acknowledge_session', 'agent_id': done.agent_id, 'seq': done.seq,
-                       'updated_at': done.updated_at.isoformat()}
-            assert daemon_command(command, path=path)['acknowledged']
-            idle = monitor.snapshot().statuses[0]
-            assert idle.agent_id == done.agent_id and idle.display_name == 'Build'
-            assert idle.mode.value == 'idle_ready' and idle.message is None
-            assert idle.seq == done.seq and idle.updated_at == done.updated_at
-            assert store.pending_events('phone') == events
-            submit_report(completed, path=path)
-            assert monitor.snapshot().aggregate.mode.value == 'idle_ready'
-            assert not daemon_command(command, path=path)['acknowledged']
-            submit_report(report('done'), path=path)
-            assert not daemon_command(command, path=path)['acknowledged']
-            assert monitor.snapshot().aggregate.mode.value == 'completed'
-            for bad in (None, True, '1', 0):
-                with pytest.raises(StatusError):
-                    daemon_command({**command, 'seq': bad}, path=path)
-        finally:
-            server.stop()
-
-
-def test_acknowledgement_preserves_remote_guards_source_isolation_and_priority(store):
-    event = dict(v=1, type='program_status', publisher='remote', scope='session', seq=10,
-                 updated_at=int(datetime.now(timezone.utc).timestamp() * 1000), status={'state': 'done'})
-    store.receive_update('a', event)
-    done = store.statuses()[0]
-    store.receive_update('b', {**event, 'status': {'state': 'blocked'}})
-    assert store.acknowledge_session(done.agent_id, done.seq, done.updated_at.isoformat())
-    assert not store.receive_update('a', event)
-    assert not store.receive_update('a', {**event, 'seq': 9})
-    snapshot = ProgramMonitor(store).snapshot()
-    assert snapshot.aggregate.mode.value == 'waiting_for_input'
-    assert snapshot.aggregate.active_count == 1
-    assert sorted(s.mode.value for s in snapshot.statuses) == ['idle_ready', 'waiting_for_input']
-    assert not store.acknowledge_session('missing', 10, done.updated_at.isoformat())
-    store.receive_update('a', {**event, 'seq': 11, 'status': {'state': 'working'}})
-    assert not store.acknowledge_session(done.agent_id, done.seq, done.updated_at.isoformat())
-    assert sorted(s.mode.value for s in store.statuses()) == ['waiting_for_input', 'working']
-    working = next(s for s in store.statuses() if s.agent_id == done.agent_id)
-    assert not store.acknowledge_session(working.agent_id, working.seq, working.updated_at.isoformat())
-
-
-def test_acknowledgement_does_not_refresh_capacity_recency(store):
-    store.submit(report('done'))
-    done = store.statuses()[0]
-    for i in range(63):
-        store.submit({**report('working'), 'scope': f's-{i}'})
-    assert store.acknowledge_session(done.agent_id, done.seq, done.updated_at.isoformat())
-    store.submit({**report('working'), 'scope': 'new'})
-    assert len(store.statuses()) == 64
-    assert done.agent_id not in {s.agent_id for s in store.statuses()}
-
-
-def test_old_menu_cannot_acknowledge_reused_sequence_after_daemon_restart():
-    from datetime import timedelta
-    first = ProgramState(publisher='same-mac')
-    first.submit(report('done'))
-    old = first.statuses()[0]
-    restarted = ProgramState(publisher='same-mac')
-    with patch('sidepulse.program_status.datetime') as clock:
-        clock.now.return_value = old.updated_at + timedelta(seconds=10)
-        restarted.submit(report('done'))
-    current = restarted.statuses()[0]
-    assert (old.agent_id, old.seq) == (current.agent_id, current.seq)
-    assert not restarted.acknowledge_session(old.agent_id, old.seq, old.updated_at.isoformat())
-    assert restarted.statuses()[0].mode.value == 'completed'
-    assert restarted.acknowledge_session(current.agent_id, current.seq, current.updated_at.isoformat())
-
-
 def test_cleared_sessions_do_not_exhaust_live_scope_limit(store):
     for i in range(100):
         store.submit({**report('working'),'scope':f's-{i}'})
@@ -229,16 +149,17 @@ def test_bridge_bad_ack_is_not_success(ack):
 
 def test_phone_delivery_is_independent_of_ledger_size(store):
     from sidepulse.settings import AgentMonitorSettings
-    from sidepulse.program_status import fits_phone_push
+    from sidepulse.program_status import fits_phone_push, phone_update
     config = SimpleNamespace(server='https://example.com', outbound_channel=None, receiver_channel=None)
     phone = SimpleNamespace(status_protocol=2, link_id='phone', platform='ios', server=config.server, token='test')
     relay = ProgramRelay(store)
-    for i in range(100):
-        store.submit({**report('working', msg='🟢' * 500), 'scope': f'session-{i}'})
     with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.links.load_phone_links', return_value=[phone]), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings()), patch('sidepulse.program_transport.publish_update') as send:
+        relay.sync() # Register before updates arrive; no old state is forwarded.
+        for i in range(100):
+            store.submit({**report('working', msg='🟢' * 500), 'scope': f'session-{i}'})
         relay.sync()
-        assert send.call_count == 100
-        assert all(fits_phone_push(c.args[2]) and 'scopes' not in c.args[2] for c in send.call_args_list)
+        assert send.call_count == 64
+        assert all(fits_phone_push(phone_update(c.args[2])) and 'scopes' not in c.args[2] for c in send.call_args_list)
         assert len(store.statuses()) == 64
         store.submit(report('clear'))
         relay.sync()

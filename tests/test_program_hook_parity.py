@@ -201,7 +201,12 @@ def test_relay_forwards_explicit_state_independent_of_hook_visibility(runtime):
     config = SimpleNamespace(server='https://example.com', receiver_channel=None, outbound_channel=None)
     phone = SimpleNamespace(status_protocol=2, link_id='phone', platform='android', server=config.server, token='test')
     with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings(idle_timeout_seconds=10)), patch('sidepulse.links.load_phone_links', return_value=[phone]), patch('sidepulse.program_transport.publish_update') as send:
-        ProgramRelay(store).sync()
+        relay = ProgramRelay(store)
+        relay.sync()
+        assert send.call_count == 0 # Enabling forwarding never replays the earlier hook.
+        store.submit(hook_report('claude', line))
+        relay.sync()
+        relay.stop()
     assert send.call_count == 1  # One complete session value per hook.
     assert send.call_args_list[0].args[2]['status']['state'] == 'working'
     assert store.statuses()  # Forward explicit state without desktop visibility heuristics.

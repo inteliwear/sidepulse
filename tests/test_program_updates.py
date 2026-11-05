@@ -11,13 +11,14 @@ def update(scope='session', seq=1, state='working', publisher='mac', **fields):
 def test_abandoned_sessions_never_block_new_events(tmp_path):
     store = ProgramState()
     try:
-        for i in range(100):
+        for i in range(1000):
             store.submit(update(scope=f's-{i}', seq=1))
         with patch('sidepulse.program_status.datetime') as clock:
             clock.now.return_value = datetime.now(timezone.utc) + timedelta(days=30)
             store.submit(update(scope='new'))
-        assert {s.display_name for s in store.statuses()} == {*(f's-{i}' for i in range(37, 100)), 'new'}
-        assert len(store.pending_events('phone')) == 101
+        assert {s.display_name for s in store.statuses()} == {*(f's-{i}' for i in range(937, 1000)), 'new'}
+        assert len(store.pending_events('phone')) == 64
+        assert len(store._sequences) <= 128
     finally:
         store.close()
 
@@ -54,7 +55,7 @@ def test_capacity_is_shared_by_local_and_remote(tmp_path):
         assert store.receive_update('remote', update())
         assert 's-0' not in {s.display_name for s in store.statuses()}
         assert len(store.statuses()) == 64
-        assert len(store.pending_events('phone')) == 65
+        assert len(store.pending_events('phone')) == 64
         # Clearing frees a place; the next update need not evict another session.
         assert store.receive_update('remote', update(seq=2, state='clear'))
         store.submit(update(scope='new'))

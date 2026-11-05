@@ -11,7 +11,7 @@ from unittest.mock import patch, Mock
 
 import pytest
 from sidepulse.models import AgentMode
-from sidepulse.program_status import ProgramState, StatusError, validate_update, fits_phone_push
+from sidepulse.program_status import ProgramState, StatusError, validate_update, fits_phone_push, phone_update
 from sidepulse.program_transport import (ProgramServer, ProgramRelay, submit_report, submit_status,
     daemon_command, sender_identity, write_daemon_program)
 from sidepulse.program_presentation import DaemonMonitor, ProgramMonitor
@@ -106,7 +106,7 @@ def test_rejected_update_preserves_state_and_retry_receipts():
     assert state.submit(copy.deepcopy(event)) == ack
     with pytest.raises(StatusError, match='request_id reused'):
         state.submit({**event, 'status':{'state':'done'}})
-    assert len(state.pending_events('phone')) == 65
+    assert len(state.pending_events('phone')) == 64
     assert 's-0' not in {s.display_name for s in state.statuses()}
     assert ack['seq'] == 1
 
@@ -124,9 +124,9 @@ def test_concurrent_hook_updates_remain_ordered_and_complete():
         sequences = list(pool.map(submit, range(100)))
     assert sorted(sequences) == list(range(1, 101))
     events = state.pending_events('phone')
-    assert len(events) == 100
+    assert len(events) == 1
     assert [event['status']['msg'] for _, event in events] == [
-        str(i) for i in sorted(range(100), key=lambda i: sequences[i])]
+        str(max(range(100), key=lambda i: sequences[i]))]
 
 
 def test_ui_reconnect_reads_daemon_without_owning_or_reconstructing_state(daemon):
@@ -219,34 +219,39 @@ def test_daemon_forwards_individual_local_and_remote_osc_updates(platform):
     from sidepulse.relay import RelayConfig
     config = RelayConfig('https://example.test',receiver_channel='receiver-channel',outbound_channel='outbound-channel')
     state = ProgramState()
-    state.submit(report(msg='🟢'*500))
-    state.receive_update(sender_identity(config.server,config.receiver_channel),update(state='blocked'))
     phone = SimpleNamespace(status_protocol=2,link_id='phone',platform=platform,server=config.server,token='fake-phone')
     relay = ProgramRelay(state)
     with patch('sidepulse.relay.load_relay_config',return_value=config), patch('sidepulse.links.load_phone_links',return_value=[phone]), patch('sidepulse.settings.load_settings',return_value=AgentMonitorSettings()), patch('sidepulse.program_transport.publish_update') as publish:
+        relay.sync()
+        state.submit(report(msg='🟢'*500))
+        state.receive_update(sender_identity(config.server,config.receiver_channel),update(state='blocked'))
         relay.sync()
     desktop = [c.args[2] for c in publish.call_args_list if not c.kwargs['phone']]
     mobile = [c.args[2] for c in publish.call_args_list if c.kwargs['phone']]
     assert len(desktop) == 1 and len(mobile) == 2
     assert len({u['publisher'] for u in mobile}) == 2
-    assert all(validate_update(u) == u and fits_phone_push(u) and 'scopes' not in u and 'context' not in u for u in mobile)
+    assert all(validate_update(u) == u and fits_phone_push(phone_update(u)) and 'scopes' not in u for u in mobile)
 
 
-def test_phone_pause_preserves_cursor_and_other_phone_continues():
+def test_new_phone_and_reenabled_forwarding_never_replay_stored_updates():
     from sidepulse.relay import RelayConfig
     state = ProgramState(); state.submit(report())
     relay = ProgramRelay(state)
     phones=[SimpleNamespace(status_protocol=2,link_id=name,platform='ios',server='https://example.test',token=name) for name in ['one','two']]
     with patch('sidepulse.relay.load_relay_config',return_value=RelayConfig('https://example.test')), patch('sidepulse.links.load_phone_links',return_value=phones), patch('sidepulse.settings.load_settings',return_value=AgentMonitorSettings()) as settings, patch('sidepulse.program_transport.publish_update') as publish:
+        relay.sync(); assert publish.call_count == 0 # Ignore the earlier stored Working.
+        state.submit(report())
         relay.sync(); assert publish.call_count == 2
         settings.return_value=AgentMonitorSettings().with_phone_session_sync('one',False)
         relay.sync(); assert publish.call_count == 2
         state.submit(report(state='done'))
         relay.sync(); assert publish.call_count == 3
         settings.return_value=AgentMonitorSettings()
-        relay.sync(); assert publish.call_count == 4
-        assert publish.call_args.args[1] == 'apns_one'
-        relay.sync(); assert publish.call_count == 4
+        relay.sync(); assert publish.call_count == 3 # Do not replay the Done from while it was off.
+        state.submit(report())
+        relay.sync(); assert publish.call_count == 5
+        assert {call.args[1] for call in publish.call_args_list[-2:]} == {'apns_one', 'apns_two'}
+        relay.sync(); assert publish.call_count == 5
 
 
 @pytest.mark.parametrize('case',json.loads((Path(__file__).parent/'fixtures/program-updates.json').read_text())['cases'],ids=lambda c:c['name'])
@@ -274,7 +279,7 @@ def test_status_cli_reports_stopped_daemon_without_traceback(tmp_path,capsys):
 def test_daemon_retries_a_temporary_socket_start_failure():
     from sidepulse.relay import RelayConfig
     service=SidePulseService()
-    with patch.object(service,'install_signal_handlers'), patch.object(service.program_server,'start',side_effect=[OSError('busy'),None]) as start, patch.object(service.program_server,'stop'), patch.object(service.program_relay,'start'), patch.object(service.program_relay,'stop'), patch.object(service,'sync_receiver'), patch.object(service.runtime,'poll'), patch.object(service.runtime,'close'), patch.object(service,'sync_outputs',side_effect=service.stop), patch.object(service.stop_event,'wait'), patch('sidepulse.service.load_relay_config',return_value=RelayConfig('https://example.test')):
+    with patch.object(service,'install_signal_handlers'), patch.object(service.program_server,'start',side_effect=[OSError('busy'),setattr(service.program_server, 'running', True)]) as start, patch.object(service.program_server,'stop'), patch.object(service.program_relay,'start'), patch.object(service.program_relay,'stop'), patch.object(service,'sync_receiver'), patch.object(service.runtime,'poll'), patch.object(service.runtime,'close'), patch.object(service,'sync_outputs',side_effect=service.stop), patch.object(service.stop_event,'wait'), patch('sidepulse.service.load_relay_config',return_value=RelayConfig('https://example.test')):
         assert service.run() == 0
     assert start.call_count == 2
 

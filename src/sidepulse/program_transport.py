@@ -9,6 +9,8 @@ import socket
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
+import errno
 from pathlib import Path
 
 from .program_status import MAX_BYTES, MAX_BRIDGE_MESSAGE_BYTES, ProgramState, StatusError, bridge_update, encoded, phone_update
@@ -81,6 +83,7 @@ class ProgramServer:
         self.state, self.path, self.on_command = state, path or status_socket_path(), on_command
         self.socket = None
         self.running = False
+        self.bound_identity = None
 
     def start(self):
         import threading
@@ -100,6 +103,8 @@ class ProgramServer:
                     raise StatusError('Program status service already running')
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.bind(str(self.path))
+        info = self.path.stat()
+        self.bound_identity = (info.st_dev, info.st_ino)
         self.path.chmod(0o600)
         self.socket.listen(16)
         self.socket.settimeout(0.2)
@@ -116,8 +121,13 @@ class ProgramServer:
                 conn, _ = self.socket.accept()
             except socket.timeout:
                 continue
-            except OSError:
-                break
+            except OSError as exc:
+                if not self.running or exc.errno in {errno.EBADF, errno.ENOTSOCK, errno.EINVAL}:
+                    self.running = False
+                    break
+                # Aborted clients and temporary resource pressure must not kill IPC.
+                time.sleep(0.05)
+                continue
             if not self.slots.acquire(blocking=False):
                 try:
                     conn.sendall(b'{"ok":false,"error":"Daemon is busy; retry shortly"}')
@@ -125,7 +135,12 @@ class ProgramServer:
                     pass
                 conn.close()
                 continue
-            self.workers.submit(self.handle_connection, conn)
+            try:
+                self.workers.submit(self.handle_connection, conn)
+            except RuntimeError:
+                conn.close()
+                self.slots.release()
+                self.running = False
 
     def handle_connection(self, conn):
         try:
@@ -150,11 +165,6 @@ class ProgramServer:
                         ack = {'ok': True, 'snapshot': ProgramMonitor(self.state).snapshot().to_dict()}
                         if self.on_command:
                             ack.update(self.on_command({'v': 1, 'type': 'output_info'}))
-                    elif report.get('type') == 'acknowledge_session':
-                        if type(report.get('v')) is not int or report['v'] != 1:
-                            raise StatusError('Unsupported protocol version')
-                        ack = {'ok': True, 'acknowledged': self.state.acknowledge_session(
-                            report.get('agent_id'), report.get('seq'), report.get('updated_at'))}
                     elif report.get('type') in {'output_control', 'write_led', 'play_lid_animation'} and self.on_command:
                         ack = self.on_command(report)
                     else:
@@ -177,7 +187,14 @@ class ProgramServer:
             self.socket.close()
         if hasattr(self, 'thread'):
             self.thread.join(timeout=1)
-            self.path.unlink(missing_ok=True)
+        if self.bound_identity is not None:
+            try:
+                info = self.path.stat()
+                if (info.st_dev, info.st_ino) == self.bound_identity:
+                    self.path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+            self.bound_identity = None
         if hasattr(self, 'workers'):
             self.workers.shutdown(wait=False, cancel_futures=True)
 
@@ -191,24 +208,52 @@ def sender_identity(server: str, channel: str) -> str:
     return 'relay-' + hashlib.sha256(endpoint(server, channel).encode()).hexdigest()[:16]
 
 
+class UndeliverableStatus(StatusError):
+    """This value cannot be delivered; discard it and let newer values through."""
+
+
+class BridgeFailure(StatusError):
+    def __init__(self, *, retry_after=0.0, retired=False, status_code=None):
+        super().__init__('Status bridge unavailable')
+        self.retry_after, self.retired, self.status_code = retry_after, retired, status_code
+
+
 def publish_update(server: str, channel: str, update: dict, *, phone: bool = False) -> None:
-    # Existing phone push handlers carry application data under `data`.
-    update = phone_update(update) if phone else bridge_update(update)
-    body = encoded({'data': update} if phone else update).encode()
-    while len(body) > MAX_BRIDGE_MESSAGE_BYTES and update['status'].get('msg'):
-        update['status']['msg'] = update['status']['msg'][:-1]
+    try:
+        update = phone_update(update) if phone else bridge_update(update)
         body = encoded({'data': update} if phone else update).encode()
-    if len(body) > MAX_BRIDGE_MESSAGE_BYTES:
-        raise StatusError('Status metadata exceeds the 2048-byte bridge limit')
+        while len(body) > MAX_BRIDGE_MESSAGE_BYTES and update['status'].get('msg'):
+            update['status']['msg'] = update['status']['msg'][:-1]
+            body = encoded({'data': update} if phone else update).encode()
+        if len(body) > MAX_BRIDGE_MESSAGE_BYTES:
+            raise StatusError('Status metadata exceeds the 2048-byte bridge limit')
+    except StatusError as exc:
+        raise UndeliverableStatus(str(exc)) from exc
     request = urllib.request.Request(endpoint(server, channel), data=body,
         method='POST', headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             if response.read(128).strip() not in {b'OK', b'OK QUEUED'}:
-                raise StatusError('Invalid bridge acknowledgement')
+                raise BridgeFailure()
+    except urllib.error.HTTPError as exc:
+        if exc.code in {400, 413, 422}:
+            raise UndeliverableStatus('Bridge rejected this status value') from None
+        delay = 0.0
+        retry = exc.headers.get('Retry-After', '') if exc.headers else ''
+        try:
+            delay = max(0.0, float(retry))
+        except ValueError:
+            from email.utils import parsedate_to_datetime
+            try:
+                delay = max(0.0, parsedate_to_datetime(retry).timestamp() - time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+        raise BridgeFailure(retry_after=delay, retired=exc.code in {401, 403, 404, 410}, status_code=exc.code) from None
     except Exception as exc:
-        # URLs contain credentials. Pending updates remain in daemon memory for retry.
-        raise StatusError('Status bridge unavailable; update pending in daemon memory') from exc
+        # Never include credential-bearing URLs in diagnostics.
+        if isinstance(exc, BridgeFailure):
+            raise
+        raise BridgeFailure() from None
 
 
 class ProgramRelay:
@@ -216,6 +261,11 @@ class ProgramRelay:
         import threading
         self.state = state
         self.stop_event = threading.Event()
+        from concurrent.futures import ThreadPoolExecutor
+        self.workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sidepulse-delivery')
+        self.jobs = {}
+        self.retry = {}
+        self.targets = set()
 
     def start(self):
         import threading
@@ -225,7 +275,7 @@ class ProgramRelay:
     def run(self):
         while not self.stop_event.is_set():
             try:
-                self.sync()
+                self.sync(wait=False)
             except Exception:
                 pass  # Retained state will be retried. Do not log credential URLs.
             self.stop_event.wait(1)
@@ -234,8 +284,9 @@ class ProgramRelay:
         self.stop_event.set()
         if hasattr(self, 'thread'):
             self.thread.join(timeout=1)
+        self.workers.shutdown(wait=False, cancel_futures=True)
 
-    def sync(self):
+    def sync(self, *, wait=True):
         from .links import load_phone_links
         from .relay import load_relay_config
         from .settings import load_settings
@@ -254,15 +305,47 @@ class ProgramRelay:
                 configured.append(target)
                 if settings.sync_sessions_to_phone(link.link_id):
                     targets.append(target)
-        self.state.retain_targets({hashlib.sha256(json.dumps([server, channel, phone]).encode()).hexdigest()
-                                   for server, channel, phone in configured})
+        configured_ids = {self.target_id(*entry) for entry in configured}
+        self.state.retain_targets(configured_ids)
+        active = {self.target_id(*entry) for entry in targets}
+        for target in active - self.targets:
+            self.state.start_delivery(target)
+        self.targets = active
+        for target in set(self.retry) - configured_ids:
+            self.retry.pop(target, None)
         for server, channel, phone in targets:
-            target = hashlib.sha256(json.dumps([server, channel, phone]).encode()).hexdigest()
-            for number, update in self.state.pending_events(target, local_only=not phone):
-                if self.stop_event.is_set():
-                    return
-                try:
-                    publish_update(server, channel, phone_update(update) if phone else update, phone=phone)
-                except StatusError:
-                    break  # Retry this event in order; do not block another destination.
+            target = self.target_id(server, channel, phone)
+            previous = self.jobs.get(target)
+            if previous is not None and not previous.done():
+                continue
+            failures, retry_at = self.retry.get(target, (0, 0))
+            if time.monotonic() >= retry_at:
+                self.jobs[target] = self.workers.submit(self.deliver, target, server, channel, phone)
+        if wait:
+            from concurrent.futures import wait as wait_for_jobs
+            wait_for_jobs(list(self.jobs.values()))
+        self.jobs = {key: job for key, job in self.jobs.items() if not job.done()}
+
+    @staticmethod
+    def target_id(server, channel, phone):
+        return hashlib.sha256(json.dumps([server, channel, phone]).encode()).hexdigest()
+
+    def deliver(self, target, server, channel, phone):
+        for number, update in self.state.pending_events(target, local_only=not phone):
+            if self.stop_event.is_set() or target not in self.targets:
+                return
+            # A slow earlier send may span a newer value or disable/re-enable.
+            if not self.state.event_is_pending(target, number):
+                continue
+            try:
+                publish_update(server, channel, update, phone=phone)
+            except UndeliverableStatus:
                 self.state.acknowledge_event(target, number)
+                continue
+            except StatusError as exc:
+                failures = self.retry.get(target, (0, 0))[0] + 1
+                delay = max(min(300, 2 ** min(failures, 9)), getattr(exc, 'retry_after', 0))
+                self.retry[target] = (failures, float('inf') if getattr(exc, 'retired', False) else time.monotonic() + delay)
+                return
+            self.retry.pop(target, None)
+            self.state.acknowledge_event(target, number)

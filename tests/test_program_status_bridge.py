@@ -107,8 +107,8 @@ def test_sender_clips_before_bridge_including_phone_recovery_metadata(message):
             # succeeded; an oversized request would instead fail with 413.
             with pytest.raises(StatusError) as failure:
                 publish_update(server, device + '_' + key, value, phone=True)
-            assert failure.value.__cause__.code == 503
-            queued = http(server, '/api/leds/' + device + '/queued')[1][0]
+            assert failure.value.status_code == 503
+            queued = http(server, '/api/leds/' + device + '_' + key + '/queued')[1][0]
             assert len(encoded(queued).encode()) <= 2048
             delivered = queued['data']
             assert len(delivered['status']['msg'].encode()) <= 1024
@@ -124,19 +124,19 @@ def test_phone_queue_keeps_latest_session_and_manual_push_independently():
             body = {'data': update(revision), 'shared_key': 'forged'}
             # No live push credentials: retention still occurs on the existing route.
             assert http(server, '/api/leds/' + device + '_sender-key', body)[0] == 503
-        status, values = http(server, '/api/leds/' + device + '/queued')
+        status, values = http(server, '/api/leds/' + device + '_sender-key/queued')
         assert status == 200 and len(values) == 1
         assert values[0]['shared_key'] == 'sender-key'
         assert values[0]['data']['seq'] == 2
-        assert http(server, '/api/leds/' + device + '/queued')[1] == []
+        assert http(server, '/api/leds/' + device + '_sender-key/queued')[1] == []
         # Manual pushes do not discard queued session states.
         http(server, '/api/leds/' + device + '_sender-key', {'data': update(3)})
         http(server, '/api/leds/' + device + '_sender-key', {'leds': 'off'})
-        queued = http(server, '/api/leds/' + device + '/queued')[1]
+        queued = http(server, '/api/leds/' + device + '_sender-key/queued')[1]
         assert len(queued) == 2 and queued[-1]['leds'] == 'off'
         fcm = 'fcm_fake-registration_' + 'b' * 32
         assert http(server, '/api/leds/' + fcm, {'data': update()})[0] == 503
-        value = http(server, '/api/leds/fcm_fake-registration/queued')[1][0]
+        value = http(server, '/api/leds/' + fcm + '/queued')[1][0]
         assert value['data']['type'] == 'program_status'
         assert value['shared_key'] == 'b' * 32
 
@@ -153,9 +153,11 @@ def test_bridge_queue_keeps_ten_recent_sessions_and_isolates_sources():
         device = 'apns_'+'a'*64
         for sender in ['source-a','source-b']:
             assert http(server,'/api/leds/'+device+'_'+sender,{'data':update()})[0] == 503
-        status,values = http(server,'/api/leds/'+device+'/queued')
-        assert status == 200 and len(values) == 2
-        assert {v['shared_key'] for v in values} == {'source-a','source-b'}
+        assert http(server,'/api/leds/'+device+'/queued')[0] == 400
+        for sender in ['source-a','source-b']:
+            status,values = http(server,'/api/leds/'+device+'_'+sender+'/queued')
+            assert status == 200 and len(values) == 1
+            assert values[0]['shared_key'] == sender
 
 
 def test_phone_recovery_expires_with_configured_shorter_ttl():
@@ -163,7 +165,7 @@ def test_phone_recovery_expires_with_configured_shorter_ttl():
         device = 'apns_'+'a'*64
         assert http(server,'/api/leds/'+device+'_source',{'data':update()})[0] == 503
         time.sleep(1.1)
-        assert http(server,'/api/leds/'+device+'/queued')[1] == []
+        assert http(server,'/api/leds/'+device+'_source/queued')[1] == []
 
 
 def test_android_recovery_keeps_latest_state_per_authorized_source():
@@ -171,10 +173,11 @@ def test_android_recovery_keeps_latest_state_per_authorized_source():
         for sender in ['a'*32,'b'*32]:
             for seq in [1,2,1]:
                 assert http(server,'/api/leds/fcm_test-registration_'+sender,{'data':update(seq)})[0] == 503
-        status,values = http(server,'/api/leds/fcm_test-registration/queued')
-        assert status == 200 and len(values) == 2
-        assert {value['shared_key'] for value in values} == {'a'*32,'b'*32}
-        assert all(value['data']['seq'] == 2 for value in values)
+        assert http(server,'/api/leds/fcm_test-registration/queued')[0] == 400
+        for sender in ['a'*32,'b'*32]:
+            status,values = http(server,'/api/leds/fcm_test-registration_'+sender+'/queued')
+            assert status == 200 and len(values) == 1
+            assert values[0]['shared_key'] == sender and values[0]['data']['seq'] == 2
 
 
 def test_osc_cli_daemon_existing_bridge_receiver_ui(tmp_path):
@@ -198,9 +201,10 @@ def test_osc_cli_daemon_existing_bridge_receiver_ui(tmp_path):
                 service.receiver_signature = (server, config.outbound_channel)
                 ui = ProgramMonitor(receiver)
                 with patch('sidepulse.program_adapter.hook_report', side_effect=AssertionError('provider adapter called')), patch('sidepulse.providers.parse_log_line', side_effect=AssertionError('provider parser called')), patch('sidepulse.program_transport.status_socket_path', return_value=path), patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.links.load_phone_links', return_value=[]):
+                    relay = ProgramRelay(publisher); relay.sync()
                     def step(body, expected):
                         assert sidepulse_main(['report', '--scope', 'deployment', '--osc', '\x1b]7501;' + body]) == 0
-                        ProgramRelay(publisher).sync()
+                        relay.sync()
                         stop = threading.Event()
                         def accept(value):
                             service.handle_remote_status(receiving, value); stop.set()
@@ -213,5 +217,6 @@ def test_osc_cli_daemon_existing_bridge_receiver_ui(tmp_path):
                     step('state=done:app=deploy', 'completed')
                     step('state=clear', 'idle_ready')
                     assert ui.snapshot().statuses == ()
+                    relay.stop()
             finally: daemon.stop()
     finally: publisher.close(); receiver.close()

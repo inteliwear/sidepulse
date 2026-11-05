@@ -6,11 +6,11 @@ import copy
 import json
 import re
 import threading
-import socket
 import os
 import time
-from collections import OrderedDict, deque
+from collections import OrderedDict
 import uuid
+import urllib.parse
 from datetime import datetime, timezone
 
 from .models import AgentMode, AgentStatus
@@ -127,6 +127,14 @@ def bridge_update(update: dict) -> dict:
     result = validate_update(update)
     if 'msg' in result['status']:
         result['status']['msg'] = result['status']['msg'].encode('utf-8')[:MAX_OUTBOUND_MESSAGE_BYTES].decode('utf-8', errors='ignore')
+    context = result.pop('context', {})
+    title = context.get('title')
+    if title and result['status']['state'] != 'clear':
+        result['status'].setdefault('title', title.encode('utf-8')[:192].decode('utf-8', errors='ignore'))
+    # Keep native session identity for future provider links, not bulky paths or labels.
+    identity = {key: context[key] for key in ('provider', 'session_id') if key in context}
+    if identity:
+        result['context'] = identity
     return result
 
 
@@ -145,19 +153,40 @@ def phone_update(update: dict) -> dict:
     return result
 
 
+def installation_publisher(path=None) -> str:
+    """An installation identity survives hostname and network-interface changes."""
+    from .settings import default_config_dir
+    import tempfile
+    path = path or default_config_dir() / 'publisher-id'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        with tempfile.NamedTemporaryFile(dir=path.parent, mode='w', delete=False) as temporary:
+            # Seed once from the previous identity so upgrading does not duplicate
+            # existing phone sessions. Later host/network changes no longer affect it.
+            import socket
+            temporary.write(str(uuid.uuid5(uuid.NAMESPACE_OID,
+                f"sidepulse:{socket.gethostname()}:{uuid.getnode()}:{os.getuid()}")))
+        try:
+            os.link(temporary.name, path)
+        except FileExistsError:
+            pass
+        finally:
+            os.unlink(temporary.name)
+    return str(uuid.UUID(path.read_text().strip()))
+
+
 class ProgramState:
     """One current update per source/session, owned in memory by the daemon."""
     def __init__(self, *, publisher: str | None = None):
-        self.publisher = publisher or str(uuid.uuid5(uuid.NAMESPACE_OID,
-            f"sidepulse:{socket.gethostname()}:{uuid.getnode()}:{os.getuid()}"))
+        self.publisher = publisher or installation_publisher()
         self.lock = threading.RLock()
         self._sessions = OrderedDict()
-        # Keep replay guards after clear/eviction; only current values are capped.
-        self._sequences = {}
+        # Clear records keep a replay guard within the same bounded latest-session set.
+        self._sequences = OrderedDict()
         self._suppressed = set()
         self._revision = 0
         self._receipts = OrderedDict()
-        self._events = deque(maxlen=4096)
+        self._events = OrderedDict()
         self._cursors = {}
         self._event_serial = time.time_ns() // 1000
 
@@ -199,7 +228,7 @@ class ProgramState:
             ack = {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
             if receipt:
                 self._receipts[receipt] = (request, ack)
-                while len(self._receipts) > 4096:
+                while len(self._receipts) > MAX_SESSIONS:
                     self._receipts.popitem(last=False)
             return copy.deepcopy(ack)
 
@@ -225,12 +254,18 @@ class ProgramState:
         self._append_event(sender, update)
         if sender == 'local':
             self._expire_done(update['updated_at'])
+        self._sequences.pop(key, None)
         self._sequences[key] = update['seq']
         self._sessions.pop(key, None)
         if update['status']['state'] != 'clear':
             self._sessions[key] = update
         while len(self._sessions) > MAX_SESSIONS:
             self._sessions.popitem(last=False)
+        while len(self._sequences) > MAX_SESSIONS * 2:
+            oldest, _ = self._sequences.popitem(last=False)
+            self._sessions.pop(oldest, None)
+            if oldest[0] == 'local':
+                self._suppressed.discard(oldest[2])
 
     def _expire_done(self, now):
         for key, update in list(self._sessions.items()):
@@ -239,21 +274,39 @@ class ProgramState:
 
     def _append_event(self, sender, update):
         outgoing = dict(update)
-        if sender != 'local':
-            outgoing['publisher'] = hashlib.sha256(json.dumps([self.publisher, sender, update['publisher']]).encode()).hexdigest()
+        outgoing['publisher'] = self.forward_publisher(sender, update['publisher'])
         # Epoch-based sequences keep increasing across daemon restarts while
         # matching the safe-integer range accepted by mobile clients.
         serial = max(self._event_serial + 1, time.time_ns() // 1000)
         outgoing['seq'] = serial
         outgoing = validate_update(outgoing)
         self._event_serial = serial
-        self._events.append((serial, sender, outgoing))
+        key = (sender, update['publisher'], update['scope'])
+        self._events.pop(key, None)
+        self._events[key] = (serial, sender, outgoing)
+        while len(self._events) > MAX_SESSIONS:
+            self._events.popitem(last=False)
+
+    def forward_publisher(self, sender, publisher):
+        if sender == 'local':
+            return publisher
+        return hashlib.sha256(json.dumps([self.publisher, sender, publisher]).encode()).hexdigest()
 
     def pending_events(self, target: str, *, local_only: bool = False):
         with self.lock:
             cursor = self._cursors.get(target, 0)
-            return [(number, copy.deepcopy(body)) for number, sender, body in self._events
+            return [(number, copy.deepcopy(body)) for number, sender, body in self._events.values()
                     if number > cursor and (not local_only or sender == 'local')][:128]
+
+    def start_delivery(self, target):
+        """A newly enabled destination starts with the next arriving update."""
+        with self.lock:
+            self._cursors[target] = self._event_serial
+
+    def event_is_pending(self, target, number):
+        with self.lock:
+            return (number > self._cursors.get(target, 0)
+                    and any(event[0] == number for event in self._events.values()))
 
     def acknowledge_event(self, target, number):
         with self.lock:
@@ -287,23 +340,6 @@ class ProgramState:
     def _session_identity(key):
         return 'program:' + hashlib.sha256(json.dumps(list(key)).encode()).hexdigest()
 
-    def acknowledge_session(self, agent_id, seq, updated_at) -> bool:
-        """Locally acknowledge this exact Done update without publishing or resequencing."""
-        if not isinstance(agent_id, str) or type(seq) is not int or seq < 1 or not isinstance(updated_at, str):
-            raise StatusError('Expected a session identity, sequence, and timestamp')
-        with self.lock:
-            for key, update in self._sessions.items():
-                if self._session_identity(key) != agent_id:
-                    continue
-                timestamp = datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc).isoformat()
-                if update['seq'] != seq or timestamp != updated_at or update['status']['state'] != 'done':
-                    return False
-                update['status'] = {k: v for k, v in update['status'].items() if k != 'msg'}
-                update['status']['state'] = 'idle'
-                self._revision += 1
-                return True
-            return False
-
     def statuses(self) -> tuple[AgentStatus, ...]:
         with self.lock:
             rows = copy.deepcopy(self._sessions)
@@ -325,7 +361,8 @@ class ProgramState:
                 updated_at=datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc),
                 event_name=context.get('event_name') or 'ProgramStatus', session_id=context.get('session_id') or identity,
                 cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
-                seq=update['seq']))
+                seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(
+                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote)))
         return tuple(result)
 
     def close(self):

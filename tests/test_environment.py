@@ -136,6 +136,8 @@ class CleanInstallTests(unittest.TestCase):
             "PATH": f"{self.venv / 'bin'}:{os.environ.get('PATH', '')}",
             "HOME": str(self.home),
             "XDG_CONFIG_HOME": str(self.home / ".config"),
+            "XDG_STATE_HOME": str(self.home / ".local/state"),
+            "XDG_DATA_HOME": str(self.home / ".local/share"),
             "SIDEPULSE_DISABLE_EVENT_SOCKET": "1",
             "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         }
@@ -373,7 +375,7 @@ class CleanInstallTests(unittest.TestCase):
     def test_status_bar_start_foreground_gets_past_startup(self):
         """`sidepulse status-bar start --foreground` must not die on imports.
 
-        This is the literal command that failed, run against a clean install.
+        This runs the CLI entry point against a clean install.
         It enters a GUI event loop, so success looks like "still running when
         we kill it"; failure looks like exiting immediately with the PyObjC
         dependency error.
@@ -386,11 +388,22 @@ class CleanInstallTests(unittest.TestCase):
             json.dumps({"setup_screen_completed": True}), encoding="utf-8"
         )
 
+        # launchd labels are per user, not per HOME. Automatic daemon recovery
+        # must never replace the developer's real service with this temporary
+        # installation, whose resources disappear when the test finishes.
+        startup = '''
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from sidepulse.cli import sidepulse_main
+from sidepulse.service_launch import ServiceInstallResult
+sys.argv = ['sidepulse', 'status-bar', 'start', '--foreground']
+with patch('sidepulse.service_launch.install_service', return_value=
+           ServiceInstallResult(Path(), False, False, 'isolated packaging test')):
+    sidepulse_main()
+'''
         process = subprocess.Popen(
-            [
-                str(self.venv / "bin" / "sidepulse"),
-                "status-bar", "start", "--foreground",
-            ],
+            [str(self.python), '-c', textwrap.dedent(startup)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env=self.env(), cwd=str(self.home),
         )

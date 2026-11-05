@@ -53,6 +53,8 @@ class SidePulseService:
             from .program_status import StatusError
             while not self.stop_event.is_set():
                 try:
+                    # Establish destination cursors before accepting the first hook.
+                    self.program_relay.sync(wait=False)
                     self.program_server.start()
                     break
                 except (OSError, StatusError) as exc:
@@ -63,6 +65,12 @@ class SidePulseService:
                 return 0
             self.program_relay.start()
             while not self.stop_event.is_set():
+                if not self.program_server.running:
+                    self.program_server.stop()
+                    try:
+                        self.program_server.start()
+                    except (OSError, StatusError) as exc:
+                        print(f"sidepulse service: status socket recovery failed: {exc}", file=sys.stderr)
                 config = load_relay_config()
                 self.sync_receiver(config)
                 try:

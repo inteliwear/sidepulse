@@ -466,20 +466,19 @@ class MenuBuildTests(StatusBarTestCase):
         self.load_ios_links = link_patcher.start()
         self.addCleanup(link_patcher.stop)
 
-    def test_done_menu_acknowledges_exact_update_through_daemon(self):
+
+    def test_unavailable_daemon_menu_keeps_recovery_settings_and_quit(self):
+        menu = sb.build_error_menu(RuntimeError('offline'), self.controller)
+        actions = {item.title(): str(item.action()) for item in menu.itemArray() if item.action() is not None}
+        self.assertEqual(actions, {'Restart daemon': 'restartDaemon:', 'Settings...': 'openSettings:', 'Quit': 'quit:'})
+
+    def test_session_options_offer_the_daemon_supplied_mobile_link(self):
         from dataclasses import replace
-        done = replace(make_status(mode=AgentMode.COMPLETED), seq=42)
-        menu = sb.build_menu(make_snapshot(statuses=[done]), sb.STATE_DONE, self.controller)
-        item = next(item for item in menu.itemArray() if item.title() == 'Acknowledge Done')
-        self.assertEqual(item.action(), 'acknowledgeSession:')
-        with patch.object(sb, 'daemon_command') as command, \
-                patch.object(sb.StatusBarController, 'close_status_menu'), \
-                patch.object(sb.StatusBarController, 'refresh_'):
-            self.controller.acknowledgeSession_(item)
-        command.assert_called_once_with({'type': 'acknowledge_session', 'agent_id': done.agent_id,
-            'seq': 42, 'updated_at': done.updated_at.isoformat()})
-        menu = sb.build_menu(make_snapshot(statuses=[make_status()]), sb.STATE_WORKING, self.controller)
-        self.assertNotIn('Acknowledge Done', [item.title() for item in menu.itemArray()])
+        status = replace(make_status(), session_link='sidepulse://sessions?publisher=mac&scope=s')
+        menu = sb.build_session_options_menu(status, datetime.now(timezone.utc), self.controller)
+        link = next(item for item in menu.itemArray() if item.title() == 'Copy mobile session link')
+        self.assertEqual(str(link.action()), 'copySessionLink:')
+        self.assertEqual(link.representedObject(), status.session_link)
 
     def test_storage_disabled_dot_is_connected_and_menu_controls_use_usb(self):
         root = Path('/dev/sidepulse-usb/Dot-002-001')

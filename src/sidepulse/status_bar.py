@@ -46,6 +46,8 @@ try:
         NSOnState,
         NSOpenPanel,
         NSPopUpButton,
+        NSPasteboard,
+        NSPasteboardTypeString,
         NSRectFillUsingOperation,
         NSScrollView,
         NSSavePanel,
@@ -581,9 +583,17 @@ class StatusBarController(NSObject):
             self.set_status(STATE_ASK)
             battery_snapshot = self.read_battery_snapshot()
             self.sync_leds(AgentMode.BLOCKED_ERROR, battery_snapshot, LED_DISPLAY_AGENT)
-            self.status_item.setMenu_(build_error_menu(exc))
+            self.status_item.setMenu_(build_error_menu(exc, self))
+            unavailable = isinstance(exc.__cause__, (FileNotFoundError, ConnectionRefusedError))
+            now = time.monotonic()
+            if unavailable:
+                first = getattr(self, 'daemon_unavailable_since', now)
+                self.daemon_unavailable_since = first
+                if now - first >= 5 and now >= getattr(self, 'next_daemon_recovery', 0):
+                    self.restartDaemon_(None)
             return
 
+        self.daemon_unavailable_since = time.monotonic()
         self.last_snapshot = snapshot
         battery_snapshot = self.read_battery_snapshot()
         state = state_for_mode(snapshot.aggregate.mode)
@@ -739,19 +749,6 @@ class StatusBarController(NSObject):
                 height = 0
         menu.popUpMenuPositioningItem_atLocation_inView_(None, (0, height), sender)
 
-    @objc.IBAction
-    def acknowledgeSession_(self, sender):
-        status = sender.representedObject()
-        if not isinstance(status, AgentStatus):
-            return
-        try:
-            daemon_command({'type': 'acknowledge_session', 'agent_id': status.agent_id,
-                            'seq': status.seq, 'updated_at': status.updated_at.isoformat()})
-        except Exception as exc:
-            self.set_settings_message(f"Could not acknowledge session: {exc}")
-            return
-        self.close_status_menu()
-        self.refresh_(None)
 
     @objc.IBAction
     def openSessionWithAction_(self, sender):
@@ -1152,7 +1149,7 @@ class StatusBarController(NSObject):
         if self.tracking_status_menu is not None:
             for item in self.tracking_status_menu.itemArray():
                 status = item.representedObject()
-                if isinstance(status, AgentStatus):
+                if isinstance(status, AgentStatus) and item.action() == "openSessionPrimary:":
                     rows.append((item, status))
         motion = not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
         animated = motion and (
@@ -2582,6 +2579,33 @@ class StatusBarController(NSObject):
         self.device_errors.pop(device_id, None)
         self.last_led_error = None
 
+    @objc.IBAction
+    def copySessionLink_(self, sender):
+        value = sender.representedObject()
+        if not isinstance(value, str) or not value.startswith('sidepulse://sessions?'):
+            return
+        clipboard = NSPasteboard.generalPasteboard()
+        clipboard.clearContents()
+        clipboard.setString_forType_(value, NSPasteboardTypeString)
+
+    @objc.IBAction
+    def restartDaemon_(self, _sender):
+        if getattr(self, 'daemon_recovery_running', False):
+            return
+        self.daemon_recovery_running = True
+        self.next_daemon_recovery = time.monotonic() + 60
+        def recover():
+            try:
+                from .service_launch import install_service
+                result = install_service(start=True)
+                if not result.started:
+                    log_status_bar('Daemon could not be restarted: ' + result.detail)
+            except Exception as exc:
+                log_status_bar(f'Daemon restart failed: {exc}')
+            finally:
+                self.daemon_recovery_running = False
+        threading.Thread(target=recover, daemon=True).start()
+
     def status_bar_devices(self, *, remember: bool = True) -> list[StatusBarDevice]:
         entries_by_id: dict[str, StatusBarDevice] = {}
         try:
@@ -2863,20 +2887,13 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
     else:
         collision_keys = session_title_collision_keys(statuses)
         for status in statuses:
-            menu.addItem_(
-                build_session_menu_item(
-                    status,
-                    snapshot.collected_at,
-                    target,
-                    disambiguate_title=session_title_collision_key(status) in collision_keys,
-                )
+            session_item = build_session_menu_item(
+                status,
+                snapshot.collected_at,
+                target,
+                disambiguate_title=session_title_collision_key(status) in collision_keys,
             )
-            if status.mode == AgentMode.COMPLETED:
-                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Acknowledge Done", "acknowledgeSession:", "")
-                item.setTarget_(target)
-                item.setRepresentedObject_(status)
-                item.setIndentationLevel_(1)
-                menu.addItem_(item)
+            menu.addItem_(session_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Devices"))
@@ -5199,6 +5216,12 @@ def build_session_options_menu(
             target,
             selected=action == selected,
         )
+    if status.session_link:
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Copy mobile session link", "copySessionLink:", "")
+        item.setTarget_(target)
+        item.setRepresentedObject_(status.session_link)
+        menu.addItem_(item)
+
     return menu
 
 
@@ -5556,15 +5579,21 @@ def add_action_item(
     menu.addItem_(item)
 
 
-def build_error_menu(exc: Exception) -> NSMenu:
+def build_error_menu(exc: Exception, target=None) -> NSMenu:
     menu = NSMenu.alloc().init()
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        f"Agent monitor error: {exc}",
+        f"Daemon unavailable: {exc}",
         None,
         "",
     )
     item.setEnabled_(False)
     menu.addItem_(item)
+    if target is not None:
+        menu.addItem_(NSMenuItem.separatorItem())
+        for title, selector, shortcut in [('Restart daemon', 'restartDaemon:', ''), ('Settings...', 'openSettings:', ','), ('Quit', 'quit:', 'q')]:
+            action = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, shortcut)
+            action.setTarget_(target)
+            menu.addItem_(action)
     return menu
 
 

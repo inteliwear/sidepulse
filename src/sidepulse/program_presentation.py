@@ -41,7 +41,7 @@ class DaemonMonitor:
             if row is None:
                 return None
             fields = {key: row.get(key) for key in ('provider', 'agent_id', 'display_name', 'event_name',
-                      'session_id', 'cwd', 'tool_name', 'message', 'origin')}
+                      'session_id', 'cwd', 'tool_name', 'message', 'origin', 'session_link')}
             return AgentStatus(**fields, mode=AgentMode(row['mode']), updated_at=parse_datetime(row['updated_at']),
                                stale=row.get('stale', False), seq=row.get('seq'))
         aggregate = value['aggregate']
