@@ -196,6 +196,9 @@ class ProgramState:
         if report.get('type') != 'program_status':
             raise StatusError('Unsupported message type')
         request = encoded(report)
+        guard_kind = report.get('unless_kind')
+        if 'unless_kind' in report and (not isinstance(guard_kind, str) or guard_kind not in KINDS):
+            raise StatusError('Unknown blocked kind guard')
         receipt = report.get('request_id')
         if receipt is not None:
             identifier(receipt, 'request_id')
@@ -215,6 +218,10 @@ class ProgramState:
             previous = self._sessions.get(key)
             ignored = (report.get('unless_state') == 'done' and previous is not None
                        and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
+            ignored = ignored or (previous is not None
+                and guard_kind is not None
+                and previous['status']['state'] == 'blocked'
+                and previous['status'].get('kind') == guard_kind)
             if ignored:
                 self._expire_done(now)
             else:

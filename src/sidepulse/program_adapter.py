@@ -13,7 +13,8 @@ def clean_text(value: str, limit: int) -> str:
 
 
 def hook_report(provider: str, line: dict) -> dict | None:
-    from .collector import StatusMetadata, status_from_event, title_from_event, codex_session_title
+    from .collector import (StatusMetadata, status_from_event, title_from_event,
+                            codex_session_title, codex_question_tool, explicit_mode_for_record)
     from .providers import parse_log_line
     record = parse_log_line(provider, json.dumps(line, ensure_ascii=False))
     if record is None:
@@ -63,6 +64,12 @@ def hook_report(provider: str, line: dict) -> dict | None:
     result = {**base, 'status': validate_status(status), 'context': context}
     if record.event_name == 'Notification':
         result['unless_state'] = 'done'
+    if (provider == 'codex' and not codex_question_tool(record)
+            and record.event_name not in {'UserPromptSubmit', 'Stop', 'SubagentStop', 'Interrupt', 'SessionEnd', 'SessionStart'}
+            and mode != 'blocked_error' and explicit_mode_for_record(record) is None):
+        # Ordinary tools can continue after an async question is queued. The
+        # daemon atomically preserves an existing question wait for this scope.
+        result['unless_kind'] = 'question'
     return result
 
 

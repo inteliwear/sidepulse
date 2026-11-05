@@ -150,6 +150,9 @@
     "unless_state": {
       "const": "done"
     },
+    "unless_kind": {
+      "enum": ["permission", "question", "auth"]
+    },
     "publisher": {
       "type": "string",
       "minLength": 1,
