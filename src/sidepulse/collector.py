@@ -32,6 +32,7 @@ CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
+JUNIE_SESSION_INDEX_MAX_LINES = 5000
 COMPLETED_VISIBLE_SECONDS = 20 * 60.0
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
@@ -71,8 +72,18 @@ class CachedCodexSessionIndex:
     titles: dict[str, str]
 
 
+@dataclass(frozen=True)
+class CachedJunieSessionIndex:
+    path: Path
+    mtime: int
+    size: int
+    sessions: dict[str, tuple[str | None, str | None]]
+
+
 _codex_session_index_cache: CachedCodexSessionIndex | None = None
 _codex_session_index_lock = threading.RLock()
+_junie_session_index_cache: CachedJunieSessionIndex | None = None
+_junie_session_index_lock = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -1020,6 +1031,8 @@ def update_metadata(metadata: StatusMetadata, record: HookEvent) -> None:
 def is_provider_session_title(record: HookEvent, title: str) -> bool:
     if record.provider == "codex":
         return title == codex_session_title(record.session_id)
+    if record.provider == "junie":
+        return title == junie_session_title(record.session_id)
     return False
 
 
@@ -1339,6 +1352,16 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
                     session_id[:8],
                     display_name,
                 )
+        elif provider == "junie" and session_id:
+            title = junie_session_title(session_id)
+            cwd = junie_session_project_dir(session_id) or cwd
+            if title:
+                display_name = display_name_from_parts(
+                    project_name(cwd),
+                    title,
+                    session_id[:8],
+                    display_name,
+                )
 
         mode = AgentMode(str(data["mode"]))
         updated_at = parse_datetime(data["updated_at"])
@@ -1512,6 +1535,10 @@ def title_from_event(record: HookEvent) -> str | None:
         title = codex_session_title(record.session_id)
         if title:
             return title
+    elif record.provider == "junie":
+        title = junie_session_title(record.session_id)
+        if title:
+            return title
 
     if record.event_name != "UserPromptSubmit":
         return None
@@ -1567,6 +1594,76 @@ def codex_session_titles(path: Path | None = None) -> dict[str, str]:
 
 def codex_session_index_path() -> Path:
     return Path.home() / ".codex" / "session_index.jsonl"
+
+
+def junie_session_index(
+    path: Path | None = None,
+) -> dict[str, tuple[str | None, str | None]]:
+    index_path = path or junie_session_index_path()
+    try:
+        stat = index_path.stat()
+    except OSError:
+        return {}
+
+    with _junie_session_index_lock:
+        global _junie_session_index_cache
+        cached = _junie_session_index_cache
+        if (
+            cached is not None
+            and cached.path == index_path
+            and cached.mtime == stat.st_mtime_ns
+            and cached.size == stat.st_size
+        ):
+            return cached.sessions
+
+        sessions: dict[str, tuple[str | None, str | None]] = {}
+        for line in read_recent_lines(index_path, JUNIE_SESSION_INDEX_MAX_LINES):
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+
+            session_id = _string_or_none(row.get("sessionId") or row.get("session_id"))
+            if not session_id:
+                continue
+            title = _string_or_none(row.get("taskName") or row.get("task_name"))
+            project_dir = _string_or_none(
+                row.get("projectDir")
+                or row.get("project_dir")
+                or row.get("projectPath")
+            )
+            sessions[session_id] = (
+                truncate_text(title.strip(), 72) if title and title.strip() else None,
+                project_dir,
+            )
+
+        _junie_session_index_cache = CachedJunieSessionIndex(
+            path=index_path,
+            mtime=stat.st_mtime_ns,
+            size=stat.st_size,
+            sessions=sessions,
+        )
+        return sessions
+
+
+def junie_session_title(session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    session = junie_session_index().get(session_id)
+    return session[0] if session else None
+
+
+def junie_session_project_dir(session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    session = junie_session_index().get(session_id)
+    return session[1] if session else None
+
+
+def junie_session_index_path() -> Path:
+    return Path.home() / ".junie" / "sessions" / "index.jsonl"
 
 
 def summarize_prompt(value: object, max_len: int = 72) -> str | None:

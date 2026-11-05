@@ -561,6 +561,7 @@ class WindowBuildTests(StatusBarTestCase):
             "codex_session_opener",
             "claude_session_opener",
             "grok_session_opener",
+            "junie_session_opener",
         )
         self.assertEqual(
             {
@@ -570,6 +571,25 @@ class WindowBuildTests(StatusBarTestCase):
             {130.0},
         )
         self.assert_controls_are_wired(window)
+
+    def test_open_junie_session_in_ide_uses_bundle_identifier(self):
+        status = make_status(provider="junie", cwd="/tmp/junie-project")
+        with (
+            patch(
+                "sidepulse.status_bar.session_open_target",
+                return_value=("ide", ("com.jetbrains.intellij", "/tmp/junie-project")),
+            ),
+            patch("sidepulse.status_bar.subprocess.Popen") as popen,
+        ):
+            self.controller.open_session(
+                status,
+                sb.SESSION_OPEN_JETBRAINS,
+                remember=False,
+            )
+
+        popen.assert_called_once_with(
+            ["open", "-b", "com.jetbrains.intellij", "/tmp/junie-project"]
+        )
 
     def test_settings_window_resizes_for_compact_animations_tab(self):
         window = sb.build_settings_window(self.controller)
@@ -1184,13 +1204,25 @@ class PureUiLogicTests(unittest.TestCase):
                 self.assertTrue(sb.terminal_app_menu_label(app))
 
     def test_provider_open_actions_have_labels(self):
-        for provider in ("claude", "codex", "grok"):
+        for provider in ("claude", "codex", "grok", "junie"):
             actions = sb.provider_open_actions(provider)
             self.assertTrue(actions, f"{provider} has no open actions")
             self.assertIn(sb.default_provider_open_action(provider), actions)
             for action in actions:
                 with self.subTest(provider=provider, action=action):
                     self.assertTrue(sb.provider_open_action_label(provider, action))
+
+        self.assertEqual(
+            sb.provider_open_actions("junie"),
+            (sb.SESSION_OPEN_TERMINAL, sb.SESSION_OPEN_JETBRAINS),
+        )
+        self.assertEqual(
+            sb.default_provider_open_action("junie"), sb.SESSION_OPEN_TERMINAL
+        )
+        self.assertEqual(
+            sb.provider_open_action_label("junie", sb.SESSION_OPEN_JETBRAINS),
+            "JetBrains IDE",
+        )
 
     def test_device_name_disambiguation(self):
         # macOS mounts a second volume of the same name as "NAME 1", so both
