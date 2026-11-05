@@ -256,6 +256,9 @@ def test_evidence_receiver_rejects_invalid_requests_and_saves_exact_bytes(tmp_pa
 
     monkeypatch.setattr(collector, "HTTPServer", server_factory)
     monkeypatch.setattr(collector, "MAX_BYTES", 1024)
+    # HTTPServer resolves its name during bind; loopback delivery must not
+    # depend on the CI runner's reverse-DNS service responding promptly.
+    monkeypatch.setattr("socket.getfqdn", lambda host: host)
     with concurrent.futures.ThreadPoolExecutor() as pool:
         result = pool.submit(collector.receive, "127.0.0.1", tmp_path, 10)
         assert ready.wait(3)

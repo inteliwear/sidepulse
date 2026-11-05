@@ -160,6 +160,8 @@ class SetupUpdateTests(unittest.TestCase):
         stubs = self.root / 'stubs'
         stubs.mkdir()
         (stubs / 'uname').write_text('#!/bin/sh\nprintf "Darwin\\n"\n')
+        for name in ('xcode-select', 'xcrun'):
+            (stubs / name).write_text('#!/bin/sh\nexit 0\n')
         launchctl = stubs / 'launchctl'
         launchctl.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''
             import json, os, sys

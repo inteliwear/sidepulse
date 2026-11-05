@@ -121,7 +121,10 @@ def install_codex_package(archive, home):
         names = {m.name for m in members if m.isfile()}
         if not {"bin/codex", "bin/codex-code-mode-host", "codex-package.json"} <= names:
             raise RuntimeError("Incomplete Codex package: CLI and code-mode helper are required")
-        tar.extractall(destination, members=members, filter="data")
+        # Older Python 3.10 builds lack extraction filters. The explicit
+        # checks above still reject links, special files, and escaping paths.
+        options = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        tar.extractall(destination, members=members, **options)
     bindir = home / ".local/bin"
     bindir.mkdir(parents=True, exist_ok=True)
     for name in ("codex", "codex-code-mode-host"):
