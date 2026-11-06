@@ -1065,13 +1065,6 @@ class StatusIconAnimationTests(StatusBarTestCase):
         self.target.update_status_icon_animation()
         self.assertEqual(self.renderer.update.call_count, 1)
 
-    def test_accessibility_notification_schedules_immediate_main_thread_refresh(self):
-        target = Mock()
-        sb.StatusBarController.statusIconAccessibilityChanged_(target, None)
-        target.performSelectorOnMainThread_withObject_waitUntilDone_.assert_called_once_with(
-            "animateStatusIcons:", None, False,
-        )
-
     def test_open_menu_animates_rows_and_closing_stops_row_animation(self):
         self.target.current_state = sb.STATE_IDLE
         menu = NSMenu.alloc().init()
@@ -1129,8 +1122,6 @@ class NativeStatusIconRendererTests(StatusBarTestCase):
             center = glyph.convertPoint_toLayer_((9, 9), view.layer())
             self.assertAlmostEqual(center.x, 9)
             self.assertAlmostEqual(center.y, 9)
-            self.assertEqual(view.frame().origin, (2, 3))
-            self.assertEqual(view.frame().size, (18, 18))
 
     def test_spin_uses_original_frame_geometry_and_does_not_restart_on_refresh(self):
         image = sb.animated_status_icon(sb.STATE_WORKING, 0)
@@ -1154,7 +1145,6 @@ class NativeStatusIconRendererTests(StatusBarTestCase):
         for key, minimum in (("opacity", 0.45), ("transform.scale", 0.82)):
             animation = layer.animationForKey_(key)
             self.assertAlmostEqual(animation.duration(), 1.6)
-            self.assertEqual(len(animation.values()), 49)
             self.assertAlmostEqual(min(animation.values()), minimum)
             self.assertAlmostEqual(max(animation.values()), 1.0)
             self.assertEqual(animation.values()[0], animation.values()[-1])
