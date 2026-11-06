@@ -126,8 +126,10 @@ from sidepulse.session_actions import (
     SESSION_OPEN_APP,
     SESSION_OPEN_TERMINAL,
     SESSION_OPEN_VSCODE,
+    available_session_open_actions,
     default_session_open_action,
     session_deep_link,
+    session_open_action_label,
     session_open_target,
     session_resume_command,
     session_vscode_link,
@@ -8097,6 +8099,71 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
         )
+
+    def test_tern_hosted_sessions_open_in_tern(self) -> None:
+        """A session reported from a Tern window opens Tern; providers with a deep link keep it."""
+
+        def status_for(provider: str, origin: str | None) -> AgentStatus:
+            return AgentStatus(
+                provider=provider,
+                agent_id=f"{provider}:session:abc",
+                display_name=f"{provider} abc",
+                mode=AgentMode.WORKING,
+                updated_at=datetime.now(timezone.utc),
+                event_name="UserPromptSubmit",
+                session_id="1ca4348e-2aec-4147-9e81-d7d56364d257",
+                cwd="/Users/pero/pgit/example",
+                origin=origin,
+            )
+
+        omp = status_for("omp", "Tern")
+        self.assertEqual(available_session_open_actions(omp), (SESSION_OPEN_APP,))
+        self.assertEqual(default_session_open_action(omp), SESSION_OPEN_APP)
+        self.assertEqual(session_open_target(omp, SESSION_OPEN_APP), ("app", "Tern"))
+        self.assertEqual(session_open_action_label(omp, SESSION_OPEN_APP), "Open in Tern")
+
+        codex = status_for("codex", "Tern")
+        self.assertEqual(
+            session_open_target(codex, SESSION_OPEN_APP),
+            ("url", "codex://threads/1ca4348e-2aec-4147-9e81-d7d56364d257"),
+        )
+        self.assertEqual(session_open_action_label(codex, SESSION_OPEN_APP), "Open in Codex")
+
+        for origin in (None, "Terminal", "internal tool"):
+            with self.subTest(origin=origin):
+                unhosted = status_for("omp", origin)
+                self.assertEqual(available_session_open_actions(unhosted), ())
+                self.assertIsNone(session_open_target(unhosted, SESSION_OPEN_APP))
+                self.assertEqual(session_open_action_label(unhosted, SESSION_OPEN_APP), "Open App")
+
+    def test_status_bar_opens_tern_for_tern_hosted_sessions(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        status = AgentStatus(
+            provider="omp",
+            agent_id="omp:session:abc",
+            display_name="omp abc",
+            mode=AgentMode.WAITING_FOR_INPUT,
+            updated_at=datetime.now(timezone.utc),
+            event_name="PermissionRequest",
+            session_id="tern-sidepulse:0b7a1d2e",
+            cwd=None,
+            origin="Tern",
+        )
+        fake = SimpleNamespace(
+            settings=AgentMonitorSettings(),
+            set_settings_message=lambda message: None,
+        )
+        with patch("sidepulse.status_bar.open_application") as open_application:
+            status_bar.StatusBarController.open_session(fake, status, None, remember=False)
+        open_application.assert_called_once_with("Tern")
+
+        with patch("sidepulse.status_bar.subprocess.Popen") as popen:
+            status_bar.open_application("Tern")
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/open", "-a", "Tern"])
 
 
 if __name__ == "__main__":
