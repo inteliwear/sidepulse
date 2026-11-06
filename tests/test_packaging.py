@@ -301,6 +301,7 @@ class ModuleImportSmokeTests(unittest.TestCase):
     def test_every_module_imports(self):
         darwin_only = {
             "sidepulse.status_bar",
+            "sidepulse.status_icon",
             "sidepulse.virtual_device",
             "sidepulse.led_wasm",
         }
