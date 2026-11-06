@@ -47,6 +47,8 @@ from sidepulse.collector import (
     MonitorSnapshot,
     SourceSpec,
     default_sources,
+    display_name_from_parts,
+    project_name,
 )
 from sidepulse.cli import build_sidepulse_parser, visible_statuses
 from sidepulse.device_writer import (
@@ -8097,6 +8099,47 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
         )
+
+    def test_project_name_skips_the_temp_directory_itself(self) -> None:
+        """A session whose cwd is $TMPDIR (basename "T" on macOS) has no project to show."""
+        temp_root = Path(tempfile.gettempdir())
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            checkout = scratch / "sidepulse"
+            (checkout / ".git").mkdir(parents=True)
+
+            self.assertIsNone(project_name(str(temp_root)))
+            self.assertIsNone(project_name(str(temp_root.resolve())))
+            self.assertIsNone(project_name("/tmp"))
+            self.assertEqual(project_name(str(scratch)), scratch.name)
+            self.assertEqual(project_name(str(checkout)), "sidepulse")
+            self.assertEqual(project_name(str(checkout / "src")), "sidepulse")
+        self.assertEqual(project_name("/tmp/project"), "project")
+        self.assertEqual(project_name("/Users/pero/pgit/example"), "example")
+        self.assertIsNone(project_name(None))
+
+    def test_status_bar_menu_title_has_no_project_for_temp_directory_sessions(self) -> None:
+        try:
+            from sidepulse import status_bar
+        except SystemExit as exc:
+            self.skipTest(str(exc))
+
+        cwd = tempfile.gettempdir()
+        status = AgentStatus(
+            provider="claude",
+            agent_id="claude:session:abc",
+            display_name=display_name_from_parts(
+                project_name(cwd), "fix the flaky test", "1ca4348e", "Claude 1ca4348e"
+            ),
+            mode=AgentMode.WORKING,
+            updated_at=datetime.now(timezone.utc),
+            event_name="UserPromptSubmit",
+            session_id="1ca4348e-2aec-4147-9e81-d7d56364d257",
+            cwd=cwd,
+        )
+
+        self.assertEqual(status.display_name, "fix the flaky test (1ca4348e)")
+        self.assertEqual(status_bar.native_session_menu_title(status), "fix the flaky test")
 
 
 if __name__ == "__main__":
