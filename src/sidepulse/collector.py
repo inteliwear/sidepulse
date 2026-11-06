@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -1642,7 +1644,19 @@ def project_name(cwd: str | None) -> str | None:
     for candidate in (path, *path.parents):
         if (candidate / ".git").exists():
             return candidate.name or str(candidate)
+    if is_temp_root(path):
+        return None
     return path.name or cwd
+
+
+def is_temp_root(path: Path) -> bool:
+    """The temp directory itself names no project.
+
+    macOS puts ``$TMPDIR`` at ``/var/folders/.../T``, so a session started there would be
+    labelled "T". Directories under it keep their own names.
+    """
+    resolved = os.path.realpath(path)
+    return any(resolved == os.path.realpath(root) for root in (tempfile.gettempdir(), "/tmp", "/var/tmp"))
 
 
 def truncate_text(text: str, max_len: int) -> str:
