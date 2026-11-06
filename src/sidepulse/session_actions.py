@@ -13,6 +13,8 @@ SESSION_OPEN_CHOICES = (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VS
 SESSION_OPEN_APP_SURFACES = ("app", "ui", "transcript")
 SESSION_OPEN_TERMINAL_SURFACES = ("cli", "terminal", "command line")
 SESSION_OPEN_VSCODE_SURFACES = ("vscode", "vs code", "visual studio code")
+# Origin words naming a host application the menu can bring forward with ``open -a``.
+SESSION_OPEN_ORIGIN_APPS = {"tern": "Tern"}
 
 
 def session_deep_link(status: AgentStatus) -> str | None:
@@ -64,6 +66,8 @@ def default_session_open_action(status: AgentStatus) -> str:
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     origin = normalized_origin(status.origin)
     if origin:
+        if session_origin_app(status):
+            return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
         if any(surface in origin for surface in SESSION_OPEN_VSCODE_SURFACES):
             return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
         if any(surface in origin for surface in SESSION_OPEN_TERMINAL_SURFACES):
@@ -82,10 +86,22 @@ def normalized_origin(origin: str | None) -> str:
     return " ".join(str(origin or "").strip().lower().replace("-", " ").split())
 
 
+def session_origin_app(status: AgentStatus) -> str | None:
+    """The host application named by the session's origin, when the menu can open it."""
+    for word in normalized_origin(status.origin).split():
+        app = SESSION_OPEN_ORIGIN_APPS.get(word)
+        if app:
+            return app
+    return None
+
+
 def session_open_target(status: AgentStatus, action: str) -> tuple[str, str] | None:
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
-        return ("url", url) if url else None
+        if url:
+            return ("url", url)
+        app = session_origin_app(status)
+        return ("app", app) if app else None
     if action == SESSION_OPEN_VSCODE:
         url = session_vscode_link(status)
         return ("url", url) if url else None
@@ -106,6 +122,9 @@ def session_open_action_label(status: AgentStatus, action: str) -> str:
             return "Open in Codex"
         if provider == "claude":
             return "Open Claude App"
+        app = session_origin_app(status)
+        if app:
+            return f"Open in {app}"
         return "Open App"
     if action == SESSION_OPEN_VSCODE:
         return "Open in VS Code"
