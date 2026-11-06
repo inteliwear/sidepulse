@@ -2159,6 +2159,8 @@ class StatusBarController(NSObject):
         kind, value = target
         if kind == "url":
             open_url(value)
+        elif kind == "app":
+            open_application(value)
         elif kind == "terminal":
             open_terminal_command(
                 value,
@@ -6507,6 +6509,14 @@ def open_url(url: str) -> None:
     ns_url = NSURL.URLWithString_(url)
     if ns_url is not None:
         NSWorkspace.sharedWorkspace().openURL_(ns_url)
+
+
+def open_application(name: str) -> None:
+    subprocess.Popen(
+        ["/usr/bin/open", "-a", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def open_terminal_command(
