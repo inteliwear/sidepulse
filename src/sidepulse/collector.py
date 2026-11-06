@@ -1594,7 +1594,9 @@ def summarize_prompt(value: object, max_len: int = 72) -> str | None:
     )
     text = re.sub(r"(?:~|/Users|/var|/private|/tmp)/[^\s,;)'\"`]+", "...", text)
     text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[\u2500-\u257f]+", " ", text)  # box drawing: a pasted `tree` listing
     text = re.sub(r"#+\s*", " ", text)
+    text = re.sub(r"^\s*user\s*:\s*", "", text, flags=re.IGNORECASE)  # a pasted transcript's role label
     text = re.sub(r"\s+", " ", text).strip(" -:\n\t")
 
     if not text:
