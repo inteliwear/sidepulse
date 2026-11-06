@@ -39,6 +39,7 @@ from sidepulse.collector import (
     MonitorSnapshot,
     SourceSpec,
     default_sources,
+    summarize_prompt,
 )
 from sidepulse.cli import build_parser, visible_watch_statuses
 from sidepulse.device_writer import (
@@ -8329,6 +8330,19 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
                 "vscode://anthropic.claude-code/open?session=1ca4348e-2aec-4147-9e81-d7d56364d257",
             ),
         )
+
+    def test_summarize_prompt_drops_tree_glyphs_and_a_leading_role_label(self) -> None:
+        """A pasted `tree` listing or transcript must not become the session title."""
+        listing = "src\n├── collector.py\n│   └── helpers.py\n└── status_bar.py\nwhy is this slow?"
+        self.assertEqual(
+            summarize_prompt(listing),
+            "src collector.py helpers.py status_bar.py why is this slow?",
+        )
+        self.assertEqual(summarize_prompt("User: fix the flaky test"), "fix the flaky test")
+        self.assertEqual(summarize_prompt("user:fix the flaky test"), "fix the flaky test")
+        self.assertEqual(summarize_prompt("the user: table is empty"), "the user: table is empty")
+        self.assertIsNone(summarize_prompt("User:"))
+        self.assertIsNone(summarize_prompt("├──\n└──"))
 
 
 if __name__ == "__main__":
