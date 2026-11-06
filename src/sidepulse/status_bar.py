@@ -6111,6 +6111,12 @@ def host_icon_for_origin(origin: str | None):
             "wind",
             "Windsurf",
         )
+    elif "tern" in normalized.split():
+        # Whole word only: an origin label containing "internal" or "pattern" is not Tern.
+        image = first_app_icon(("/Applications/Tern.app",)) or image_for_symbol(
+            "rectangle.split.2x1",
+            "Tern",
+        )
     elif any(token in normalized for token in ("cli", "terminal", "command line")):
         image = first_app_icon(
             (
