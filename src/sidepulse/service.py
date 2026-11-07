@@ -142,6 +142,7 @@ class SidePulseService:
         if status_bar_monitor_available():
             return
         settings = load_settings()
+        self.monitor.completed_visible_seconds = settings.completed_visible_seconds
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
         battery = None

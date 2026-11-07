@@ -20,7 +20,7 @@ from .models import (
 )
 from .origin import origin_label_from_payload
 from .providers import detect_log_path, parse_log_line
-from .settings import AgentMonitorSettings, load_settings
+from .settings import DEFAULT_COMPLETED_VISIBLE_SECONDS, AgentMonitorSettings, load_settings
 
 
 CODEX_TRANSCRIPT_PROVIDER = "codex-transcripts"
@@ -32,7 +32,7 @@ CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
 CLAUDE_TRANSCRIPT_MTIME_HEARTBEAT_SKEW_SECONDS = 30.0
 CODEX_SESSION_INDEX_MAX_LINES = 5000
-COMPLETED_VISIBLE_SECONDS = 20 * 60.0
+COMPLETED_VISIBLE_SECONDS = DEFAULT_COMPLETED_VISIBLE_SECONDS
 IDLE_VISIBLE_SECONDS = 0.0
 POST_TOOL_WORKING_VISIBLE_SECONDS = 2 * 60.0
 

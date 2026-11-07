@@ -203,6 +203,7 @@ from .settings import (
     AGENT_ANIMATION_PURPLE_TIDE,
     AGENT_ANIMATION_SOLID_GREEN,
     AGENT_ANIMATION_BUILT_IN_PROFILE_IDS,
+    DEFAULT_COMPLETED_VISIBLE_SECONDS,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_HISTORY_TIMEFRAME_SECONDS,
     DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
@@ -1232,6 +1233,7 @@ class StatusBarController(NSObject):
             sources=(SourceSpec("event-bus", socket_path),),
             recovery_sources=default_sources(self.settings),
             stale_after_seconds=self.settings.idle_timeout_seconds,
+            completed_visible_seconds=self.settings.completed_visible_seconds,
             latest_state_path=default_latest_state_path(),
         )
 
@@ -1636,6 +1638,10 @@ class StatusBarController(NSObject):
             f"{self.settings.recent_session_retention_seconds / 3600:g}",
         )
         set_text_control_value(
+            self.settings_fields.get("completed_visible_seconds"),
+            f"{self.settings.completed_visible_seconds:g}",
+        )
+        set_text_control_value(
             self.settings_fields.get("idle_timeout_minutes"),
             f"{self.settings.idle_timeout_seconds / 60:g}",
         )
@@ -1795,6 +1801,7 @@ class StatusBarController(NSObject):
         retention_text = text_control_value(
             self.settings_fields.get("recent_session_retention_hours")
         )
+        completed_text = text_control_value(self.settings_fields.get("completed_visible_seconds"))
         idle_text = text_control_value(self.settings_fields.get("idle_timeout_minutes"))
         battery_text = text_control_value(
             self.settings_fields.get("sleep_prevention_min_battery_percent")
@@ -1806,6 +1813,7 @@ class StatusBarController(NSObject):
             idle_minutes = float(idle_text) if idle_text else (
                 DEFAULT_IDLE_TIMEOUT_SECONDS / 60
             )
+            completed_seconds = float(completed_text) if completed_text else DEFAULT_COMPLETED_VISIBLE_SECONDS
             min_battery_percent = float(battery_text) if battery_text else (
                 DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
             )
@@ -1813,7 +1821,8 @@ class StatusBarController(NSObject):
             self.set_settings_message("Advanced settings must be numeric.")
             return
 
-        if not all(math.isfinite(value) for value in (retention_hours * 3600, idle_minutes * 60, min_battery_percent)):
+        values = (retention_hours * 3600, idle_minutes * 60, completed_seconds, min_battery_percent)
+        if not all(math.isfinite(value) for value in values):
             self.set_settings_message("Advanced settings must be finite numbers.")
             return
 
@@ -1821,6 +1830,7 @@ class StatusBarController(NSObject):
             settings = self.settings.with_agent_list_timing(
                 recent_session_retention_seconds=retention_hours * 3600,
                 idle_timeout_seconds=idle_minutes * 60,
+                completed_visible_seconds=completed_seconds,
             )
             settings = settings.with_sleep_prevention_battery_safeguard(
                 min_battery_percent
@@ -4880,12 +4890,15 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "Idle timeout", 32, 316, 120, 22)
     idle_minutes = add_editable_field(behavior_tab, "", 224, 314, 58, 24)
     add_label(behavior_tab, "minutes", 292, 316, 80, 22)
-    add_separator(behavior_tab, 24, 272, tab_width - 48)
+    add_label(behavior_tab, "Show Done for", 32, 280, 180, 22)
+    completed_seconds = add_editable_field(behavior_tab, "", 224, 278, 58, 24)
+    add_label(behavior_tab, "seconds", 292, 280, 80, 22)
+    add_separator(behavior_tab, 24, 266, tab_width - 48)
     add_label(behavior_tab, "Sleep Prevention", 24, 238, 240, 24)
     add_label(behavior_tab, "Let Mac sleep on battery below", 32, 196, 210, 22)
     min_battery_percent = add_editable_field(behavior_tab, "", 260, 194, 58, 24)
     add_label(behavior_tab, "%", 328, 196, 24, 22)
-    for field in (retention_hours, idle_minutes, min_battery_percent):
+    for field in (retention_hours, idle_minutes, completed_seconds, min_battery_percent):
         field.setTarget_(target)
         field.setAction_("saveAgentListTiming:")
         field.cell().setSendsActionOnEndEditing_(True)
@@ -4967,6 +4980,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "custom_terminal_path": custom_terminal_path,
         "recent_session_retention_hours": retention_hours,
         "idle_timeout_minutes": idle_minutes,
+        "completed_visible_seconds": completed_seconds,
         "sleep_prevention_min_battery_percent": min_battery_percent,
         "status_history_timeframe": history_timeframe,
         "status_history_status": history_status,
