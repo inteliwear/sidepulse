@@ -179,6 +179,7 @@ DEFAULT_LID_OPEN_ANIMATION_PROGRAM = "\n".join(
 DEFAULT_LID_CLOSED_ANIMATION_SECONDS = 1.3
 DEFAULT_LID_OPEN_ANIMATION_SECONDS = 1.0
 DEFAULT_RECENT_SESSION_RETENTION_SECONDS = 48 * 60 * 60
+DEFAULT_COMPLETED_VISIBLE_SECONDS = 20 * 60.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 60 * 60
 DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT = 20.0
 HISTORY_TIMEFRAME_1H_SECONDS = 60 * 60
@@ -332,6 +333,7 @@ class AgentMonitorSettings:
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
     show_menu_bar_icon: bool = True
+    completed_visible_seconds: float = DEFAULT_COMPLETED_VISIBLE_SECONDS
 
     def transcript_enabled(self, provider: str) -> bool:
         if provider == "codex":
@@ -779,15 +781,20 @@ class AgentMonitorSettings:
         *,
         recent_session_retention_seconds: float | None = None,
         idle_timeout_seconds: float | None = None,
+        completed_visible_seconds: float | None = None,
     ) -> "AgentMonitorSettings":
         retention = self.recent_session_retention_seconds
         idle_timeout = self.idle_timeout_seconds
+        completed_visible = self.completed_visible_seconds
         if recent_session_retention_seconds is not None:
             retention = normalize_seconds_setting(recent_session_retention_seconds)
         if idle_timeout_seconds is not None:
             idle_timeout = normalize_seconds_setting(idle_timeout_seconds)
+        if completed_visible_seconds is not None:
+            completed_visible = normalize_seconds_setting(completed_visible_seconds)
         return replace(
             self,
+            completed_visible_seconds=completed_visible,
             recent_session_retention_seconds=retention,
             idle_timeout_seconds=idle_timeout,
         )
@@ -829,6 +836,7 @@ class AgentMonitorSettings:
             "agent_list": {
                 "recent_session_retention_seconds": self.recent_session_retention_seconds,
                 "idle_timeout_seconds": self.idle_timeout_seconds,
+                "completed_visible_seconds": self.completed_visible_seconds,
             },
             "sleep_prevention": {
                 "min_battery_percent": self.sleep_prevention_min_battery_percent,
@@ -994,6 +1002,9 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
                 data.get("recent_session_retention_seconds"),
             ),
             DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
+        ),
+        completed_visible_seconds=_nonnegative_float_setting(
+            agent_list.get("completed_visible_seconds"), DEFAULT_COMPLETED_VISIBLE_SECONDS,
         ),
         idle_timeout_seconds=_nonnegative_float_setting(
             agent_list.get("idle_timeout_seconds", data.get("idle_timeout_seconds")),

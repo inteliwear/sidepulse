@@ -252,6 +252,7 @@ class AdvancedAutosaveTests(StatusBarTestCase):
         for key, value in (
             ("recent_session_retention_hours", "48"),
             ("idle_timeout_minutes", "60"),
+            ("completed_visible_seconds", "1200"),
             ("sleep_prevention_min_battery_percent", "20"),
         ):
             self.target.settings_fields[key].setStringValue_(value)
@@ -276,12 +277,13 @@ class AdvancedAutosaveTests(StatusBarTestCase):
         for key, value, attribute, expected in (
             ("recent_session_retention_hours", "24", "recent_session_retention_seconds", 86400),
             ("idle_timeout_minutes", "15", "idle_timeout_seconds", 900),
+            ("completed_visible_seconds", "15", "completed_visible_seconds", 15),
             ("sleep_prevention_min_battery_percent", "30", "sleep_prevention_min_battery_percent", 30),
         ):
             self.edit(key, value)
             self.window.makeFirstResponder_(None)
             self.assertEqual(getattr(self.saved[-1], attribute), expected)
-        self.assertEqual(len(self.saved), 3)
+        self.assertEqual(len(self.saved), 4)
 
     def test_switching_tabs_commits_the_active_field(self):
         self.edit("idle_timeout_minutes", "10")

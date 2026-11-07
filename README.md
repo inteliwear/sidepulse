@@ -635,11 +635,11 @@ writes the response, then treats it as Done if no newer hook event arrives. This
 prevents a missed final `Stop` event from leaving the status bar stuck on
 Working.
 
-`Completed` remains visible for 20 minutes so the status bar and LEDs can show
-Done long enough to be noticed. After that it drops out instead of counting as
-an active session for the full stale window, and the LEDs return to the very
-dim Idle pattern. Idle/session-start records also do not count as active
-sessions.
+Choose how long the status bar and LEDs show Done in **Settings → Advanced →
+Show Done for**. The default is 1,200 seconds (20 minutes). For a short
+confirmation, enter 15 seconds. Once the duration expires, the next refresh
+returns the display to Idle if no other session needs attention. Recent session
+history has its own retention setting.
 
 Status detection is strongest when the agent tells the monitor its intended
 handoff state explicitly. A final assistant message can include a hidden marker

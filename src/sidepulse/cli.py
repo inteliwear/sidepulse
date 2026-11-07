@@ -1493,8 +1493,9 @@ def cmd_hook_log(args: argparse.Namespace) -> int:
 
 
 def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:
+    settings = load_settings()
     if any(getattr(args, f"{provider}_log", None) for provider in HOOK_PROVIDERS):
-        fallback_sources = default_sources()
+        fallback_sources = default_sources(settings)
         sources = []
         for provider in HOOK_PROVIDERS:
             explicit = getattr(args, f"{provider}_log", None)
@@ -1503,11 +1504,12 @@ def monitor_from_args(args: argparse.Namespace) -> AgentMonitor:
             else:
                 sources.extend(source for source in fallback_sources if source.provider == provider)
     else:
-        sources = list(default_sources())
+        sources = list(default_sources(settings))
 
     return AgentMonitor(
         sources=sources,
         stale_after_seconds=args.stale_after,
+        completed_visible_seconds=settings.completed_visible_seconds,
         tool_running_timeout_seconds=args.tool_running_timeout,
         max_lines_per_source=args.max_lines,
     )
