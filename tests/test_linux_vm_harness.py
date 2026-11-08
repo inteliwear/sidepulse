@@ -72,6 +72,24 @@ def test_fresh_refuses_existing_install_without_invoking_setup(tmp_path, monkeyp
         guest.install('fresh')
 
 
+def test_migration_seed_updates_the_real_settings_file_and_preserves_other_preferences(tmp_path, monkeypatch):
+    from sidepulse.settings import AgentMonitorSettings, default_settings_path, load_settings, save_settings
+    home = tmp_path / 'home'
+    for directory in ('.claude', '.codex'):
+        (home / directory).mkdir(parents=True)
+    (home / '.claude/settings.json').write_text('{"env":{"KEEP":"yes"}}')
+    (home / '.codex/config.toml').write_text('model = "test"\n')
+    settings = default_settings_path(home)
+    save_settings(AgentMonitorSettings(idle_timeout_seconds=17, show_menu_bar_icon=False), settings)
+    monkeypatch.setattr(guest, 'HOME_DIR', home)
+    guest.seed_migration()
+    actual = load_settings(settings)
+    assert actual.idle_timeout_seconds == 321
+    assert actual.show_menu_bar_icon is False
+    assert json.loads((home / '.claude/settings.json').read_text())['env']['KEEP'] == 'yes'
+    assert not (home / '.config/sidepulse/settings.json').exists()
+
+
 def test_installed_source_mismatch_fails_even_when_version_matches(tmp_path, monkeypatch):
     package = tmp_path / 'installed/sidepulse'
     package.mkdir(parents=True)

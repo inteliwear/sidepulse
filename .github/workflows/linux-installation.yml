@@ -35,6 +35,11 @@ jobs:
           cat /proc/sys/kernel/random/uuid | sudo tee /etc/sidepulse-test-vm >/dev/null
           sudo loginctl enable-linger test
           sudo systemctl start "user@$(id -u test).service"
+          test_uid=$(id -u test)
+          sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+            systemctl --user set-environment XDG_CONFIG_HOME=/home/test/.config \
+            XDG_STATE_HOME=/home/test/.local/state XDG_DATA_HOME=/home/test/.local/share
           python3 scripts/linux-vm/host.py bundle --output "$RUNNER_TEMP/sidepulse-input"
           sudo -iu test mkdir /home/test/sidepulse-source
           sudo install -o test -g test -m 600 "$RUNNER_TEMP/sidepulse-input/source.tar.gz" /home/test/sidepulse-source.tar.gz
@@ -48,6 +53,8 @@ jobs:
           run_guest() {
             sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
               DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              XDG_CONFIG_HOME=/home/test/.config XDG_STATE_HOME=/home/test/.local/state \
+              XDG_DATA_HOME=/home/test/.local/share \
               python3 /home/test/sidepulse-source/scripts/linux-vm/guest.py "$@"
           }
           if [ "$INSTALL_PATH" = fresh ]; then

@@ -46,8 +46,9 @@ def capture(argv):
 
 
 def installation_state():
+    from sidepulse.settings import default_settings_path
     paths = [HOME_DIR / '.claude/settings.json', HOME_DIR / '.codex/config.toml',
-             HOME_DIR / '.config/sidepulse/settings.json']
+             default_settings_path(HOME_DIR)]
     return {'python': str(PYTHON.resolve()), 'python_version': capture([PYTHON, '--version']),
             'version': capture([HOME_DIR / '.local/bin/sidepulse', '--version']),
             'service_pid': capture(['systemctl', '--user', 'show', '-p', 'MainPID', '--value', 'sidepulse']),
@@ -56,6 +57,8 @@ def installation_state():
 
 
 def seed_migration():
+    from dataclasses import replace
+    from sidepulse.settings import default_settings_path, load_settings, save_settings
     # Only disposable test-user configs; preserve the existing managed hooks.
     claude = HOME_DIR / '.claude/settings.json'
     data = json.loads(claude.read_text())
@@ -66,11 +69,8 @@ def seed_migration():
     codex = HOME_DIR / '.codex/config.toml'
     with codex.open('a') as stream:
         stream.write('\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "printf unrelated-linux-hook >&2"\n')
-    settings = HOME_DIR / '.config/sidepulse/settings.json'
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    data = json.loads(settings.read_text()) if settings.exists() else {}
-    data['idle_timeout_seconds'] = 321
-    settings.write_text(json.dumps(data, indent=2) + '\n')
+    settings = default_settings_path(HOME_DIR)
+    save_settings(replace(load_settings(settings), idle_timeout_seconds=321), settings)
 
 
 class LinuxHarness(common.Harness):
@@ -188,7 +188,8 @@ class LinuxHarness(common.Harness):
         if self.stage != 'reboot':
             assert before['service_pid'] != after['service_pid'], 'Upgrade did not restart the real service'
         assert json.loads(after['configs']['.claude/settings.json'])['env']['SIDEPULSE_MIGRATION_TEST'] == 'preserve-me'
-        assert json.loads(after['configs']['.config/sidepulse/settings.json'])['idle_timeout_seconds'] == 321
+        from sidepulse.settings import default_settings_path, load_settings
+        assert load_settings(default_settings_path(HOME_DIR)).idle_timeout_seconds == 321
         for provider, name in [('claude', '.claude/settings.json'), ('codex', '.codex/config.toml')]:
             assert after['configs'][name].count('printf unrelated-linux-hook >&2') == 1
             assert set(dict(common.EVENTS)) <= set(common.installed_commands(provider, HOME_DIR))
