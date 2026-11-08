@@ -4,22 +4,18 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
-import pty
 import select
 import shutil
 import signal
 import subprocess
 import sys
-import termios
 import threading
 import time
-import tty
 import uuid
 
 MODES = ("idle_ready", "working", "tool_running", "waiting_for_input", "blocked_error", "completed")
@@ -146,6 +142,11 @@ class Capture:
 
 def interactive(argv, cwd, output, capture, seconds):
     """Transparent PTY: retain the real TUI and default permission prompts."""
+    import fcntl
+    import pty
+    import termios
+    import tty
+
     original = termios.tcgetattr(sys.stdin.fileno())
     child, master = pty.fork()
     if child == 0:

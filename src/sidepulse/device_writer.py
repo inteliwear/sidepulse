@@ -101,11 +101,15 @@ def write_normalized_led_program(
 @contextmanager
 def device_write_lock(root: Path):
     """Serialize this app's file/USB/read-channel writers across threads and processes."""
-    import fcntl
-
-    key = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()
+    key = hashlib.sha256(os.fsencode(os.path.normcase(str(root.resolve())))).hexdigest()
     directory = Path.home() / ".cache" / "sidepulse" / "device-locks"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == 'nt':
+        from .windows_support import file_lock
+        with _WRITE_LOCK, file_lock(directory / key):
+            yield
+        return
+    import fcntl
     with _WRITE_LOCK, (directory / key).open("a") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
@@ -125,7 +129,7 @@ def write_text_synced(target: Path, text: str) -> None:
 
     is_new = not path_exists(target)
     try:
-        handle = target.open("w", encoding="utf-8")
+        handle = target.open("w", encoding="utf-8", newline="\n")
     except OSError as exc:
         if exc.errno not in (errno.EROFS, errno.EACCES, errno.EPERM):
             raise

@@ -30,7 +30,7 @@ def test_mac_recovers_registered_service_without_rewriting_launcher(tmp_path, lo
     if not loaded:
         replies.append(SimpleNamespace(returncode=0, stderr=''))
     with patch('sidepulse.service_launch.sys.platform', 'darwin'), patch.object(Path, 'home', return_value=tmp_path), \
-         patch('sidepulse.service_launch.os.getuid', return_value=42), \
+         patch('sidepulse.service_launch.os.getuid', return_value=42, create=True), \
          patch('sidepulse.service_launch.subprocess.run', side_effect=replies) as run, \
          patch('sidepulse.service_launch.build_service_launcher_script') as generate:
         result = restart_service()

@@ -1,10 +1,10 @@
 """Opt-in integration tests; all servers and credentials are local and ephemeral.
 SIDEPULSE_BRIDGE_BINARY=/path/to/sidepulse-bridge
 """
+import os
 import contextlib
 import copy
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -190,7 +190,7 @@ def test_osc_cli_daemon_existing_bridge_receiver_ui(tmp_path):
     publisher = ProgramState()
     receiver = ProgramState()
     try:
-        with bridge() as server, tempfile.TemporaryDirectory(prefix='osc-', dir='/tmp') as directory:
+        with bridge() as server, tempfile.TemporaryDirectory(prefix='osc-', dir=None if os.name == 'nt' else '/tmp') as directory:
             path = Path(directory) / 'status.sock'
             daemon = ProgramServer(publisher, path); daemon.start()
             try:

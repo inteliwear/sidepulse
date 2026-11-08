@@ -98,7 +98,8 @@ class CleanInstallTests(unittest.TestCase):
             cls._tmp.cleanup()
             raise unittest.SkipTest(f"could not create virtualenv: {create.stderr}")
 
-        cls.python = cls.venv / "bin" / "python"
+        cls.bin = cls.venv / ("Scripts" if os.name == "nt" else "bin")
+        cls.python = cls.bin / ("python.exe" if os.name == "nt" else "python")
         cls.install_spec = install_spec()
 
         install = subprocess.run(
@@ -133,8 +134,10 @@ class CleanInstallTests(unittest.TestCase):
     def env(self) -> dict:
         """A minimal environment: no PYTHONPATH leaking the source tree in."""
         env = {
-            "PATH": f"{self.venv / 'bin'}:{os.environ.get('PATH', '')}",
+            "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
             "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            **{key: value for key, value in os.environ.items() if key in ("SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP")},
             "XDG_CONFIG_HOME": str(self.home / ".config"),
             "XDG_STATE_HOME": str(self.home / ".local/state"),
             "XDG_DATA_HOME": str(self.home / ".local/share"),
@@ -157,7 +160,7 @@ class CleanInstallTests(unittest.TestCase):
 
     def run_script(self, name: str, args: list[str], **kwargs):
         return subprocess.run(
-            [str(self.venv / "bin" / name), *args],
+            [str(self.bin / (name + ".exe" if os.name == "nt" else name)), *args],
             capture_output=True, text=True, timeout=300,
             env=self.env(), cwd=str(self.home), **kwargs,
         )
@@ -272,13 +275,13 @@ class CleanInstallTests(unittest.TestCase):
         for name in expected:
             with self.subTest(script=name):
                 self.assertTrue(
-                    (self.venv / "bin" / name).exists(),
+                    (self.bin / (name + ".exe" if os.name == "nt" else name)).exists(),
                     f"console script {name} was not installed",
                 )
 
     def test_legacy_console_scripts_are_not_installed(self):
         for name in ("agent-monitor", "agent-status-bar"):
-            self.assertFalse((self.venv / "bin" / name).exists())
+            self.assertFalse((self.bin / (name + ".exe" if os.name == "nt" else name)).exists())
 
     def test_console_scripts_run(self):
         for name in ("sidepulse", "sidepulse-reply"):
@@ -328,7 +331,7 @@ class CleanInstallTests(unittest.TestCase):
         log_path = self.home / "hook.jsonl"
         result = subprocess.run(
             [
-                str(self.venv / "bin" / "sidepulse"), "hook-log",
+                str(self.bin / ("sidepulse.exe" if os.name == "nt" else "sidepulse")), "hook-log",
                 "--provider", "claude", "--log", str(log_path),
             ],
             input=json.dumps({"hook_event_name": "Stop", "session_id": "s1"}),

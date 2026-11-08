@@ -67,9 +67,17 @@ class DeviceEvents(FileSystemEventHandler):
             self.watches.clear()
         directories = set()
         for root in self.roots:
-            parent = root
+            # A Windows watch on the root itself dies when the root is
+            # removed. Keep its existing parent armed through recreation.
+            parent = root.parent if sys.platform == 'win32' else root
             while not parent.is_dir() and parent != parent.parent:
                 parent = parent.parent
+            if sys.platform == 'win32':
+                # Keep an already armed ancestor watch when a configured
+                # folder appears. Switching handles can lose arrivals between
+                # registration and the first ReadDirectoryChangesW call.
+                parent = next((watched for watched in self.watches
+                    if watched.is_dir() and (watched == parent or watched in parent.parents)), parent)
             directories.add(parent)
         for directory in self.watches.keys() - directories:
             self.observer.unschedule(self.watches.pop(directory))
@@ -77,9 +85,9 @@ class DeviceEvents(FileSystemEventHandler):
             try:
                 # FSEvents is intrinsically recursive; watchdog 6's shallow
                 # filter drops direct child-directory events too. Filter paths
-                # ourselves on macOS, keeping shallow native watches elsewhere.
+                # ourselves on macOS and Windows, keeping shallow watches on Linux.
                 self.watches[directory] = self.observer.schedule(
-                    self, str(directory), recursive=sys.platform == 'darwin')
+                    self, str(directory), recursive=sys.platform in {'darwin', 'win32'})
             except OSError:
                 # A mount can disappear between notification and registration.
                 # Native removal/arrival events still invalidate discovery.

@@ -46,6 +46,10 @@ def run(argv, *, timeout=60, **kwargs):
 
 
 def installed_commands(provider, home):
+    try:
+        from sidepulse.hook_commands import observer_script
+    except ImportError:  # Public main predates the Windows observer.
+        observer_script = lambda command: command
     path = home / (".claude/settings.json" if provider == "claude" else ".codex/config.toml")
     data = json.loads(path.read_text()) if provider == "claude" else tomllib.loads(path.read_text())
     result = {}
@@ -55,7 +59,7 @@ def installed_commands(provider, home):
         if not isinstance(entries, list):
             continue
         commands = [hook["command"] for entry in entries for hook in entry.get("hooks", [])
-                    if hook.get("type") == "command" and "sidepulse" in hook.get("command", "")]
+                    if hook.get("type") == "command" and "sidepulse" in observer_script(hook.get("command", ""))]
         if commands:
             if len(commands) != 1:
                 raise AssertionError(f"Duplicate {provider}/{event} hooks: {len(commands)}")

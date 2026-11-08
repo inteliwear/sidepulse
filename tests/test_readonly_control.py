@@ -143,6 +143,7 @@ def test_mac_missing_wrong_or_ambiguous_device_is_refused(volume, tree):
         readonly.usb_address_for_volume(volume)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX device major/minor IDs")
 def test_linux_mount_maps_through_sysfs(volume):
     sysroot = volume / "sys"
     usbroot = sysroot / "usb-device"

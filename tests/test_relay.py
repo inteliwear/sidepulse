@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from privacy import assert_private_file
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -36,7 +37,7 @@ class RelayConfigTests(unittest.TestCase):
 
             self.assertEqual(first.receiver_channel, second.receiver_channel)
             self.assertEqual(len(first.receiver_channel), 22)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            assert_private_file(path)
 
     def test_outbound_code_round_trips(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

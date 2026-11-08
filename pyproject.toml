@@ -29,6 +29,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
+    "pywinpty>=3.1.2,<4; sys_platform == 'win32'",
     "libusb-package>=1.0.26,<2",
     "watchdog>=6,<7",
     "qrcode>=8,<9",

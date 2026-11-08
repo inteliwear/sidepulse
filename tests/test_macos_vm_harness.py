@@ -1,5 +1,6 @@
 """Harness checks must not accept stale evidence or hooks that silently do nothing."""
 import importlib.util
+import os
 import json
 from pathlib import Path
 import sys
@@ -127,7 +128,12 @@ def test_codex_package_preserves_helpers_and_resources(tmp_path):
             info.size = len(content)
             tar.addfile(info, io.BytesIO(content))
     home = tmp_path / "home"
-    package = check.install_codex_package(archive, home)
+    try:
+        package = check.install_codex_package(archive, home)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks")
+        raise
     assert (home / ".local/bin/codex").resolve() == package / "bin/codex"
     assert (home / ".local/bin/codex-code-mode-host").read_bytes() == b"helper"
     assert (package / "codex-path/rg").read_bytes() == b"rg"
@@ -154,6 +160,7 @@ def test_duplicate_hooks_fail_and_external_hooks_are_not_executed(tmp_path):
         check.installed_commands("claude", tmp_path)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell fixture")
 def test_fail_open_replay_is_not_a_pass(tmp_path, monkeypatch):
     from sidepulse import program_transport
     harness = check.Harness(tmp_path / "result")
@@ -193,7 +200,12 @@ def test_bundle_excludes_secrets_git_and_symlinks(tmp_path):
     (tmp_path / "src/pkg").mkdir(parents=True)
     (tmp_path / "src/pkg/main.py").write_text("pass")
     (tmp_path / "src/pkg/.env").write_text("SECRET")
-    (tmp_path / "src/pkg/linked.py").symlink_to(tmp_path / "README.md")
+    try:
+        (tmp_path / "src/pkg/linked.py").symlink_to(tmp_path / "README.md")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks")
+        raise
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git/config").write_text("private")
     bundle = host.prepare(tmp_path, tmp_path / "out")
@@ -206,12 +218,14 @@ def test_bundle_excludes_secrets_git_and_symlinks(tmp_path):
     assert ".git/config" not in names
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group timeout")
 def test_subprocess_timeout_is_bounded():
     with pytest.raises(RuntimeError, match="Timed out"):
         check.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=.05)
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])
+@pytest.mark.skipif(os.name == "nt", reason="macOS shell replay; Windows replay uses the native probe")
 def test_real_installed_hook_replay_through_isolated_socket(tmp_path, monkeypatch, provider):
     from sidepulse.install import install_claude_hooks, install_codex_hooks
     from sidepulse.program_status import ProgramState
@@ -271,13 +285,22 @@ def test_evidence_receiver_rejects_invalid_requests_and_saves_exact_bytes(tmp_pa
         launcher = tmp_path / "collect-results.command"
         text = launcher.read_text()
         path = re.search(r'http://127\.0\.0\.1:\d+(/[^\s]+)', text).group(1)
-        connection = http.client.HTTPConnection("127.0.0.1", servers[0].server_port)
         for target, body, expected in [("/wrong", b"data", 403), (path, b"x" * 1025, 413),
                                        (path, b"guest evidence bytes", 201)]:
-            connection.request("POST", target, body)
+            connection = http.client.HTTPConnection("127.0.0.1", servers[0].server_port, timeout=3)
+            if expected != 201:
+                # A rejected request must be answered from its headers. Sending
+                # an unread body can turn an early rejection into a TCP reset
+                # on Windows before the client receives the HTTP response.
+                connection.putrequest("POST", target)
+                connection.putheader("Content-Length", str(len(body)))
+                connection.endheaders()
+            else:
+                connection.request("POST", target, body)
             response = connection.getresponse()
             assert response.status == expected
             response.read()
+            connection.close()
         saved = result.result(timeout=3)
     assert saved.read_bytes() == b"guest evidence bytes"
     assert saved.with_suffix(".sha256").exists()

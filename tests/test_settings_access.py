@@ -1,6 +1,7 @@
 """Settings remain reachable without a menu bar item."""
 
 import tempfile
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -60,8 +61,9 @@ class SettingsAccessTests(unittest.TestCase):
                 save_settings(settings, path)
                 self.assertEqual(load_settings(path).show_menu_bar_icon, visible)
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_settings_request_is_acknowledged_only_by_a_ui_listener(self):
-        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+        with tempfile.TemporaryDirectory(dir=None if os.name == 'nt' else '/tmp') as directory:
             path = Path(directory) / "events.sock"
             self.assertFalse(request_settings_window(socket_path=path))
             for has_ui in (False, True):

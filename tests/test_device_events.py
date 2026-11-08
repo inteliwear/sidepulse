@@ -153,3 +153,56 @@ def test_windows_roots_use_drive_letters(monkeypatch):
     roots = (Path('C:/'), Path('E:/'))
     monkeypatch.setattr(device_writer, 'windows_drive_roots', lambda: roots)
     assert device_writer.default_mount_roots(platform='win32') == roots
+
+
+def test_windows_missing_root_retains_armed_ancestor_watch(tmp_path, monkeypatch):
+    from watchdog.events import DirCreatedEvent
+    root = tmp_path / 'mounts'
+    root.mkdir()
+    missing = root / 'new-user' / 'volumes'
+    monkeypatch.setattr(device_events.sys, 'platform', 'win32')
+    monkeypatch.setenv('SIDEPULSE_MOUNT_ROOTS', str(missing))
+    monkeypatch.setattr(device_events, 'default_mount_roots', lambda: (missing,))
+    monkeypatch.setattr(device_events, 'native_events', lambda changed: Mock())
+    observer = Mock(ident=None)
+    monkeypatch.setattr(device_events, 'Observer', lambda: observer)
+    events = device_events.DeviceEvents()
+    events.update()
+    assert set(events.watches) == {root}
+    observer.schedule.assert_called_once_with(events, str(root), recursive=True)
+    missing.mkdir(parents=True)
+    events.update()
+    assert set(events.watches) == {root}
+    observer.unschedule.assert_not_called()
+    events.changed.clear()
+    dot = missing / 'SidePulseDot'
+    dot.mkdir()
+    events.on_any_event(DirCreatedEvent(str(dot)))
+    assert events.changed.is_set()
+
+
+def test_windows_root_recreation_keeps_the_parent_watch_armed(tmp_path, monkeypatch):
+    from watchdog.events import FileDeletedEvent, DirCreatedEvent
+    root = tmp_path / 'mounts'
+    root.mkdir()
+    monkeypatch.setattr(device_events.sys, 'platform', 'win32')
+    monkeypatch.setenv('SIDEPULSE_MOUNT_ROOTS', str(root))
+    monkeypatch.setattr(device_events, 'default_mount_roots', lambda: (root,))
+    monkeypatch.setattr(device_events, 'native_events', lambda changed: Mock())
+    observer = Mock(ident=None)
+    monkeypatch.setattr(device_events, 'Observer', lambda: observer)
+    events = device_events.DeviceEvents()
+    events.update()
+    assert set(events.watches) == {tmp_path}
+    root.rmdir()
+    events.on_any_event(FileDeletedEvent(str(root)))
+    assert not events.reset_watches.is_set()
+    events.update()
+    events.changed.clear()
+    root.mkdir()
+    events.on_any_event(DirCreatedEvent(str(root)))
+    assert events.changed.is_set()
+    events.update()
+    observer.schedule.assert_called_once_with(events, str(tmp_path), recursive=True)
+    observer.unschedule.assert_not_called()
+    observer.unschedule_all.assert_not_called()

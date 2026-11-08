@@ -19,7 +19,7 @@ from .providers import default_state_dir, candidate_state_dirs
 
 def status_socket_path(state_dir: Path | None = None) -> Path:
     path = (state_dir or default_state_dir()) / 'program-status.sock'
-    if len(str(path).encode()) > 96:
+    if os.name != 'nt' and len(str(path).encode()) > 96:
         digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return Path('/tmp') / f'sidepulse-status-{os.getuid()}' / f'{digest}.sock'
     return path
@@ -37,10 +37,25 @@ def submit_report(report: dict, *, timeout: float = 0.5, path: Path | None = Non
 
 
 def _submit_report_at(report: dict, path: Path, timeout: float) -> dict:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    if os.name == 'nt':
+        # CPython on Windows does not expose AF_UNIX. Only the protected
+        # endpoint file carries the random credential; it never goes to logs.
+        endpoint = json.loads(path.read_text(encoding='utf-8'))
+        if (not isinstance(endpoint, dict) or endpoint.get('host') != '127.0.0.1'
+                or type(endpoint.get('port')) is not int or not 1 <= endpoint['port'] <= 65535
+                or not isinstance(endpoint.get('token'), str) or len(endpoint['token']) != 64):
+            raise StatusError('Invalid local daemon endpoint')
+        address, family = ('127.0.0.1', endpoint['port']), socket.AF_INET
+        encoded(report)  # Apply the same size/number limits as Unix submissions.
+        payload = json.dumps({'auth': endpoint['token'], 'report': report},
+                             ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()
+    else:
+        address, family = str(path), socket.AF_UNIX
+        payload = encoded(report).encode()
+    with socket.socket(family, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
-        client.connect(str(path))
-        client.sendall(encoded(report).encode())
+        client.connect(address)
+        client.sendall(payload)
         client.shutdown(socket.SHUT_WR)
         data = bytearray()
         while chunk := client.recv(4096):
@@ -84,9 +99,14 @@ class ProgramServer:
         self.socket = None
         self.running = False
         self.bound_identity = None
+        self.windows_lock = None
+        self.token = None
 
     def start(self):
         import threading
+        if os.name == 'nt':
+            self._start_windows()
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.path.parent.parent == Path('/tmp') and self.path.parent.name == f'sidepulse-status-{os.getuid()}':
             info = self.path.parent.lstat()
@@ -114,6 +134,43 @@ class ProgramServer:
         self.running = True
         self.thread = threading.Thread(target=self.serve, daemon=True)
         self.thread.start()
+
+    def _start_windows(self):
+        import secrets
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from .windows_support import file_lock, private_directory
+        private_directory(self.path.parent)
+        lock = file_lock(self.path.with_suffix('.lock'), blocking=False)
+        try:
+            lock.__enter__()
+        except OSError as exc:
+            raise StatusError('Program status service already running') from exc
+        self.windows_lock = lock
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.bind(('127.0.0.1', 0))
+            self.socket.listen(16)
+            self.socket.settimeout(.2)
+            self.token = secrets.token_hex(32)
+            import tempfile
+            with tempfile.NamedTemporaryFile(dir=self.path.parent, mode='w', encoding='utf-8', delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump({'host': '127.0.0.1', 'port': self.socket.getsockname()[1], 'token': self.token}, stream)
+            try:
+                os.replace(temporary, self.path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            info = self.path.stat()
+            self.bound_identity = (info.st_dev, info.st_ino)
+            self.workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sidepulse-ipc')
+            self.slots = threading.BoundedSemaphore(4)
+            self.running = True
+            self.thread = threading.Thread(target=self.serve, daemon=True)
+            self.thread.start()
+        except BaseException:
+            self.stop()
+            raise
 
     def serve(self):
         while self.running:
@@ -153,11 +210,21 @@ class ProgramServer:
                         if time.monotonic() > deadline:
                             raise StatusError("Report deadline exceeded")
                         data.extend(chunk)
-                        if len(data) > MAX_BYTES:
+                        if len(data) > MAX_BYTES + (256 if self.token else 0):
                             raise StatusError('Report too large')
                     report = json.loads(data)
                     if not isinstance(report, dict):
                         raise StatusError('Report must be an object')
+                    if self.token:
+                        import secrets
+                        auth = report.get('auth')
+                        if not isinstance(auth, str) or not secrets.compare_digest(auth, self.token):
+                            raise StatusError('Local daemon authentication failed')
+                        report = report.get('report')
+                        if not isinstance(report, dict):
+                            raise StatusError('Report must be an object')
+                        if len(encoded(report).encode()) > MAX_BYTES:
+                            raise StatusError('Report too large')
                     if report.get('type') == 'get_state':
                         if type(report.get('v')) is not int or report['v'] != 1:
                             raise StatusError('Unsupported protocol version')
@@ -165,7 +232,7 @@ class ProgramServer:
                         ack = {'ok': True, 'snapshot': ProgramMonitor(self.state).snapshot().to_dict()}
                         if self.on_command:
                             ack.update(self.on_command({'v': 1, 'type': 'output_info'}))
-                    elif report.get('type') in {'output_control', 'write_led', 'play_lid_animation'} and self.on_command:
+                    elif report.get('type') in {'output_control', 'write_led', 'play_lid_animation', 'service_stop'} and self.on_command:
                         ack = self.on_command(report)
                     else:
                         ack = self.state.submit(report)
@@ -197,6 +264,9 @@ class ProgramServer:
             self.bound_identity = None
         if hasattr(self, 'workers'):
             self.workers.shutdown(wait=False, cancel_futures=True)
+        if self.windows_lock is not None:
+            lock, self.windows_lock = self.windows_lock, None
+            lock.__exit__(None, None, None)
 
 
 def endpoint(server: str, channel: str) -> str:

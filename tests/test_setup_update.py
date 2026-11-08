@@ -15,6 +15,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'setup.sh'
 
 
+@unittest.skipUnless(os.name == "posix", "POSIX shell installer fixtures")
 class SetupUpdateTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='sidepulse-setup-test-')

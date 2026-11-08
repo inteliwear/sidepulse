@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-if os.uname().sysname != "Darwin":  # pragma: no cover
+if sys.platform != "darwin":  # pragma: no cover
     raise unittest.SkipTest("status-bar UI tests require macOS")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

@@ -104,12 +104,14 @@ class OscCapture:
 
 class StatusForwarder:
     """One pending value per invocation; daemon I/O never runs in the PTY loop."""
-    def __init__(self, scope: str, *, submit=None):
+    def __init__(self, scope: str, *, submit=None, command=None, query=None):
         self.scope = scope
         self.submit = submit or submit_status
         self.condition = threading.Condition()
         self.pending = None
         self.last_state = None
+        from .codex_terminal import CodexTerminal
+        self.codex = CodexTerminal(command or [], scope, query=query)
         self.closed = False
         self.thread = threading.Thread(target=self._run, name='sidepulse-wrap-status', daemon=True)
 
@@ -120,6 +122,8 @@ class StatusForwarder:
         with self.condition:
             self.last_state = status['state']
             self.pending = {'v': 1, 'type': 'program_status', 'scope': self.scope, 'status': status}
+            if status.get('app') == 'codex' and status.get('state') == 'idle':
+                self.pending['_plan_closed'] = True
             self.condition.notify()
 
     def close(self):
@@ -140,7 +144,10 @@ class StatusForwarder:
                 if report is None:
                     return
             try:
+                plan_closed = report.pop('_plan_closed', False)
                 self.submit(report, timeout=0.2)
+                if plan_closed:
+                    self.codex.dismiss_plan(self.submit)
             except (OSError, ValueError):
                 if not warned:
                     print('SidePulse status unavailable; the wrapped command will continue.', file=sys.stderr)
@@ -157,6 +164,9 @@ def _write_all(fd: int, data: bytes):
 
 
 def run_wrapped(command: list[str]) -> int:
+    if os.name == 'nt':
+        from .windows_terminal import run_wrapped as windows_run_wrapped
+        return windows_run_wrapped(command)
     if os.name != 'posix':
         raise ValueError('Terminal wrapping is supported on macOS and Linux')
     # Keep Unix-only dependencies out of imports on unsupported platforms.
@@ -203,7 +213,7 @@ def run_wrapped(command: list[str]) -> int:
                 os._exit(127 if isinstance(exc, OSError) and exc.errno == errno.ENOENT else 126)
 
     os.close(ready_write)
-    forwarder = StatusForwarder('wrap-' + uuid.uuid4().hex)
+    forwarder = StatusForwarder('wrap-' + uuid.uuid4().hex, command=command)
     outgoing = bytearray()
 
     def reply(data):

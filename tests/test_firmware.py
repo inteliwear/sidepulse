@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 import zipfile
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -153,7 +154,12 @@ class FirmwareTests(unittest.TestCase):
     def test_symlink_target_is_rejected(self):
         outside = self.root / 'unrelated'
         outside.write_bytes(b'keep me')
-        (self.device / 'FIRMWARE.BIN').symlink_to(outside)
+        try:
+            (self.device / 'FIRMWARE.BIN').symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks")
+            raise
         self.assertEqual(self.upgrade(self.make_package()), 1)
         self.assertEqual(outside.read_bytes(), b'keep me')
 

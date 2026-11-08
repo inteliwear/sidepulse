@@ -42,6 +42,9 @@ def build_service_launcher_script() -> str:
 
 
 def install_service(*, start: bool = True, dry_run: bool = False) -> ServiceInstallResult:
+    if sys.platform == 'win32':
+        from .windows_service import install
+        return install(start=start, dry_run=dry_run)
     if sys.platform == "darwin":
         return install_launch_agent(start=start, dry_run=dry_run)
     if sys.platform.startswith("linux"):
@@ -170,6 +173,9 @@ def install_systemd_user_service(*, start: bool, dry_run: bool) -> ServiceInstal
 
 def restart_service() -> ServiceInstallResult:
     """Recover the installed service without registering the caller's Python/app."""
+    if sys.platform == 'win32':
+        from .windows_service import restart
+        return restart()
     if sys.platform == 'darwin':
         path = Path.home() / 'Library' / 'LaunchAgents' / f'{SERVICE_LABEL}.plist'
         if not path.is_file():
@@ -194,6 +200,9 @@ def restart_service() -> ServiceInstallResult:
 
 
 def stop_service() -> bool:
+    if sys.platform == 'win32':
+        from .windows_service import stop
+        return stop()
     if sys.platform == "darwin":
         path = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
         domain = f"gui/{subprocess.check_output(['id', '-u'], text=True).strip()}"
@@ -217,6 +226,9 @@ def stop_service() -> bool:
 
 
 def service_is_running() -> bool:
+    if sys.platform == 'win32':
+        from .windows_service import alive
+        return alive()
     if sys.platform == "darwin":
         domain = f"gui/{subprocess.check_output(['id', '-u'], text=True).strip()}"
         result = subprocess.run(

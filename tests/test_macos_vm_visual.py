@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,7 @@ def test_recording_error_cannot_pass_review():
     assert visual.comparison(data, {"run_id": "one", "labels": labels})["status"] == "incomplete"
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Real relay uses POSIX pseudo-terminals')
 def test_interactive_relay_preserves_real_terminal_output(tmp_path):
     import os
     import pty

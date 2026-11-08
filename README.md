@@ -53,6 +53,12 @@ If a Linux session has no systemd user manager, setup still installs the unit
 and prints that it could not start; `sidepulse service run` remains available as
 a foreground fallback.
 
+For fresh Linux installation, official-main upgrade, service recovery, and
+real Claude/Codex testing in an isolated VM, see the
+[Linux test harness guide](docs/testing/linux-vm.md).
+The [native Windows test harness guide](docs/testing/windows-vm.md) tracks the
+Windows installation probes and the coverage still in progress.
+
 On macOS, the daemon also owns sleep prevention, low-battery safeguards, lid
 animations, battery-change previews, and status-history recording. These keep
 running when the tray is closed. The tray displays daemon observations and sends

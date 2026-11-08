@@ -1,12 +1,16 @@
 """Exercise raw-disk safety entirely in memory; never open a real device."""
 
 import contextlib
+import os
 import plistlib
 import stat
 import struct
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+
+if os.name != 'posix':
+    raise unittest.SkipTest('macOS raw-disk backend requires POSIX file APIs')
 
 from scripts import write_led_raw as raw
 

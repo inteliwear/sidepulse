@@ -1,4 +1,5 @@
 """The daemon owns live state and physical output; clients use its socket."""
+import os
 import copy
 import json
 import tempfile
@@ -31,7 +32,7 @@ def update(scope='session', state='working', seq=1, publisher='remote', **fields
 @pytest.fixture
 def daemon():
     service = SidePulseService()
-    with tempfile.TemporaryDirectory(prefix='sp-', dir='/tmp') as directory:
+    with tempfile.TemporaryDirectory(prefix='sp-', dir=None if os.name == 'nt' else '/tmp') as directory:
         server = ProgramServer(service.program_state, Path(directory) / 'status.sock', on_command=service.handle_command)
         server.start()
         try:
@@ -158,11 +159,10 @@ def test_state_query_can_return_64_long_session_rows(daemon,unicode_text):
     assert all(s.message == message for s in result.statuses)
 
 
-def test_stalled_ui_client_does_not_block_fast_hooks(daemon):
+def test_stalled_ui_client_does_not_block_fast_hooks(daemon, program_client):
     import socket
     service, server = daemon
-    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as stalled:
-        stalled.connect(str(server.path))
+    with program_client(server.path) as stalled:
         stalled.sendall(b'{')
         assert submit_report(report(),path=server.path,timeout=.2)['seq'] == 1
     assert service.program_state.statuses()[0].mode == AgentMode.WORKING

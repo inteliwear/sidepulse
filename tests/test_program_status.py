@@ -1,4 +1,5 @@
 import io
+import os
 import json
 import socket
 import tempfile
@@ -44,10 +45,11 @@ def test_cleared_sessions_do_not_exhaust_live_scope_limit(store):
 
 def test_socket_ack_and_rejection(store,tmp_path):
     import tempfile
-    directory=tempfile.TemporaryDirectory(prefix='ps-',dir='/tmp')
+    directory=tempfile.TemporaryDirectory(prefix='ps-', dir=None if os.name == 'nt' else '/tmp')
     path=Path(directory.name)/'s';server=ProgramServer(store,path);server.start()
     try:
-        assert path.stat().st_mode & 0o777 == 0o600
+        if os.name != 'nt':
+            assert path.stat().st_mode & 0o777 == 0o600
         assert submit_report(report('working'),path=path)['seq']==1
         with pytest.raises(StatusError):submit_report(report('unknown'),path=path)
         assert submit_report(report('done'),path=path)['seq']==2
@@ -90,16 +92,16 @@ def test_latest_hook_replaces_permission_state(store):
     assert (store.statuses(), store.pending_events('phone')) == before
 
 
-def test_socket_rejects_bad_and_slow_clients_without_losing_valid_reports(store):
+def test_socket_rejects_bad_and_slow_clients_without_losing_valid_reports(store, program_client):
     import tempfile
-    with tempfile.TemporaryDirectory(prefix='ps-',dir='/tmp') as directory:
+    with tempfile.TemporaryDirectory(prefix='ps-', dir=None if os.name == 'nt' else '/tmp') as directory:
         path=Path(directory)/'s';server=ProgramServer(store,path);server.start()
         try:
             for body in [b'[]',b'{"v":1,"type":"program_status","scope":"s","status":{"state":[]}}',
                          *[json.dumps({**report('working'), 'type':kind, 'reports':[report('working')]}).encode()
                            for kind in ('program_status_batch', 'scope_end', 'scope_reset')], b'{']:
-                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                    client.settimeout(2);client.connect(str(path));client.sendall(body)
+                with program_client(path) as client:
+                    client.sendall(body)
                     if body!=b'{':client.shutdown(socket.SHUT_WR)
                     assert json.loads(client.recv(4096))['ok'] is False
             assert submit_report(report('working'),path=path)['seq']==1

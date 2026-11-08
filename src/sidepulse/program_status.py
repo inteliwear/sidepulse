@@ -164,8 +164,13 @@ def installation_publisher(path=None) -> str:
             # Seed once from the previous identity so upgrading does not duplicate
             # existing phone sessions. Later host/network changes no longer affect it.
             import socket
+            if os.name == 'nt':
+                from .windows_support import user_sid
+                user = user_sid()
+            else:
+                user = os.getuid()
             temporary.write(str(uuid.uuid5(uuid.NAMESPACE_OID,
-                f"sidepulse:{socket.gethostname()}:{uuid.getnode()}:{os.getuid()}")))
+                f"sidepulse:{socket.gethostname()}:{uuid.getnode()}:{user}")))
         try:
             os.link(temporary.name, path)
         except FileExistsError:

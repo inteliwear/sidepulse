@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hook_assertions import command_text, fail_open
+from sidepulse.providers import tomllib
 from sidepulse import daemon_runtime
 from sidepulse.service import SidePulseService
 
@@ -583,6 +585,7 @@ class AgentMonitorTests(unittest.TestCase):
                     path=blocking_file / "status-history.jsonl",
                 )
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_ui_socket_only_handles_ui_commands(self) -> None:
         import socket
         with tempfile.TemporaryDirectory() as tmp:
@@ -600,8 +603,9 @@ class AgentMonitorTests(unittest.TestCase):
             finally:
                 server.stop()
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_ui_command_reaches_app_when_xdg_state_home_differs(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+        with tempfile.TemporaryDirectory(dir=None if os.name == 'nt' else '/tmp') as tmp:
             home = Path(tmp) / "home"
             app_dir = home / ".local" / "state" / "sidepulse" / "agent-monitor"
             app_dir.mkdir(parents=True)
@@ -3258,9 +3262,11 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertIn("hooks = true", text)
             self.assertIn('[hooks.state]', text)
             self.assertIn('source = "keep-me"', text)
-            self.assertIn("hook_entry.py", text)
-            self.assertIn("--provider codex", text)
-            self.assertIn(str(log), text)
+            commands = [command_text(hook['command'])
+                        for hook in tomllib.loads(text)['hooks']['PreToolUse'][0]['hooks']]
+            self.assertTrue(any('hook_entry.py' in command for command in commands))
+            self.assertTrue(any('--provider codex' in command for command in commands))
+            self.assertIn(log, detect_codex_config_from_text(config, text).log_paths)
             self.assertNotIn("echo old", text)
             self.assertIn("[[hooks.Interrupt]]", text)
             self.assertIn("timeout = 3", text.split("[[hooks.Interrupt.hooks]]")[1])
@@ -3289,7 +3295,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertTrue(result.changed)
             text = config.read_text()
-            self.assertIn(f'[hooks.state."{key}"]', text)
+            self.assertEqual(tomllib.loads(text)["hooks"]["state"][key]["trusted_hash"], "sha256:new-current-hash")
             self.assertIn('trusted_hash = "sha256:new-current-hash"', text)
 
     def test_update_codex_trusted_hashes_preserves_other_state(self) -> None:
@@ -3362,7 +3368,7 @@ class AgentMonitorTests(unittest.TestCase):
                 for hook in entry["hooks"]
             ]
             self.assertIn("echo keep >> /tmp/other.log", commands)
-            self.assertTrue(any("hook_entry.py" in command for command in commands))
+            self.assertTrue(any("hook_entry.py" in command_text(command) for command in commands))
             self.assertFalse(any(command.startswith("jq -c") for command in commands))
             self.assertEqual(data["permissions"]["allow"], ["Bash(date)"])
 
@@ -3410,7 +3416,7 @@ class AgentMonitorTests(unittest.TestCase):
                 for hook in entry["hooks"]
             ]
             self.assertIn("echo keep >> /tmp/other.log", pre_tool_commands)
-            self.assertTrue(any("--provider grok" in command for command in pre_tool_commands))
+            self.assertTrue(any("--provider grok" in command_text(command) for command in pre_tool_commands))
             self.assertFalse(any(command.startswith("jq -c") for command in pre_tool_commands))
             self.assertIn("matcher", data["hooks"]["PreToolUse"][-1])
             self.assertNotIn("matcher", data["hooks"]["SessionStart"][-1])
@@ -4030,7 +4036,7 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(target.read_text(), "off")
             # The file itself, plus the directory entry for the new file.
-            self.assertEqual(len(synced), 2)
+            self.assertEqual(len(synced), 1 if os.name == "nt" else 2)
 
     def test_sidepulse_write_survives_a_filesystem_that_cannot_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6164,8 +6170,8 @@ class AgentMonitorTests(unittest.TestCase):
             [str(launcher)],
         )
         self.assertTrue(plist["RunAtLoad"])
-        self.assertEqual(plist["StandardOutPath"], "/tmp/sidepulse.out.log")
-        self.assertEqual(plist["StandardErrorPath"], "/tmp/sidepulse.err.log")
+        self.assertEqual(plist["StandardOutPath"], str(Path("/tmp/sidepulse.out.log")))
+        self.assertEqual(plist["StandardErrorPath"], str(Path("/tmp/sidepulse.err.log")))
         self.assertNotIn("KeepAlive", plist)
 
     def test_status_bar_launcher_uses_background_item_name(self) -> None:
@@ -6188,6 +6194,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         self.assertIn("status-bar start --foreground", script)
 
+    @unittest.skipIf(os.name == "nt", "POSIX command spelling; native frozen command checked separately")
     def test_frozen_hook_command_uses_internal_cli(self) -> None:
         with patch("sidepulse.install.sys.frozen", True, create=True):
             command = hook_command("codex", Path("/tmp/codex events.jsonl"))
@@ -6201,7 +6208,7 @@ class AgentMonitorTests(unittest.TestCase):
     def test_hook_command_is_fail_open(self) -> None:
         command = hook_command("grok", Path("/tmp/grok.jsonl"), python_executable="python3")
 
-        self.assertTrue(command.endswith("; true"))
+        self.assertTrue(fail_open(command))
 
     def test_legacy_hook_entry_points_still_log_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6234,6 +6241,7 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(len(lines), 2)
             self.assertTrue(all(json.loads(line)["sessionId"] == "legacy" for line in lines))
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_status_bar_install_removes_legacy_com_sidepulse_plist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -6380,8 +6388,8 @@ class AgentMonitorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run", side_effect=fake_run),
             ):
                 result = install_sd_eject_guard(
@@ -6429,8 +6437,8 @@ class AgentMonitorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run", side_effect=fake_run),
             ):
                 result = install_sd_eject_guard(
@@ -6472,8 +6480,8 @@ class AgentMonitorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run", side_effect=fake_run),
             ):
                 result = install_sd_eject_guard(
@@ -6510,8 +6518,8 @@ class AgentMonitorTests(unittest.TestCase):
             system_paths.plist_path.write_bytes(b"system")
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run") as run,
             ):
                 results = stop_sd_eject_guard(
@@ -6551,8 +6559,8 @@ class AgentMonitorTests(unittest.TestCase):
             legacy.write_bytes(b"legacy")
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run") as run,
             ):
                 results = uninstall_sd_eject_guard(
@@ -6586,7 +6594,7 @@ class AgentMonitorTests(unittest.TestCase):
                 stderr_path=base / "system" / "err.log",
             )
 
-            with patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501):
+            with patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=501, create=True):
                 with self.assertRaisesRegex(SdEjectGuardInstallError, "requires root"):
                     install_sd_eject_guard(
                         scope="system",
@@ -6624,9 +6632,9 @@ class AgentMonitorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=0),
-                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501),
-                patch("sidepulse.sd_eject_guard_launch.os.chown") as chown,
+                patch("sidepulse.sd_eject_guard_launch.os.geteuid", return_value=0, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.getuid", return_value=501, create=True),
+                patch("sidepulse.sd_eject_guard_launch.os.chown", create=True) as chown,
                 patch("sidepulse.sd_eject_guard_launch.subprocess.run", side_effect=fake_run),
             ):
                 result = install_sd_eject_guard(

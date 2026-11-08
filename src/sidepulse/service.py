@@ -251,6 +251,9 @@ class SidePulseService:
                 raise StatusError('Invalid output control duration')
             return value
         kind = command.get('type')
+        if kind == 'service_stop':
+            self.stop()
+            return {'ok': True}
         if kind == 'output_info':
             return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled,
                     'devices': [{**vars(device), 'root': str(device.root), 'target': str(device.target)} for device in self.runtime.devices],

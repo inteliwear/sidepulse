@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from hook_assertions import command_text, fail_open
 from sidepulse.cli import sidepulse_main
 from sidepulse.collector import MonitorSnapshot
 from sidepulse.install import cursor_hook_command, hook_command
@@ -126,5 +127,5 @@ def test_frozen_provider_and_cursor_commands_use_single_cli(tmp_path):
         commands = [hook_command('claude', tmp_path/'events'),
                     cursor_hook_command('beforeShellExecution', tmp_path/'events')]
     for command in commands:
-        assert ' hook-log --provider ' in command
+        assert 'hook-log --provider' in command_text(command)
         assert 'agent-monitor' not in command

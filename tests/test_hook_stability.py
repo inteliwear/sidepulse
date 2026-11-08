@@ -27,6 +27,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from hook_assertions import command_text, fail_open
+from sidepulse.providers import extract_log_paths_from_command
 from sidepulse import hook as hook_module
 from sidepulse.cli import build_sidepulse_parser, cmd_hook_log
 from sidepulse.hook import format_hook_payload, hook_log_main, routed_hook_payload
@@ -448,7 +450,7 @@ class InstalledCommandTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 command = hook_command(provider, self.home / "log.jsonl")
                 self.assertTrue(
-                    command.rstrip().endswith("; true"),
+                    fail_open(command),
                     f"hook command is not fail-open: {command}",
                 )
 
@@ -457,7 +459,7 @@ class InstalledCommandTests(unittest.TestCase):
 
         weird = self.home / "path with spaces" / "log's file.jsonl"
         command = hook_command("claude", weird)
-        parts = shlex.split(command)
+        parts = [str(path) for path in extract_log_paths_from_command(command)]
         self.assertIn(str(weird), parts, "log path was not quoted intact")
 
     def test_command_exits_zero_when_python_is_missing(self):
@@ -488,6 +490,7 @@ class InstalledCommandTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(log_path.exists(), "installed hook command wrote nothing")
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell wrapper; native PowerShell execution covered separately")
     def test_fail_open_wrapper_neutralizes_failure(self):
         # Note: a bare `exit 7` would terminate the shell before `; true` runs.
         # Hooks invoke a real program, which is what these cases model.

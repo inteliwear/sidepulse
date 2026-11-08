@@ -81,6 +81,10 @@ def save_relay_config(config: RelayConfig, path: Path | None = None) -> Path:
         "outbound_channel": clean_channel(config.outbound_channel),
         "machine_name": config.machine_name.strip()[:80] or socket.gethostname(),
     }
+    if os.name == 'nt':
+        from .windows_support import private_text
+        private_text(target, json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        return target
     temp = target.with_suffix(".json.tmp")
     temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(temp, 0o600)

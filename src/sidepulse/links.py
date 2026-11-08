@@ -174,6 +174,10 @@ def save_ios_links(links: Iterable[IOSLink], path: Path | None = None) -> Path:
         "ios": [link.to_dict() for link in phones if link.platform == "ios"],
         "android": [link.to_dict() for link in phones if link.platform == "android"],
     }
+    if os.name == 'nt':
+        from .windows_support import private_text
+        private_text(target, json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        return target
     temporary = target.with_suffix(target.suffix + ".tmp")
     # Create privately before writing credentials, including under a permissive umask.
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

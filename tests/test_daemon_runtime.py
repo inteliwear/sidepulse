@@ -1,4 +1,6 @@
 """Background behavior continues with no tray, and clients only observe it."""
+import os
+import os
 import json
 import tempfile
 from pathlib import Path
@@ -48,7 +50,7 @@ def background(tmp_path):
         process = Mock()
         process.poll.return_value = None
         service.runtime.keep_awake.process_factory = Mock(return_value=process)
-        with tempfile.TemporaryDirectory(prefix='sp-runtime-', dir='/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='sp-runtime-', dir=None if os.name == 'nt' else '/tmp') as directory:
             service.program_server.path = Path(directory)/'status.sock'
             service.program_server.start()
             def tick(at):

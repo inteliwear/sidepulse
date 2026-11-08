@@ -155,6 +155,8 @@ raise SystemExit(wrap.run_wrapped(__import__('sys').argv[1:]))
 
 @pytest.fixture
 def daemon(tmp_path):
+    if os.name != 'posix':
+        pytest.skip('Real wrapper integration requires POSIX pseudo-terminals')
     state = ProgramState(publisher='wrapper-test')
     with tempfile.TemporaryDirectory(prefix='spwrap-', dir='/tmp') as directory:
         server = ProgramServer(state, Path(directory) / 'status.sock')
@@ -261,8 +263,9 @@ sys.exit(7)
     assert updates[0]['status'] == {'state': 'done', 'app': 'demo', 'msg': 'Hello'}
 
 
-@pytest.mark.parametrize('interrupt,exit_code', [('keyboard', 130), (signal.SIGINT, 130),
-                                               (signal.SIGTERM, 143), (signal.SIGHUP, 129)])
+@pytest.mark.parametrize('interrupt,exit_code', [('keyboard', 130)] + [
+    (getattr(signal, name), code) for name, code in
+    [('SIGINT', 130), ('SIGTERM', 143), ('SIGHUP', 129)] if hasattr(signal, name)])
 def test_interrupt_forwarding_clears_work_and_restores_terminal(daemon, interrupt, exit_code):
     code = r'''
 import os, signal, time
@@ -304,6 +307,7 @@ os.write(1, b'RESUMED')
         assert_terminal_restored(slave, original)
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Real wrapper uses POSIX pseudo-terminals')
 def test_real_commands_without_daemon_keep_output_and_exit_code(tmp_path):
     env = {**os.environ, 'TEST_WRAP_SOCKET': str(tmp_path / 'absent.sock')}
     result = subprocess.run(wrapper_command(
@@ -338,6 +342,7 @@ def test_distinct_invocations_keep_separate_sessions(daemon):
     assert len({entry['scope'] for entry in latest_updates(daemon[1])}) == 2
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Real wrapper uses POSIX pseudo-terminals')
 def test_missing_executable_returns_127_without_a_traceback(tmp_path):
     result = subprocess.run([sys.executable, '-c', LAUNCH, '/missing-sidepulse-test-command'],
         stdin=subprocess.DEVNULL, capture_output=True,

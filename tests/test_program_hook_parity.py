@@ -4,6 +4,7 @@ The existing collector is the baseline interpreter. Deliberate OSC differences
 (no inferred completion from silence, explicit lifecycle, receiver-owned rendering)
 are separate from hook transport, metadata, and interpretation compatibility.
 """
+import os
 import io
 import json
 from datetime import datetime, timezone, timedelta
@@ -221,7 +222,7 @@ def test_real_hook_socket_accounting_remote_ui_flow(tmp_path, provider):
     sender = ProgramState()
     receiver = ProgramState()
     try:
-        with tempfile.TemporaryDirectory(prefix='sp-', dir='/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='sp-', dir=None if os.name == 'nt' else '/tmp') as directory:
             server = ProgramServer(sender, Path(directory) / 'status.sock')
             server.start()
             try:
@@ -261,7 +262,7 @@ def test_normalized_hook_finds_daemon_with_different_shell_state_directory(tmp_p
     import os
     store = ProgramState()
     try:
-        with tempfile.TemporaryDirectory(prefix='sp-', dir='/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='sp-', dir=None if os.name == 'nt' else '/tmp') as directory:
             home = Path(directory)
             app_state = home / '.local/state/sidepulse/agent-monitor'
             server = ProgramServer(store, status_socket_path(app_state))

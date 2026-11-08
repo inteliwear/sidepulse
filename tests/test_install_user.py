@@ -16,6 +16,7 @@ class UserInstallerTests(unittest.TestCase):
         self.assertIn('"$VENV_DIR/bin/python" -m pip install', text)
         self.assertNotIn("--break-system-packages", text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX shell syntax")
     def test_installer_shell_syntax(self) -> None:
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
@@ -42,6 +43,7 @@ class UserInstallerTests(unittest.TestCase):
             executable_text = before + rest.split("\nEOF", 1)[1]
         self.assertNotIn("sudo", executable_text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX shell syntax")
     def test_curl_setup_shell_syntax(self) -> None:
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
