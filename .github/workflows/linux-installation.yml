@@ -65,6 +65,17 @@ jobs:
             sudo cp -a /home/test/sidepulse-linux-results/. "$RUNNER_TEMP/sidepulse-linux-evidence/"
             sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/sidepulse-linux-evidence"
           fi
+          if id test >/dev/null 2>&1; then
+            test_uid=$(id -u test)
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              systemctl --user status sidepulse.service --no-pager --full \
+              > "$RUNNER_TEMP/sidepulse-linux-evidence/service-status.log" 2>&1 || true
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              journalctl --user --unit sidepulse.service --boot --no-pager -n 100 \
+              > "$RUNNER_TEMP/sidepulse-linux-evidence/service-journal.log" 2>&1 || true
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

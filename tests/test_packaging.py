@@ -24,6 +24,9 @@ import sys
 import unittest
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
 from pathlib import Path
+from unittest.mock import patch
+
+from packaging.requirements import Requirement
 
 try:  # Python 3.11+
     import tomllib
@@ -44,6 +47,9 @@ FIRST_PARTY = {"sidepulse", "sidepulse_cli", "agent_monitor"}
 # Modules that are stdlib on some supported interpreters and not others, so
 # they are legitimately imported without being declared.
 CONDITIONAL_STDLIB = {"tomllib"}
+
+# These import names differ from the distributions that provide them.
+OPTIONAL_IMPORT_DISTRIBUTIONS = {"winpty": "pywinpty", "mlx_lm": "mlx-lm"}
 
 
 def normalize_dist_name(name: str) -> str:
@@ -67,10 +73,12 @@ def requirement_name(spec: str) -> str:
     return normalize_dist_name(head)
 
 
-def declared_dependencies() -> set[str]:
-    """Distribution names declared in ``[project] dependencies``."""
+def declared_dependencies(*, include_inactive=False, environment=None) -> set[str]:
+    """Declared distributions applicable to the target Python/platform."""
     data = load_pyproject()
-    return {requirement_name(dep) for dep in data["project"].get("dependencies", [])}
+    requirements = [Requirement(dep) for dep in data["project"].get("dependencies", [])]
+    return {normalize_dist_name(dep.name) for dep in requirements
+            if include_inactive or dep.marker is None or dep.marker.evaluate(environment)}
 
 
 def dependency_closure(roots: set[str]) -> set[str]:
@@ -190,6 +198,24 @@ def third_party(records: list[ImportRecord]) -> list[ImportRecord]:
     ]
 
 
+class DependencyMarkerTests(unittest.TestCase):
+    def test_platform_dependencies_follow_the_target_environment(self):
+        data = {"project": {"dependencies": [
+            "qrcode>=8", "pywinpty>=3; sys_platform == 'win32'",
+            "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+        ]}}
+        with patch(__name__ + '.load_pyproject', return_value=data):
+            for platform, expected in [
+                ('darwin', {'qrcode', 'pyobjc-framework-cocoa'}),
+                ('linux', {'qrcode'}),
+                ('win32', {'qrcode', 'pywinpty'}),
+            ]:
+                with self.subTest(platform=platform):
+                    self.assertEqual(declared_dependencies(environment={'sys_platform':platform}), expected)
+            self.assertEqual(declared_dependencies(include_inactive=True),
+                             {'qrcode', 'pywinpty', 'pyobjc-framework-cocoa'})
+
+
 class ImportContractTests(unittest.TestCase):
     """The dependency declaration must cover what the code actually imports."""
 
@@ -201,8 +227,7 @@ class ImportContractTests(unittest.TestCase):
 
     @unittest.skipUnless(
         sys.platform == "darwin",
-        "every declared dependency is darwin-gated, so the contract can only "
-        "be checked where they are installed",
+        "GUI framework imports can only be checked where they are installed",
     )
     def test_hard_third_party_imports_are_declared(self):
         """A module-level import of an undeclared distribution is a release bug.
@@ -246,30 +271,25 @@ class ImportContractTests(unittest.TestCase):
         """
         module_to_dists = packages_distributions()
         unknown: list[str] = []
+        data = load_pyproject()
+        extras = data["project"].get("optional-dependencies", {})
+        declared_anywhere = {
+            requirement_name(dep) for deps in extras.values() for dep in deps
+        } | declared_dependencies(include_inactive=True)
         for record in third_party(scan_imports(SRC_ROOT)):
             if not record.optional:
                 continue
             if record.top in module_to_dists:
                 continue
-            # Not installed here; accept only if some extra declares it.
-            data = load_pyproject()
-            extras = data["project"].get("optional-dependencies", {})
-            declared_anywhere = {
-                requirement_name(dep)
-                for deps in extras.values()
-                for dep in deps
-            } | declared_dependencies()
-            if normalize_dist_name(record.top) not in declared_anywhere:
+            # A lazy import may belong to another platform or optional extra.
+            name = OPTIONAL_IMPORT_DISTRIBUTIONS.get(record.top, record.top)
+            if normalize_dist_name(name) not in declared_anywhere:
                 unknown.append(f"{record.where}: optional import {record.top!r}")
 
-        # mlx_lm is the reply-classifier extra; it maps to distribution "mlx-lm".
-        unknown = [u for u in unknown if "mlx_lm" not in u]
         self.assertEqual([], unknown, "Unrecognized optional imports:\n  " + "\n  ".join(unknown))
 
     def test_declared_dependencies_are_installed(self):
         """The test environment matches what we ship, or the suite proves nothing."""
-        if sys.platform != "darwin":
-            self.skipTest("declared dependencies are darwin-gated")
         for name in sorted(declared_dependencies()):
             with self.subTest(dependency=name):
                 try:
