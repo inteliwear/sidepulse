@@ -10,6 +10,11 @@ import time
 
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 test dependency.
+    import tomli as tomllib
+
 from sidepulse import install
 from sidepulse.hook_commands import observer_script
 from sidepulse.providers import extract_log_paths_from_command
@@ -36,7 +41,6 @@ def test_windows_codex_reinstall_removes_encoded_managed_blocks(tmp_path, monkey
     config, log = tmp_path / 'config.toml', tmp_path / 'codex.jsonl'
     install.install_codex_hooks(log, config)
     install.install_codex_hooks(log, config)
-    from sidepulse.providers import tomllib
     data = tomllib.loads(config.read_text())
     for event in install.CODEX_EVENTS:
         assert len(data['hooks'][event]) == 1

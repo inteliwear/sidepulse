@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from hook_assertions import command_text, fail_open
-from sidepulse.providers import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 test dependency.
+    import tomli as tomllib
 from sidepulse import daemon_runtime
 from sidepulse.service import SidePulseService
 
