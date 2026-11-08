@@ -312,6 +312,10 @@ def main():
     args = parser.parse_args()
     guard()
     os.environ['PATH'] = f'{HOME_DIR}/.local/bin:/usr/local/bin:/usr/bin:/bin'
+    if args.command in {'upgrade', 'repeat'} and PYTHON.is_file() and Path(sys.executable) != PYTHON:
+        # Migration reads settings through the existing package before setup
+        # replaces it. The system Python used to launch the harness has no app.
+        os.execv(str(PYTHON), [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
     if args.command in {'fresh', 'main', 'upgrade', 'repeat'}:
         install(args.command)
     if args.command == 'agents':

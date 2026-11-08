@@ -72,6 +72,26 @@ def test_fresh_refuses_existing_install_without_invoking_setup(tmp_path, monkeyp
         guest.install('fresh')
 
 
+@pytest.mark.parametrize('stage', ['upgrade', 'repeat'])
+def test_upgrade_switches_to_existing_python_before_loading_installed_settings(tmp_path, monkeypatch, stage):
+    from unittest.mock import Mock
+    import os
+    python = tmp_path / 'venv/bin/python'
+    python.parent.mkdir(parents=True)
+    python.touch()
+    monkeypatch.setattr(guest, 'PYTHON', python)
+    monkeypatch.setattr(guest, 'guard', lambda: None)
+    monkeypatch.setattr(guest.sys, 'executable', '/system/python3')
+    monkeypatch.setattr(guest.sys, 'argv', [guest.__file__, stage])
+    monkeypatch.setenv('PATH', os.environ['PATH'])
+    monkeypatch.setattr(guest, 'install', lambda _: pytest.fail('system Python attempted migration'))
+    execute = Mock(side_effect=RuntimeError('switch to installed Python'))
+    monkeypatch.setattr(guest.os, 'execv', execute)
+    with pytest.raises(RuntimeError, match='switch to installed Python'):
+        guest.main()
+    execute.assert_called_once_with(str(python), [str(python), str(Path(guest.__file__).resolve()), stage])
+
+
 def test_migration_seed_updates_the_real_settings_file_and_preserves_other_preferences(tmp_path, monkeypatch):
     from sidepulse.settings import AgentMonitorSettings, default_settings_path, load_settings, save_settings
     home = tmp_path / 'home'
