@@ -28,24 +28,74 @@ def decode_status(data):
                 length=length, received=received, applied=applied, polls=polls)
 
 
+DOT_VID_PID = (0x1a86, 0xfe10)
+MAX_PORT_DEPTH = 7
+
+
+def load_libusb(library=None):
+    from libusb_package import find_library
+
+    path = library or find_library('libusb-1.0') or ctypes.util.find_library('usb-1.0')
+    if not path:
+        raise OSError('libusb is unavailable; reinstall SidePulse with its libusb-package dependency')
+    u = C.CDLL(path)
+    u.libusb_init.argtypes = [C.POINTER(C.c_void_p)]
+    u.libusb_exit.argtypes = [C.c_void_p]
+    u.libusb_get_device_list.argtypes = [C.c_void_p, C.POINTER(C.POINTER(C.c_void_p))]
+    u.libusb_get_device_list.restype = C.c_ssize_t
+    u.libusb_free_device_list.argtypes = [C.POINTER(C.c_void_p), C.c_int]
+    u.libusb_get_device_descriptor.argtypes = [C.c_void_p, C.c_void_p]
+    u.libusb_get_bus_number.argtypes = [C.c_void_p]
+    u.libusb_get_bus_number.restype = C.c_uint8
+    u.libusb_get_device_address.argtypes = [C.c_void_p]
+    u.libusb_get_device_address.restype = C.c_uint8
+    u.libusb_get_port_numbers.argtypes = [C.c_void_p, C.POINTER(C.c_uint8), C.c_int]
+    u.libusb_get_port_numbers.restype = C.c_int
+    return u
+
+
+def list_dots(library=None):
+    """Every attached Dot as (bus, port path, address), mounted or not.
+
+    The port path names the physical socket, so it stays the same when the
+    Dot is unplugged and plugged back into the same port; the address does not.
+    """
+    u = load_libusb(library)
+    context = C.c_void_p()
+    if u.libusb_init(C.byref(context)) < 0:
+        raise OSError('USB: libusb_init failed')
+    devices = C.POINTER(C.c_void_p)()
+    try:
+        count = u.libusb_get_device_list(context, C.byref(devices))
+        if count < 0:
+            raise OSError(f'USB: libusb_get_device_list failed ({count})')
+        found = []
+        for i in range(count):
+            descriptor = (C.c_ubyte * 18)()
+            if u.libusb_get_device_descriptor(devices[i], descriptor) < 0:
+                continue
+            # libusb's descriptor contains host-endian integer fields.
+            vid = C.c_uint16.from_buffer(descriptor, 8).value
+            pid = C.c_uint16.from_buffer(descriptor, 10).value
+            if (vid, pid) != DOT_VID_PID:
+                continue
+            ports = (C.c_uint8 * MAX_PORT_DEPTH)()
+            depth = u.libusb_get_port_numbers(devices[i], ports, MAX_PORT_DEPTH)
+            found.append((
+                u.libusb_get_bus_number(devices[i]),
+                tuple(ports[:depth]) if depth > 0 else (),
+                u.libusb_get_device_address(devices[i]),
+            ))
+        return sorted(found)
+    finally:
+        if devices:
+            u.libusb_free_device_list(devices, 1)
+        u.libusb_exit(context)
+
+
 class Device:
     def __init__(self, *, bus: int, address: int, library=None):
-        from libusb_package import find_library
-
-        path = library or find_library('libusb-1.0') or ctypes.util.find_library('usb-1.0')
-        if not path:
-            raise OSError('libusb is unavailable; reinstall SidePulse with its libusb-package dependency')
-        u = self.usb = C.CDLL(path)
-        u.libusb_init.argtypes = [C.POINTER(C.c_void_p)]
-        u.libusb_exit.argtypes = [C.c_void_p]
-        u.libusb_get_device_list.argtypes = [C.c_void_p, C.POINTER(C.POINTER(C.c_void_p))]
-        u.libusb_get_device_list.restype = C.c_ssize_t
-        u.libusb_free_device_list.argtypes = [C.POINTER(C.c_void_p), C.c_int]
-        u.libusb_get_device_descriptor.argtypes = [C.c_void_p, C.c_void_p]
-        u.libusb_get_bus_number.argtypes = [C.c_void_p]
-        u.libusb_get_bus_number.restype = C.c_uint8
-        u.libusb_get_device_address.argtypes = [C.c_void_p]
-        u.libusb_get_device_address.restype = C.c_uint8
+        u = self.usb = load_libusb(library)
         u.libusb_open.argtypes = [C.c_void_p, C.POINTER(C.c_void_p)]
         u.libusb_close.argtypes = [C.c_void_p]
         u.libusb_control_transfer.argtypes = [C.c_void_p, C.c_uint8, C.c_uint8,

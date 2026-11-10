@@ -16,6 +16,9 @@ KNOWN_LED_FILE_NAMES = frozenset(name.upper() for name in LED_FILE_NAMES)
 MAX_LED_BYTES = 512
 MAX_LED_LINES = 20
 MOUNT_ROOT = Path("/Volumes")
+# Parent of the names given to Dots driven over USB control. Nothing is ever
+# created here: writes to these names go over USB, never to the filesystem.
+USB_ROOT = Path("/sidepulse-usb")
 DEVICE_NAME_HINTS = (
     "sidepulsepro",
     "sidepulsedot",
@@ -62,6 +65,12 @@ def write_normalized_led_program(
     target = resolve_target_path(device_path=device_path, file_name=file_name)
 
     if dry_run:
+        return target
+
+    location = usb_location(target.parent)
+    if location is not None:
+        with device_write_lock(target.parent):
+            write_usb_program(location, program)
         return target
 
     with device_write_lock(target.parent):
@@ -237,7 +246,84 @@ def discover_devices(
                 )
             elif name_matches:
                 candidates.append(DeviceCandidate(volume, target, "name matches device"))
+    if not candidates and mount_root is None and usb_discovery_enabled(file_name):
+        candidates.extend(discover_usb_dots(file_name=file_name))
     return candidates
+
+
+def usb_discovery_enabled(file_name: str) -> bool:
+    """Look for a Dot over USB only when no drive was found and nothing opted out.
+
+    USB control carries LED programs alone, so a caller after another file
+    (firmware reads STATUS.TXT) never gets a USB candidate, and an explicit
+    SIDEPULSE_MOUNT_ROOTS keeps discovery to the folders it names.
+    """
+    if file_name.upper() not in KNOWN_LED_FILE_NAMES:
+        return False
+    if os.environ.get("SIDEPULSE_MOUNT_ROOTS") is not None:
+        return False
+    return os.environ.get("SIDEPULSE_USB_CONTROL", "1").strip() != "0"
+
+
+def usb_root(bus: int, ports: tuple[int, ...]) -> Path:
+    """A stable name for a Dot driven over USB, keyed by its physical port.
+
+    The path never exists on disk. Its name carries "SidePulseDot" so the LED
+    count and display name read as a Dot, and settings saved for it survive a
+    replug into the same port.
+    """
+    port_path = ".".join(str(port) for port in ports) or "0"
+    return USB_ROOT / f"SidePulseDot-USB-{bus}-{port_path}"
+
+
+def usb_location(root: Path) -> tuple[int, tuple[int, ...]] | None:
+    if root.parent != USB_ROOT:
+        return None
+    prefix = "SidePulseDot-USB-"
+    if not root.name.startswith(prefix):
+        return None
+    bus, _, port_path = root.name[len(prefix):].partition("-")
+    try:
+        ports = tuple(int(part) for part in port_path.split(".")) if port_path != "0" else ()
+        return int(bus), ports
+    except ValueError:
+        return None
+
+
+def discover_usb_dots(*, file_name: str = DEFAULT_FILE_NAME) -> list[DeviceCandidate]:
+    try:
+        from .usb_control import list_dots
+
+        dots = list_dots()
+    except Exception:
+        # No libusb, no permission, or no USB stack: discovery stays silent.
+        return []
+    candidates = []
+    for bus, ports, _address in dots:
+        root = usb_root(bus, ports)
+        candidates.append(
+            DeviceCandidate(root, root / file_name, "USB control, drive not mounted")
+        )
+    return candidates
+
+
+def write_usb_program(location: tuple[int, tuple[int, ...]], program: str) -> None:
+    from .usb_control import Device, list_dots
+
+    bus, ports = location
+    try:
+        addresses = [
+            address for found_bus, found_ports, address in list_dots()
+            if (found_bus, found_ports) == (bus, ports)
+        ]
+        if len(addresses) != 1:
+            raise DeviceWriteError("The SidePulse Dot is no longer connected on that USB port.")
+        with Device(bus=bus, address=addresses[0]) as device:
+            device.write(program.encode("utf-8"))
+    except DeviceWriteError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise DeviceWriteError(f"USB LED control failed: {exc}") from exc
 
 
 def default_mount_roots(
