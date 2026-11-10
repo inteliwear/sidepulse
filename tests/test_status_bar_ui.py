@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -26,12 +27,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-if os.uname().sysname != "Darwin":  # pragma: no cover
+if sys.platform != "darwin":  # pragma: no cover
     raise unittest.SkipTest("status-bar UI tests require macOS")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _ENV_PATCH = None
+_DAEMON_PATCH = None
 
 
 def setUpModule():
@@ -41,16 +43,20 @@ def setUpModule():
     at import time, so scoping the patch here keeps it from leaking into other
     test modules while still landing before anything reads configuration.
     """
-    global _ENV_PATCH
+    global _ENV_PATCH, _DAEMON_PATCH
     scratch = tempfile.mkdtemp(prefix="sidepulse-ui-tests-")
     _ENV_PATCH = patch.dict(
         os.environ,
         {"HOME": scratch, "XDG_CONFIG_HOME": str(Path(scratch) / ".config")},
     )
     _ENV_PATCH.start()
+    _DAEMON_PATCH = patch.object(sb,"daemon_command",return_value={"ok":True,"output_errors":{}})
+    _DAEMON_PATCH.start()
 
 
 def tearDownModule():
+    if _DAEMON_PATCH is not None:
+        _DAEMON_PATCH.stop()
     if _ENV_PATCH is not None:
         _ENV_PATCH.stop()
 
@@ -72,6 +78,8 @@ from AppKit import (  # noqa: E402
 
 from sidepulse import status_bar as sb  # noqa: E402
 from sidepulse import virtual_device as vd  # noqa: E402
+from sidepulse.firmware import FirmwareDevice  # noqa: E402
+from sidepulse.firmware_status import FirmwareStatus  # noqa: E402
 from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
 from sidepulse.settings import AgentMonitorSettings  # noqa: E402
@@ -353,18 +361,193 @@ class SelectorWiringTests(StatusBarTestCase):
         )
 
 
+class FirmwareMenuTests(StatusBarTestCase):
+    def setUp(self):
+        self.device = make_device()
+        self.firmware_device = FirmwareDevice(self.device.root, "dot", "1.1.0", "SPD-123")
+        self.controller.firmware_status = {}
+        self.controller.firmware_messages = {}
+        self.controller.firmware_upgrade_root = None
+
+    def menu(self, status=None, device=None):
+        if status is not None:
+            self.controller.firmware_status[self.device.root] = status
+        return sb.build_device_menu_item(device or self.device, self.controller).submenu()
+
+    def test_outdated_device_shows_version_and_wired_upgrade(self):
+        menu = self.menu(FirmwareStatus(self.firmware_device, "1.1.14"))
+        titles = [item.title() for item in walk_menu(menu)]
+        self.assertIn("Firmware 1.1.0", titles)
+        upgrade = next(item for item in walk_menu(menu) if item.title() == "Upgrade to 1.1.14…")
+        self.assertEqual(str(upgrade.action()), "upgradeFirmware:")
+        self.assertEqual(upgrade.representedObject(), str(self.device.root))
+        self.assertTrue(upgrade.target().respondsToSelector_(upgrade.action()))
+
+    def test_equal_or_newer_firmware_has_no_upgrade(self):
+        for latest in ("1.1.0", "1.0.5"):
+            menu = self.menu(FirmwareStatus(self.firmware_device, latest))
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn("Firmware up to date", titles)
+            self.assertFalse(any(title.startswith("Upgrade to") for title in titles))
+
+    def test_offline_keeps_installed_version_and_reports_check_failure(self):
+        menu = self.menu(FirmwareStatus(self.firmware_device, error="offline"))
+        items = {item.title(): item for item in walk_menu(menu)}
+        self.assertIn("Firmware 1.1.0", items)
+        self.assertIn("Firmware update check unavailable", items)
+        self.assertEqual(items["Firmware update check unavailable"].toolTip(), "offline")
+        self.assertNotIn("Firmware up to date", items)
+
+    def test_disconnected_and_virtual_devices_have_no_firmware_actions(self):
+        for device in (make_device(connected=False), make_device(device_id=sb.VIRTUAL_DEVICE_ID)):
+            titles = [item.title() for item in walk_menu(self.menu(device=device))]
+            self.assertFalse(any(title.startswith(("Firmware", "Upgrade to")) for title in titles))
+
+    def test_updating_message_hides_duplicate_offer(self):
+        self.controller.firmware_upgrade_root = self.device.root
+        self.controller.firmware_messages[self.device.root] = ("Updating firmware…", "Keep the device connected")
+        titles = [item.title() for item in walk_menu(self.menu(FirmwareStatus(self.firmware_device, "1.1.14")))]
+        self.assertIn("Updating firmware…", titles)
+        self.assertFalse(any(title.startswith("Upgrade to") for title in titles))
+
+    def test_click_checks_connection_and_starts_only_one_worker(self):
+        status = FirmwareStatus(self.firmware_device, "1.1.14")
+        menu = self.menu(status)
+        sender = next(item for item in walk_menu(menu) if item.title().startswith("Upgrade to"))
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[self.device]), patch.object(
+            sb.StatusBarController, "close_status_menu",
+        ), patch.object(sb.StatusBarController, "rebuild_firmware_menu"), patch.object(sb.threading, "Thread") as thread:
+            self.controller.upgradeFirmware_(sender)
+            self.controller.upgradeFirmware_(sender)
+            thread.assert_called_once()
+            self.assertEqual(thread.call_args.kwargs["args"], (status,))
+        self.controller.firmware_upgrade_root = None
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[]), patch.object(sb.threading, "Thread") as thread:
+            self.controller.upgradeFirmware_(sender)
+            thread.assert_not_called()
+
+    def test_worker_reports_transfer_and_failure_on_main_thread(self):
+        status = FirmwareStatus(self.firmware_device, "1.1.14")
+        for error in (None, OSError("read-only drive")):
+            dispatch = Mock()
+            target = SimpleNamespace(performSelectorOnMainThread_withObject_waitUntilDone_=dispatch)
+            with patch.object(sb, "install_update", side_effect=error):
+                sb.StatusBarController.upgrade_firmware_worker(target, status)
+                selector, payload, wait = dispatch.call_args.args
+                self.assertEqual(selector, "handleFirmwareUpgrade:")
+                self.assertEqual(payload[0], str(self.device.root))
+                self.assertEqual(payload[2], error is None)
+                self.assertIn("reconnect" if error is None else "read-only drive", payload[1])
+                self.assertFalse(wait)
+
+    def test_version_checks_run_in_one_background_worker(self):
+        self.controller.firmware_check_in_flight = False
+        self.controller.firmware_roots = ()
+        with patch.object(sb.StatusBarController, "status_bar_devices", return_value=[self.device]), patch.object(
+            sb.threading, "Thread",
+        ) as thread, patch.object(self.controller.firmware_reader, "read") as read:
+            self.controller.check_firmware()
+            self.controller.check_firmware()
+            self.controller.firmware_check_in_flight = False
+            with patch.object(sb.time, "monotonic", return_value=1_000_000):
+                self.controller.check_firmware()  # Time passing alone never rereads a device.
+            thread.assert_called_once()
+            self.assertEqual(thread.call_args.kwargs["args"], ((self.device.root,),))
+            read.assert_not_called()
+        self.controller.firmware_check_in_flight = False
+
+
 class MenuBuildTests(StatusBarTestCase):
     """build_menu must produce a wired, clickable menu for any snapshot."""
 
     def setUp(self):
         # Real device discovery would make these tests depend on whatever
         # hardware happens to be plugged in.
-        patcher = patch.object(sb, "discover_devices", return_value=[])
-        self.discover_devices = patcher.start()
-        self.addCleanup(patcher.stop)
+        self.controller.monitor.devices = []
         link_patcher = patch.object(sb, "load_ios_links", return_value=())
         self.load_ios_links = link_patcher.start()
         self.addCleanup(link_patcher.stop)
+
+    def test_unavailable_daemon_menu_keeps_recovery_settings_and_quit(self):
+        menu = sb.build_error_menu(RuntimeError('offline'), self.controller)
+        actions = {item.title(): str(item.action()) for item in menu.itemArray() if item.action() is not None}
+        self.assertEqual(actions, {'Restart daemon': 'restartDaemon:', 'Settings...': 'openSettings:', 'Quit': 'quit:'})
+
+    def test_device_failure_is_visible_without_changing_session_state(self):
+        device = make_device()
+        snapshot = make_snapshot([make_status()])
+        error = 'Built-in animation is missing: cyan-roll-2.LED'
+        with patch.object(self.controller, 'status_bar_devices', return_value=[device]), \
+             patch.object(self.controller, 'device_errors', {device.device_id:error}):
+            menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn('Devices — LED output failed', titles)
+            warning = next(item for item in menu.itemArray() if item.title() == '⚠ ' + device.name)
+            self.assertEqual(warning.toolTip(), error)
+            self.assertIn(error, titles)
+            self.assertEqual(snapshot.aggregate.mode, AgentMode.WORKING)
+            self.controller.device_errors.clear()
+            menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
+            titles = [item.title() for item in walk_menu(menu)]
+            self.assertIn('Devices', titles)
+            self.assertIn(device.name, titles)
+            self.assertNotIn(error, titles)
+
+    def test_disconnected_device_does_not_show_old_output_failure(self):
+        device = make_device(connected=False)
+        with patch.object(self.controller, 'status_bar_devices', return_value=[device]), \
+             patch.object(self.controller, 'device_errors', {device.device_id:'Old failure'}):
+            menu = sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller)
+        titles = [item.title() for item in walk_menu(menu)]
+        self.assertIn('Devices', titles)
+        self.assertIn(device.name, titles)
+        self.assertNotIn('Old failure', titles)
+
+    def test_menu_header_shows_version_build_date_and_main_update(self):
+        build = sb.BuildInfo('0.2.4.dev15+g4735acb1f', '4735acb1f', '2026-10-24T12:30:00Z')
+        with patch.object(self.controller, 'app_build', build), patch.object(
+            self.controller.monitor, 'runtime', {'app_update': {'status': 'available'}}
+        ):
+            for menu in (sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller),
+                         sb.build_error_menu(RuntimeError('offline'), self.controller)):
+                header = menu.itemAtIndex_(0)
+                self.assertEqual(header.title(), 'SidePulse  0.2.4.dev15 · ' + build.date_label().split()[1] + ' · Update available')
+                self.assertTrue(menu.itemAtIndex_(1).isSeparatorItem())
+                self.assertEqual(header.toolTip(), build.version + '\n' + build.date_label() + '\nUpdate available from GitHub main…')
+                self.assertEqual(str(header.action()), 'openAppUpdates:')
+                font, _ = header.attributedTitle().attribute_atIndex_effectiveRange_(sb.NSFontAttributeName, len('SidePulse  '), None)
+                self.assertEqual(font.pointSize(), 11)
+                self.assert_menu_is_wired(menu)
+            with patch.object(sb, 'open_url') as open_url:
+                self.controller.openAppUpdates_(None)
+                open_url.assert_called_once_with(sb.GITHUB_MAIN_URL)
+
+    def test_session_options_offer_the_daemon_supplied_mobile_link(self):
+        from dataclasses import replace
+        status = replace(make_status(), session_link='sidepulse://sessions?publisher=mac&scope=s')
+        menu = sb.build_session_options_menu(status, datetime.now(timezone.utc), self.controller)
+        link = next(item for item in menu.itemArray() if item.title() == 'Copy mobile session link')
+        self.assertEqual(str(link.action()), 'copySessionLink:')
+        self.assertEqual(link.representedObject(), status.session_link)
+
+    def test_storage_disabled_dot_is_connected_and_menu_controls_use_usb(self):
+        root = Path('/dev/sidepulse-usb/Dot-002-001')
+        self.controller.monitor.devices = [sb.DeviceCandidate(
+            root, root, 'USB control; storage off', 'sidepulse-usb:SPD-000006',
+        )]
+        with patch.object(sb, 'save_settings'):
+            devices = self.controller.status_bar_devices(remember=False)
+        dot = next(device for device in devices if device.root == root)
+        self.assertTrue(dot.connected)
+        self.assertEqual(dot.name, 'SidePulse Dot')
+        self.assertEqual(dot.target, root)
+        self.assertEqual(dot.device_id, 'sidepulse-usb:SPD-000006')
+        item = sb.build_device_menu_item(dot, self.controller)
+        self.assertEqual(item.state(), 1)
+        titles = [entry.title() for entry in walk_menu(item.submenu())]
+        self.assertIn('Agent Status', titles)
+        self.assertIn('Battery Level', titles)
+
 
     def assert_menu_is_wired(self, menu: NSMenu):
         for item in walk_menu(menu):
@@ -469,13 +652,34 @@ class MenuBuildTests(StatusBarTestCase):
             for index in range(item.submenu().numberOfItems())
             if item.submenu().itemAtIndex_(index).title()
         ]
-        self.assertIn("Agent Status", submenu_titles)
-        self.assertIn("Manual", submenu_titles)
+        self.assertIn("Forward sessions", submenu_titles)
+        self.assertNotIn("Agent Status", submenu_titles)
+        self.assertNotIn("Manual", submenu_titles)
         self.assertNotIn("Battery Level", submenu_titles)
         self.assertIn("Linked phone", submenu_titles)
         self.assertIn("ID aaaaaaaaaaaa", submenu_titles)
         self.assertIn("Remove phone...", submenu_titles)
         self.assertNotIn("Brightness 100%", submenu_titles)
+
+    def test_phone_sync_menu_toggle_persists_without_sending_colors(self):
+        from sidepulse.settings import load_settings, save_settings
+        link = sb.IOSLink("Session phone", "b" * 64, status_protocol=2)
+        device = sb.StatusBarDevice(device_id=sb.linked_phone_device_id(link), name=link.name,
+            root=Path("ios/phone"), target=Path("ios/phone"), connected=True,
+            display="custom", remote_link=link)
+        target = SimpleNamespace(settings=AgentMonitorSettings(), set_settings_message=Mock(), refresh_=Mock())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            with patch("sidepulse.status_bar.save_settings", side_effect=lambda settings: save_settings(settings, path)), patch("sidepulse.status_bar.send_ios_program") as send:
+                for expected in (False, True):
+                    menu = sb.build_device_menu_item(device, target).submenu()
+                    toggle = menu.itemAtIndex_(0)
+                    self.assertEqual(toggle.title(), "Forward sessions")
+                    self.assertTrue(toggle.isEnabled())
+                    self.assertEqual(toggle.state(), int(not expected))
+                    sb.StatusBarController.toggle_phone_session_sync(target, str(toggle.representedObject()))
+                    self.assertEqual(load_settings(path).sync_sessions_to_phone(link.link_id), expected)
+                send.assert_not_called()
 
     def test_remove_linked_iphone_requires_confirmation_and_deletes_link(self):
         link = sb.IOSLink("Peter's iPhone", "a" * 64)
@@ -805,16 +1009,14 @@ class WindowBuildTests(StatusBarTestCase):
             self.controller.show_animation_program_on_device_worker(
                 program,
                 [device],
-                12,
             )
 
         write_program.assert_called_once_with(
             sb.apply_brightness(program, 128),
             device_path=device.target,
+            hold_seconds=sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS,
         )
-        sleep.assert_called_once_with(
-            sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS
-        )
+        sleep.assert_not_called()
         self.assertEqual(sb.AGENT_ANIMATION_EDITOR_DEVICE_PREVIEW_SECONDS, 10.0)
 
     def test_agent_animation_profile_editor_builds(self):
@@ -983,6 +1185,8 @@ class WindowBuildTests(StatusBarTestCase):
             self.assertTrue(animated_rows)
             for row in animated_rows:
                 self.assertIsInstance(row, sb.AgentAnimationMenuItemView)
+                self.assertIsNone(row.animation_preview.wasm_controller)
+                row.viewWillDraw()
                 self.assertIsNotNone(row.animation_preview.wasm_controller)
                 self.assertIsNone(row.animation_preview.wasm_error)
         finally:
@@ -992,8 +1196,37 @@ class WindowBuildTests(StatusBarTestCase):
         window = sb.build_settings_window(self.controller)
         self.assertFalse(window.isVisible(), "building a window must not show it")
 
+    def test_history_chart_displays_temperatures_and_accepts_older_records(self):
+        chart = sb.StatusHistoryChartView.alloc().initWithFrame_(((0, 0), (612, 250)))
+        for temperatures in ({}, {'cpu_temperature_c': 75.5, 'case_temperature_c': 32.1}):
+            chart.setRecords_([{'recorded_at': '2026-10-30T07:00:00Z', **temperatures}])
+            image = NSImage.alloc().initWithSize_((612, 250))
+            image.lockFocus()
+            try:
+                with patch.object(sb, 'draw_chart_text', wraps=sb.draw_chart_text) as labels:
+                    chart.drawRect_(chart.bounds())
+                text = [call.args[0] for call in labels.call_args_list]
+                self.assertIn('CPU °C', text)
+                self.assertIn('Case °C', text)
+                self.assertIn('75.5°' if temperatures else '-', text)
+                if temperatures:
+                    self.assertIn('32.1°', text)
+                    missing = {'cpu_temperature_c': None, 'case_temperature_c': None}
+                    with patch.object(sb, 'draw_chart_text') as latest_label:
+                        sb.draw_current_history_value([(0, temperatures), (15, missing)],
+                            'cpu_temperature_c', '°', 0, 0, 50)
+                    self.assertEqual(latest_label.call_args.args[0], '-')
+            finally:
+                image.unlockFocus()
+
     def test_show_settings_window_brings_it_forward_and_starts_previews(self):
-        self.controller.show_settings_window()
+        self.controller.settings_window = None
+        with patch.object(sb, 'read_status_history_records') as read_history:
+            self.controller.show_settings_window()
+            read_history.assert_not_called()
+            tabs = self.controller.settings_fields['tabs']
+            tabs.selectTabViewItemWithIdentifier_('history')
+            read_history.assert_called_once()
         try:
             self.assertTrue(self.controller.settings_window.isVisible())
             self.assertIsNotNone(self.controller.agent_animation_preview_timer)
@@ -1023,6 +1256,17 @@ class StatusIconAnimationTests(StatusBarTestCase):
             self.assertTrue(first.isTemplate())
             self.assertEqual(first.size(), later.size())
             self.assertIs(first, sb.animated_status_icon(state, 0))
+
+    def test_output_failure_tooltip_keeps_actual_working_state(self):
+        self.target.device_errors = {'dot':'Missing animation'}
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertEqual(self.target.current_state, sb.STATE_WORKING)
+        button = self.target.status_item.button()
+        self.assertIn('LED output failed', button.setToolTip_.call_args.args[0])
+        self.assertEqual(button.setAccessibilityLabel_.call_args, button.setToolTip_.call_args)
+        self.target.device_errors.clear()
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertNotIn('LED output failed', button.setToolTip_.call_args.args[0])
 
     def test_provider_badge_pixels_stay_stationary(self):
         # Supply a real provider image independent of installed applications.
@@ -1232,3 +1476,34 @@ class PureUiLogicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrayDaemonOwnershipTests(unittest.TestCase):
+    def test_recovery_restarts_existing_service_without_installing(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch('sidepulse.service_launch.restart_service') as restart, \
+             patch('sidepulse.service_launch.install_service') as install, \
+             patch.object(sb.threading, 'Thread') as thread:
+            target.restartDaemon_(None)
+            target.restartDaemon_(None)
+            self.assertEqual(thread.call_count, 1)
+            thread.call_args.kwargs['target']()
+        restart.assert_called_once_with()
+        install.assert_not_called()
+        self.assertFalse(target.daemon_recovery_running)
+
+    def test_quitting_tray_does_not_stop_daemon_behavior(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch.object(sb, 'NSApp') as app, patch.object(sb, 'daemon_command') as command:
+            sb.StatusBarController.quit_(target, None)
+        app.terminate_.assert_called_once_with(target)
+        command.assert_not_called()
+
+    def test_tray_termination_only_cleans_up_ui_resources(self):
+        target = sb.StatusBarController.alloc().init()
+        with patch.object(sb.StatusBarController, 'stop_status_icon_animation') as icons, patch.object(sb.StatusBarController, 'stop_agent_animation_preview_timer') as preview, patch.object(sb.StatusBarController, 'stop_event_server') as events, patch.object(sb, 'daemon_command') as command:
+            target.applicationWillTerminate_(None)
+        icons.assert_called_once()
+        preview.assert_called_once()
+        events.assert_called_once()
+        command.assert_not_called()

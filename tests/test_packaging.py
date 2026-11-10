@@ -24,6 +24,9 @@ import sys
 import unittest
 from importlib.metadata import PackageNotFoundError, distribution, packages_distributions
 from pathlib import Path
+from unittest.mock import patch
+
+from packaging.requirements import Requirement
 
 try:  # Python 3.11+
     import tomllib
@@ -45,6 +48,9 @@ FIRST_PARTY = {"sidepulse", "sidepulse_cli", "agent_monitor"}
 # they are legitimately imported without being declared.
 CONDITIONAL_STDLIB = {"tomllib"}
 
+# These import names differ from the distributions that provide them.
+OPTIONAL_IMPORT_DISTRIBUTIONS = {"winpty": "pywinpty", "mlx_lm": "mlx-lm"}
+
 
 def normalize_dist_name(name: str) -> str:
     """PEP 503 normalization, so Foo_Bar and foo-bar compare equal."""
@@ -63,14 +69,16 @@ def requirement_name(spec: str) -> str:
     ``"pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'"`` -> ``pyobjc-framework-cocoa``
     """
     head = spec.split(";", 1)[0].strip()
-    head = re.split(r"[<>=!~\[\s]", head, 1)[0]
+    head = re.split(r"[<>=!~\[\s]", head, maxsplit=1)[0]
     return normalize_dist_name(head)
 
 
-def declared_dependencies() -> set[str]:
-    """Distribution names declared in ``[project] dependencies``."""
+def declared_dependencies(*, include_inactive=False, environment=None) -> set[str]:
+    """Declared distributions applicable to the target Python/platform."""
     data = load_pyproject()
-    return {requirement_name(dep) for dep in data["project"].get("dependencies", [])}
+    requirements = [Requirement(dep) for dep in data["project"].get("dependencies", [])]
+    return {normalize_dist_name(dep.name) for dep in requirements
+            if include_inactive or dep.marker is None or dep.marker.evaluate(environment)}
 
 
 def dependency_closure(roots: set[str]) -> set[str]:
@@ -190,6 +198,24 @@ def third_party(records: list[ImportRecord]) -> list[ImportRecord]:
     ]
 
 
+class DependencyMarkerTests(unittest.TestCase):
+    def test_platform_dependencies_follow_the_target_environment(self):
+        data = {"project": {"dependencies": [
+            "qrcode>=8", "pywinpty>=3; sys_platform == 'win32'",
+            "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+        ]}}
+        with patch(__name__ + '.load_pyproject', return_value=data):
+            for platform, expected in [
+                ('darwin', {'qrcode', 'pyobjc-framework-cocoa'}),
+                ('linux', {'qrcode'}),
+                ('win32', {'qrcode', 'pywinpty'}),
+            ]:
+                with self.subTest(platform=platform):
+                    self.assertEqual(declared_dependencies(environment={'sys_platform':platform}), expected)
+            self.assertEqual(declared_dependencies(include_inactive=True),
+                             {'qrcode', 'pywinpty', 'pyobjc-framework-cocoa'})
+
+
 class ImportContractTests(unittest.TestCase):
     """The dependency declaration must cover what the code actually imports."""
 
@@ -201,8 +227,7 @@ class ImportContractTests(unittest.TestCase):
 
     @unittest.skipUnless(
         sys.platform == "darwin",
-        "every declared dependency is darwin-gated, so the contract can only "
-        "be checked where they are installed",
+        "GUI framework imports can only be checked where they are installed",
     )
     def test_hard_third_party_imports_are_declared(self):
         """A module-level import of an undeclared distribution is a release bug.
@@ -246,30 +271,25 @@ class ImportContractTests(unittest.TestCase):
         """
         module_to_dists = packages_distributions()
         unknown: list[str] = []
+        data = load_pyproject()
+        extras = data["project"].get("optional-dependencies", {})
+        declared_anywhere = {
+            requirement_name(dep) for deps in extras.values() for dep in deps
+        } | declared_dependencies(include_inactive=True)
         for record in third_party(scan_imports(SRC_ROOT)):
             if not record.optional:
                 continue
             if record.top in module_to_dists:
                 continue
-            # Not installed here; accept only if some extra declares it.
-            data = load_pyproject()
-            extras = data["project"].get("optional-dependencies", {})
-            declared_anywhere = {
-                requirement_name(dep)
-                for deps in extras.values()
-                for dep in deps
-            } | declared_dependencies()
-            if normalize_dist_name(record.top) not in declared_anywhere:
+            # A lazy import may belong to another platform or optional extra.
+            name = OPTIONAL_IMPORT_DISTRIBUTIONS.get(record.top, record.top)
+            if normalize_dist_name(name) not in declared_anywhere:
                 unknown.append(f"{record.where}: optional import {record.top!r}")
 
-        # mlx_lm is the reply-classifier extra; it maps to distribution "mlx-lm".
-        unknown = [u for u in unknown if "mlx_lm" not in u]
         self.assertEqual([], unknown, "Unrecognized optional imports:\n  " + "\n  ".join(unknown))
 
     def test_declared_dependencies_are_installed(self):
         """The test environment matches what we ship, or the suite proves nothing."""
-        if sys.platform != "darwin":
-            self.skipTest("declared dependencies are darwin-gated")
         for name in sorted(declared_dependencies()):
             with self.subTest(dependency=name):
                 try:
@@ -383,22 +403,34 @@ class VersionTests(unittest.TestCase):
         self.assertIn("version", project["dynamic"])
         self.assertNotIn("version", project)
 
-    def test_metadata_and_dunder_version_agree(self):
-        try:
-            import sidepulse
-        except ModuleNotFoundError:
-            self.skipTest("sidepulse is not installed in this environment")
-        from importlib.metadata import version
+    def test_build_stamp_records_version_revision_and_timestamp(self):
+        from sidepulse import _build_info
+        from datetime import datetime
+        self.assertTrue(_build_info.version)
+        self.assertRegex(_build_info.revision, r'^g[0-9a-f]{7,40}$')
+        self.assertIsNotNone(datetime.fromisoformat(_build_info.built_at.replace('Z', '+00:00')).tzinfo)
 
-        try:
-            installed = version("sidepulse")
-        except PackageNotFoundError:
-            self.skipTest("sidepulse is not installed in this environment")
-        self.assertEqual(
-            installed,
-            sidepulse.__version__,
-            "installed metadata and sidepulse.__version__ disagree",
-        )
+    def test_frozen_app_can_report_version_without_distribution_metadata(self):
+        script = '''
+from unittest.mock import patch
+from importlib.metadata import PackageNotFoundError
+with patch('importlib.metadata.version', side_effect=PackageNotFoundError):
+    import sidepulse
+    from sidepulse._build_info import version
+    assert sidepulse.__version__ == version
+'''
+        result = subprocess.run([sys.executable, '-c', script], cwd=REPO_ROOT,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_metadata_and_dunder_version_agree(self):
+        # Other packaging tests can regenerate editable metadata after this
+        # process imported sidepulse. Compare at one fresh import boundary.
+        result = subprocess.run([sys.executable, '-c',
+            'import sidepulse; from importlib.metadata import version; '
+            'assert sidepulse.__version__ == version("sidepulse")'],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PackageDataTests(unittest.TestCase):

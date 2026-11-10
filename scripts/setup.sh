@@ -7,6 +7,25 @@ INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 
+# Check before Python discovery: Apple's python3/clang stubs can otherwise open
+# an installation dialog, and a late compiler failure leaves setup incomplete.
+if [ "$(uname -s)" = Darwin ]; then
+    if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find clang >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+SidePulse setup needs Apple Command Line Tools to build its eject-prevention helper.
+
+1. Run: xcode-select --install
+2. Complete Apple's installer and wait for installation to finish.
+3. Run this SidePulse installer again.
+
+If the tools are already installed, select them with:
+  sudo xcode-select --switch /Library/Developer/CommandLineTools
+For a full Xcode installation, select its Contents/Developer directory instead.
+EOF
+        exit 1
+    fi
+fi
+
 usable_python() {
     command -v "$1" >/dev/null 2>&1 &&
         "$1" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1
@@ -122,7 +141,13 @@ fi
 
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/sidepulse" "$BIN_DIR/sidepulse"
-ln -sf "$VENV/bin/agent-monitor" "$BIN_DIR/agent-monitor"
+ln -sf "$VENV/bin/sidepulse" "$BIN_DIR/sp"
+# Remove only aliases owned by this installation, including broken symlinks.
+for legacy in agent-monitor agent-status-bar; do
+    if [ -L "$BIN_DIR/$legacy" ] && [ "$(readlink "$BIN_DIR/$legacy")" = "$VENV/bin/$legacy" ]; then
+        rm "$BIN_DIR/$legacy"
+    fi
+done
 
 "$VENV/bin/sidepulse" setup
 SETUP_COMPLETE=1

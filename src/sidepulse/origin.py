@@ -58,7 +58,8 @@ def detect_agent_origin(
         return process_origin
 
     if terminal_environment(active_env):
-        return surface_origin(normalized_provider, "cli", "env:TERM_PROGRAM")
+        source = 'env:TERM_PROGRAM' if active_env.get('TERM_PROGRAM') else 'env:WT_SESSION'
+        return surface_origin(normalized_provider, "cli", source)
 
     return AgentOrigin(
         kind=f"{normalized_provider}_unknown",
@@ -246,7 +247,7 @@ def process_basename(info: ProcessInfo) -> str:
 
 def terminal_environment(env: Mapping[str, str]) -> bool:
     term_program = str(env.get("TERM_PROGRAM") or "").strip()
-    return bool(term_program and term_program.lower() != "vscode")
+    return bool(term_program and term_program.lower() != "vscode" or env.get('WT_SESSION'))
 
 
 def annotate_payload_with_origin(

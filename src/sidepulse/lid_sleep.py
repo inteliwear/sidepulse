@@ -293,7 +293,10 @@ def sleep_helper_target_user() -> str:
 
 
 def sleep_helper_installed(path: Path = SLEEP_HELPER_SUDOERS_PATH) -> bool:
-    return path.exists()
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def sleep_helper_install_command(executable: str = "sidepulse") -> str:
