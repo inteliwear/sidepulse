@@ -1333,9 +1333,41 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(sb.session_row_icon_for_status(status), NSImage)
 
     def test_provider_icons_do_not_raise(self):
-        for provider in ("claude", "codex", "grok", "opencode", "nonsense"):
+        for provider in ("claude", "codex", "grok", "junie", "opencode", "nonsense"):
             with self.subTest(provider=provider):
                 sb.provider_icon_for_provider(provider)
+
+    def test_junie_uses_bundled_icon_instead_of_app_lookup(self):
+        expected = NSImage.alloc().initWithSize_((18, 18))
+        sb._provider_icon_cache.pop("junie", None)
+        self.addCleanup(sb._provider_icon_cache.pop, "junie", None)
+        with (
+            patch.object(sb, "bundled_icon", return_value=expected) as bundled,
+            patch.object(sb, "provider_app_icon") as resolve,
+        ):
+            image = sb.provider_icon_for_provider("junie")
+        bundled.assert_called_once_with("junie.png")
+        resolve.assert_not_called()
+        self.assertIs(image, expected)
+
+    def test_bundled_junie_icon_loads_at_menu_size(self):
+        image = sb.bundled_icon("junie.png")
+        self.assertIsInstance(image, NSImage)
+        self.assertEqual((18.0, 18.0), tuple(image.size()))
+
+    def test_junie_falls_back_to_terminal_when_bundled_icon_is_unavailable(self):
+        expected = NSImage.alloc().initWithSize_((18, 18))
+        sb._provider_icon_cache.pop("junie", None)
+        self.addCleanup(sb._provider_icon_cache.pop, "junie", None)
+        with (
+            patch.object(sb, "bundled_icon", return_value=None),
+            patch.object(sb, "image_for_symbol", return_value=expected) as fallback,
+            patch.object(sb, "provider_app_icon") as resolve,
+        ):
+            image = sb.provider_icon_for_provider("junie")
+        fallback.assert_called_once_with("terminal", "Junie")
+        resolve.assert_not_called()
+        self.assertIs(image, expected)
 
     def test_mapped_providers_look_up_their_own_bundle(self):
         """The generic fallback would absorb a deleted branch without failing.

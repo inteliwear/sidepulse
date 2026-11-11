@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from importlib.resources import files
 from pathlib import Path
 
 try:
@@ -5411,6 +5412,18 @@ def provider_icon_for_status(status: AgentStatus):
     return provider_icon_for_provider(status.provider)
 
 
+@lru_cache(maxsize=32)
+def bundled_icon(name: str):
+    try:
+        resource = files("sidepulse.resources").joinpath("icons").joinpath(name)
+        image = NSImage.alloc().initWithContentsOfFile_(str(resource))
+    except (OSError, TypeError, ValueError):
+        return None
+    if image is not None:
+        image.setSize_((18.0, 18.0))
+    return image
+
+
 def provider_icon_for_provider(provider: str):
     provider = provider.lower()
     if provider in _provider_icon_cache:
@@ -5428,6 +5441,9 @@ def provider_icon_for_provider(provider: str):
     elif provider == "grok":
         image = app_icon("/Applications/Grok.app")
         image = image or grok_badge_icon()
+    elif provider == "junie":
+        image = bundled_icon("junie.png")
+        image = image or image_for_symbol("terminal", "Junie")
     else:
         # Any other provider resolves its own app by name, so a new agent needs no branch
         # here. Only providers with an alias or a custom glyph need one.
