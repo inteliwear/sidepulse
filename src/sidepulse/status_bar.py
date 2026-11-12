@@ -2934,14 +2934,6 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         menu.addItem_(build_sleep_prevention_policy_item(policy, target))
 
     menu.addItem_(NSMenuItem.separatorItem())
-    setup = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Setup...",
-        "openSetup:",
-        "",
-    )
-    setup.setTarget_(target)
-    menu.addItem_(setup)
-
     settings = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         "Settings...",
         "openSettings:",
@@ -4264,6 +4256,10 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     show_menu_bar_icon = add_checkbox(
         behavior_tab, "Show menu bar icon", 32, 60, 280, 24,
         target, "setMenuBarIconFromCheckbox:",
+    )
+    add_button(
+        behavior_tab, "Open Setup…", 474, 58, 126, 28,
+        target, "openSetup:",
     )
     settings_hint = add_label(
         behavior_tab, "Reopen settings anytime: run sidepulse settings in Terminal.",
