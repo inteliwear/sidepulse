@@ -830,6 +830,13 @@ row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
 provider app, Terminal resume, or Claude Code in VS Code.
 
+Sessions that T3 Code started open in their T3 Code thread by default. T3 Code
+exports `T3CODE_THREAD_ID` to the agents it runs, and the hook combines it with
+the environment ID in `$T3CODE_HOME/userdata/environment-id` (default
+`~/.t3`) to build a `t3code://threads/...` link. A provider-wide opener does
+not override this; choose another opener from a T3 session's Open Options row
+to remember it for T3 Code sessions only.
+
 Open a connected device under **Devices** to see its firmware version. The app
 checks published releases for that model in the background and offers
 **Upgrade to VERSION…** when newer firmware is available. The update is

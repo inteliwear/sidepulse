@@ -50,7 +50,7 @@ def hook_report(provider: str, line: dict) -> dict | None:
     context = {key: value for key, value in {
         'provider': provider,
         'session_id': record.session_id, 'agent_id': record.agent_id,
-        'cwd': record.cwd, 'origin': interpreted.origin,
+        'cwd': record.cwd, 'origin': interpreted.origin, 't3_link': record.t3_link,
         'display_name': interpreted.display_name, 'tool_name': record.tool_name,
         'mode': interpreted.mode.value, 'event_name': record.event_name,
         'source_name': socket.gethostname(), 'title': title,

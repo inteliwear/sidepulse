@@ -7,8 +7,13 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import quote
 
 from .models import provider_label
+
+T3_BUNDLE_ID = "com.t3tools.t3code"
+T3_THREAD_ENV = "T3CODE_THREAD_ID"
+T3_HOME_ENV = "T3CODE_HOME"
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,12 @@ def explicit_origin_from_env(provider: str, env: Mapping[str, str]) -> AgentOrig
 
 
 def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigin | None:
+    # T3 Code launches provider runtimes itself and exports the owning thread.
+    if clean_label(env.get(T3_THREAD_ENV)):
+        return surface_origin(provider, "t3code", f"env:{T3_THREAD_ENV}")
+    if str(env.get("__CFBundleIdentifier") or "").strip().lower() == T3_BUNDLE_ID:
+        return surface_origin(provider, "t3code", "env:__CFBundleIdentifier")
+
     term_program = str(env.get("TERM_PROGRAM") or "").strip().lower()
     if term_program == "vscode" or any(key.startswith("VSCODE_") for key in env):
         return surface_origin(provider, "vscode", "env:VSCODE")
@@ -176,7 +187,10 @@ def surface_origin(provider: str, surface: str, source: str) -> AgentOrigin:
         ("junie", "ide"): "Junie in JetBrains IDE",
         ("junie", "transcript"): "Junie Transcript",
     }
-    label = labels.get((provider, surface), provider_label(provider))
+    if surface == "t3code":
+        label = f"{provider_label(provider)} in T3 Code"
+    else:
+        label = labels.get((provider, surface), provider_label(provider))
     return AgentOrigin(
         kind=f"{provider}_{surface}",
         label=label,
@@ -256,11 +270,39 @@ def annotate_payload_with_origin(
     *,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    if "agent_origin" in payload or "agentOrigin" in payload:
-        return payload
+    active_env = os.environ if env is None else env
     result = dict(payload)
-    result.update(detect_agent_origin(provider, env=env).to_payload())
+    if "agent_origin" not in payload and "agentOrigin" not in payload:
+        result.update(detect_agent_origin(provider, env=active_env).to_payload())
+    if "t3_link" not in result:
+        link = t3_thread_link(active_env)
+        if link:
+            result["t3_link"] = link
     return result
+
+
+def t3_thread_link(env: Mapping[str, str], *, home: Path | None = None) -> str | None:
+    """Build T3 Code's deep link for the thread that launched this agent.
+
+    T3 exports the thread id to provider runtimes; the environment id lives in
+    the T3 data directory. Both are required for t3code://threads links.
+    """
+    thread_id = clean_label(env.get(T3_THREAD_ENV))
+    if not thread_id:
+        return None
+    environment_id = t3_environment_id(env, home=home)
+    if not environment_id:
+        return None
+    return f"t3code://threads/{quote(environment_id, safe='')}/{quote(thread_id, safe='')}"
+
+
+def t3_environment_id(env: Mapping[str, str], *, home: Path | None = None) -> str | None:
+    configured = clean_label(env.get(T3_HOME_ENV))
+    base = Path(configured).expanduser() if configured else (home or Path.home()) / ".t3"
+    try:
+        return clean_label((base / "userdata" / "environment-id").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def origin_label_from_payload(provider: str, raw: Mapping[str, Any]) -> str | None:

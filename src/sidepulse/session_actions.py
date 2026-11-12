@@ -9,7 +9,8 @@ from .models import AgentStatus
 SESSION_OPEN_APP = "app"
 SESSION_OPEN_TERMINAL = "terminal"
 SESSION_OPEN_VSCODE = "vscode"
-SESSION_OPEN_CHOICES = (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
+SESSION_OPEN_T3 = "t3code"
+SESSION_OPEN_CHOICES = (SESSION_OPEN_T3, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 SESSION_OPEN_APP_SURFACES = ("app", "ui", "transcript")
 SESSION_OPEN_TERMINAL_SURFACES = ("cli", "terminal", "command line")
 SESSION_OPEN_VSCODE_SURFACES = ("vscode", "vs code", "visual studio code")
@@ -63,6 +64,8 @@ def default_session_open_action(status: AgentStatus) -> str:
 
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     origin = normalized_origin(status.origin)
+    if status.t3_link or is_t3_origin(status.origin):
+        return (SESSION_OPEN_T3, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP, SESSION_OPEN_VSCODE)
     if origin:
         if any(surface in origin for surface in SESSION_OPEN_VSCODE_SURFACES):
             return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
@@ -78,11 +81,17 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 
 
+def is_t3_origin(origin: str | None) -> bool:
+    return "t3 code" in normalized_origin(origin)
+
+
 def normalized_origin(origin: str | None) -> str:
     return " ".join(str(origin or "").strip().lower().replace("-", " ").split())
 
 
 def session_open_target(status: AgentStatus, action: str) -> tuple[str, str] | None:
+    if action == SESSION_OPEN_T3:
+        return ("url", status.t3_link) if status.t3_link else None
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
         return ("url", url) if url else None
@@ -101,6 +110,8 @@ def available_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
 
 def session_open_action_label(status: AgentStatus, action: str) -> str:
     provider = status.provider.lower()
+    if action == SESSION_OPEN_T3:
+        return "Open in T3 Code"
     if action == SESSION_OPEN_APP:
         if provider == "codex":
             return "Open in Codex"
