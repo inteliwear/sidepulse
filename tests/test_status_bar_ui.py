@@ -1352,13 +1352,13 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(sb.session_row_icon_for_status(status), NSImage)
 
     def test_provider_icons_do_not_raise(self):
-        for provider in (*HOOK_PROVIDERS, "opencode", "nonsense"):
+        for provider in (*HOOK_PROVIDERS, "nonsense"):
             with self.subTest(provider=provider):
                 self.assertIsInstance(sb.provider_icon_for_provider(provider), NSImage)
 
     def test_every_provider_has_a_distinct_builtin_icon_without_apps_or_symbols(self):
         rendered = set()
-        providers = (*HOOK_PROVIDERS, "opencode", "custom-agent", "")
+        providers = (*HOOK_PROVIDERS, "custom-agent", "")
         with (
             patch.dict(sb._provider_icon_cache, clear=True),
             patch.object(sb, "app_icon", return_value=None),

@@ -24,9 +24,11 @@ from .providers import (
     GROK_EVENTS,
     JUNIE_EVENTS,
     JUNIE_MONITOR_EVENTS,
+    OPENCODE_PLUGIN_MARKER,
     default_cursor_hook_config_path,
     default_grok_hook_config_path,
     default_junie_hook_config_path,
+    default_opencode_plugin_path,
     detect_log_path,
 )
 
@@ -38,19 +40,21 @@ MANAGED_END = "# <<< agent-monitor hooks <<<"
 class InstallResult:
     provider: str
     config_path: Path
-    log_path: Path
+    log_path: Path | None
     changed: bool
     backup_path: Path | None = None
     dry_run: bool = False
+    note: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider": self.provider,
             "config_path": str(self.config_path),
-            "log_path": str(self.log_path),
+            "log_path": str(self.log_path) if self.log_path else None,
             "changed": self.changed,
             "backup_path": str(self.backup_path) if self.backup_path else None,
             "dry_run": self.dry_run,
+            "note": self.note,
         }
 
 
@@ -344,6 +348,52 @@ def uninstall_junie_hooks(
                 pass
 
     return InstallResult("junie", config, target_log, changed, backup, dry_run)
+
+
+def opencode_plugin_source() -> str:
+    from importlib.resources import files
+
+    return files("sidepulse.resources").joinpath("opencode", "sidepulse.ts").read_text(encoding="utf-8")
+
+
+def opencode_plugin_is_managed(path: Path) -> bool:
+    try:
+        return OPENCODE_PLUGIN_MARKER in path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def install_opencode_plugin(
+    plugin_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    """OpenCode has no command hooks; a plugin reports through `sidepulse report`."""
+    target = plugin_path or default_opencode_plugin_path()
+    source = opencode_plugin_source()
+    if target.exists() and not opencode_plugin_is_managed(target):
+        return InstallResult("opencode", target, None, False, None, dry_run,
+                             note="skipped: this file was not installed by SidePulse")
+    try:
+        changed = target.read_text(encoding="utf-8") != source
+    except (OSError, UnicodeDecodeError):
+        changed = True
+    if changed and not dry_run:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        temporary.write_text(source, encoding="utf-8")
+        temporary.replace(target)
+    return InstallResult("opencode", target, None, changed, None, dry_run)
+
+
+def uninstall_opencode_plugin(
+    plugin_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    target = plugin_path or default_opencode_plugin_path()
+    changed = target.exists() and opencode_plugin_is_managed(target)
+    if changed and not dry_run:
+        target.unlink(missing_ok=True)
+    return InstallResult("opencode", target, None, changed, None, dry_run)
 
 
 def install_cursor_hooks(

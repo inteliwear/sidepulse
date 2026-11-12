@@ -32,11 +32,13 @@ from .install import (
     install_cursor_hooks,
     install_grok_hooks,
     install_junie_hooks,
+    install_opencode_plugin,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_cursor_hooks,
     uninstall_grok_hooks,
     uninstall_junie_hooks,
+    uninstall_opencode_plugin,
 )
 from .links import (
     IOSLink,
@@ -67,6 +69,7 @@ from .lid_sleep import (
 from .models import AgentStatus
 from .providers import (
     HOOK_PROVIDERS,
+    LOG_HOOK_PROVIDERS,
     detect_provider_configs,
     default_log_path,
 )
@@ -263,7 +266,7 @@ def add_sidepulse_delivery_arguments(parser: argparse.ArgumentParser) -> None:
 
 def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
     hook_log = subparsers.add_parser("hook-log", help="Internal hook logging entry point.")
-    hook_log.add_argument("--provider", choices=HOOK_PROVIDERS, required=True)
+    hook_log.add_argument("--provider", choices=LOG_HOOK_PROVIDERS, required=True)
     hook_log.add_argument("--log", type=Path, required=True)
     hook_log.add_argument("--event", help="Provider-native lifecycle event name (used by cursor).")
     hook_log.set_defaults(func=cmd_hook_log)
@@ -1178,6 +1181,8 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "opencode":
+            results.append(install_opencode_plugin(dry_run=args.dry_run))
         else:
             results.append(install_junie_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
@@ -1190,7 +1195,10 @@ def print_install_results(results, *, dry_run: bool) -> None:
             action = "already configured"
         print(f"{result.provider}: {action}")
         print(f"  config: {result.config_path}")
-        print(f"  log: {result.log_path}")
+        if result.log_path:
+            print(f"  log: {result.log_path}")
+        if getattr(result, "note", None):
+            print(f"  {result.note}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
         if result.provider == "codex" and result.changed and not dry_run:
@@ -1210,6 +1218,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "opencode":
+            results.append(uninstall_opencode_plugin(dry_run=args.dry_run))
         else:
             results.append(uninstall_junie_hooks(log_path=log_path, dry_run=args.dry_run))
 
@@ -1219,7 +1229,10 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             action = "already uninstalled"
         print(f"{result.provider}: {action}")
         print(f"  config: {result.config_path}")
-        print(f"  log: {result.log_path}")
+        if result.log_path:
+            print(f"  log: {result.log_path}")
+        if getattr(result, "note", None):
+            print(f"  {result.note}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
     return 0
