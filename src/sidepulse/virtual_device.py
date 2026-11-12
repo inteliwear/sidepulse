@@ -17,8 +17,26 @@ from AppKit import (
     NSWindowCollectionBehaviorFullScreenAuxiliary,
     NSWindowStyleMaskBorderless,
 )
-from Foundation import NSObject, NSTimer
-from Quartz import CGContextFillRect, CGContextSetRGBFillColor
+from Foundation import NSData, NSNull, NSObject, NSTimer
+from Quartz import (
+    CALayer,
+    CAShapeLayer,
+    CGColorCreateGenericRGB,
+    CGColorSpaceCreateDeviceRGB,
+    CGContextFillRect,
+    CGContextSetRGBFillColor,
+    CGDataProviderCreateWithCFData,
+    CGImageCreate,
+    CGPathAddCurveToPoint,
+    CGPathAddLineToPoint,
+    CGPathCloseSubpath,
+    CGPathCreateMutable,
+    CGPathMoveToPoint,
+    kCAFilterLinear,
+    kCAGravityResize,
+    kCGImageAlphaPremultipliedLast,
+    kCGRenderingIntentDefault,
+)
 
 from .led_status import LedDisplayState, normalize_brightness, program_for_display_state
 from .led_wasm import LedWasmUnavailableError, SdLedWasmController
@@ -117,6 +135,143 @@ def notch_bar_path(rect):
     path.lineToPoint_((x, top))
     path.closePath()
     return path
+
+
+def notch_bar_cgpath(width: float, height: float):
+    """notch_bar_path as a CGPath, for the Core Animation clip mask."""
+    right, top = float(width), float(height)
+    radius = min(NOTCH_BOTTOM_RADIUS, right / 2.0, top / 2.0)
+    path = CGPathCreateMutable()
+    CGPathMoveToPoint(path, None, 0.0, top)
+    CGPathAddLineToPoint(path, None, right, top)
+    CGPathAddLineToPoint(path, None, right, radius)
+    CGPathAddCurveToPoint(
+        path, None, right, radius * 0.45, right - radius * 0.45, 0.0, right - radius, 0.0,
+    )
+    CGPathAddLineToPoint(path, None, radius, 0.0)
+    CGPathAddCurveToPoint(path, None, radius * 0.45, 0.0, 0.0, radius * 0.45, 0.0, radius)
+    CGPathCloseSubpath(path)
+    return path
+
+
+def notch_led_bands(width: float, height: float):
+    """(rect, boost, alpha_scale) for each light band, matching drawRect_ layering."""
+    glow_height = min(LED_GLOW_HEIGHT, max(0.0, float(height) - LED_BAND_HEIGHT))
+    return (
+        (((0.0, LED_BAND_HEIGHT), (width, glow_height * 0.45)), 0.82, 0.18),
+        (((0.0, LED_BAND_HEIGHT + glow_height * 0.45), (width, glow_height * 0.55)), 0.64, 0.07),
+        (((0.0, 0.0), (width, LED_BAND_HEIGHT)), LED_CORE_BOOST, 0.92),
+        (((0.0, 0.0), (width, 1.15)), LED_HOTLINE_BOOST, 0.72),
+    )
+
+
+def notch_band_column_count(width: float) -> int:
+    return max(1, int(math.ceil(float(width) / BLEND_COLUMN_WIDTH)))
+
+
+_GAMMA_STEPS = 1024
+_GAMMA_LUT = tuple((index / (_GAMMA_STEPS - 1)) ** LED_GAMMA for index in range(_GAMMA_STEPS))
+_BLEND_WEIGHT_CACHE: dict[float, tuple[tuple[tuple[int, float], ...], ...]] = {}
+
+
+def notch_blend_weights(width: float):
+    """Per-column (led index, weight) pairs; blended_led_color_at_x without the search."""
+    width = float(width)
+    cached = _BLEND_WEIGHT_CACHE.get(width)
+    if cached is not None:
+        return cached
+    columns = notch_band_column_count(width)
+    led_width = width / LED_COUNT
+    radius = led_width * LED_BLEND_RADIUS_LEDS
+    result = []
+    for column in range(columns):
+        x = (column + 0.5) * width / columns
+        pairs = []
+        for index in range(LED_COUNT):
+            distance = abs(x - (index + 0.5) * led_width)
+            if radius > 0.0 and distance <= radius:
+                pairs.append((index, 0.5 + 0.5 * math.cos(math.pi * distance / radius)))
+        result.append(tuple(pairs))
+    if len(_BLEND_WEIGHT_CACHE) > 8:
+        _BLEND_WEIGHT_CACHE.clear()
+    _BLEND_WEIGHT_CACHE[width] = cached = tuple(result)
+    return cached
+
+
+def notch_band_pixels(
+    colors: list[tuple[float, float, float, float]],
+    width: float,
+    bands,
+) -> list[bytes]:
+    """One premultiplied RGBA row per band, one pixel per blend column.
+
+    Each row is stretched across its band by Core Animation, so the GPU does
+    the per-frame pixel work instead of a Python drawRect_. Blending matches
+    blended_led_color_at_x and tone mapping matches tone_mapped_led_color, using
+    precomputed weights and a gamma lookup table to keep a 60 Hz frame cheap.
+    """
+    lut = _GAMMA_LUT
+    top = _GAMMA_STEPS - 1
+    blended = []
+    for pairs in notch_blend_weights(width):
+        red = green = blue = alpha = 0.0
+        for index, weight in pairs:
+            color = colors[index]
+            red += color[0] * weight
+            green += color[1] * weight
+            blue += color[2] * weight
+            alpha += color[3] * weight
+        blended.append((
+            min(1.0, max(0.0, red)), min(1.0, max(0.0, green)),
+            min(1.0, max(0.0, blue)), min(1.0, max(0.0, alpha)),
+        ))
+    rows = []
+    for _rect, boost, alpha_scale in bands:
+        row = bytearray(len(blended) * 4)
+        offset = 0
+        for red, green, blue, alpha in blended:
+            if red > 0.001 or green > 0.001 or blue > 0.001 or alpha > 0.001:
+                a = min(1.0, alpha * alpha_scale)
+                if a > 0.0:
+                    scale = a * 255.0
+                    r = min(1.0, lut[int(red * top + 0.5)] * boost) if red > 0.0 else 0.0
+                    g = min(1.0, lut[int(green * top + 0.5)] * boost) if green > 0.0 else 0.0
+                    b = min(1.0, lut[int(blue * top + 0.5)] * boost) if blue > 0.0 else 0.0
+                    row[offset] = int(r * scale + 0.5)
+                    row[offset + 1] = int(g * scale + 0.5)
+                    row[offset + 2] = int(b * scale + 0.5)
+                    row[offset + 3] = int(scale + 0.5)
+            offset += 4
+        rows.append(bytes(row))
+    return rows
+
+
+_DEVICE_RGB = None
+_NO_IMPLICIT_ACTIONS = None
+
+
+def without_implicit_animations(layer):
+    """Layer changes apply on the next run-loop commit with no fade or slide."""
+    global _NO_IMPLICIT_ACTIONS
+    if _NO_IMPLICIT_ACTIONS is None:
+        _NO_IMPLICIT_ACTIONS = {
+            key: NSNull.null()
+            for key in ("contents", "bounds", "position", "frame", "hidden", "path")
+        }
+    layer.setActions_(_NO_IMPLICIT_ACTIONS)
+    return layer
+
+
+def rgba_row_image(row: bytes):
+    global _DEVICE_RGB
+    if _DEVICE_RGB is None:
+        _DEVICE_RGB = CGColorSpaceCreateDeviceRGB()
+    columns = len(row) // 4
+    provider = CGDataProviderCreateWithCFData(NSData.dataWithBytes_length_(row, len(row)))
+    return CGImageCreate(
+        columns, 1, 8, 32, columns * 4, _DEVICE_RGB, kCGImageAlphaPremultipliedLast,
+        provider, None, False, kCGRenderingIntentDefault,
+    )
 
 
 def virtual_led_colors(
@@ -253,11 +408,93 @@ class VirtualLedView(NSView):
             self.wasm_error = None
             self.has_notch = True
             self.compact_preview = False
+            self.led_layers_enabled = False
+            self.led_band_layers = ()
+            self.led_overlay_layers = ()
+            self.led_container_layer = None
+            self.led_layout_key = None
+            self.last_led_colors = None
         return self
 
     def setHasNotch_(self, has_notch):
         self.has_notch = bool(has_notch)
         self.setNeedsDisplay_(True)
+        self.refreshLeds()
+
+    def enableLedLayers(self):
+        """Render the LED band as Core Animation layers instead of drawRect_.
+
+        drawRect_ then paints only the static notch body, so an animating
+        program no longer re-renders and re-commits the whole view each frame.
+        """
+        if self.led_layers_enabled:
+            return
+        self.setWantsLayer_(True)
+        host = self.layer()
+        if host is None:
+            return
+        container = without_implicit_animations(CALayer.layer())
+        container.setMask_(without_implicit_animations(CAShapeLayer.layer()))
+        bands = []
+        for _ in notch_led_bands(1.0, 1.0):
+            band = without_implicit_animations(CALayer.layer())
+            band.setContentsGravity_(kCAGravityResize)
+            band.setMagnificationFilter_(kCAFilterLinear)
+            container.addSublayer_(band)
+            bands.append(band)
+        overlays = []
+        for color in ((0.0, 0.0, 0.0, 0.18), (1.0, 1.0, 1.0, 0.055)):
+            overlay = without_implicit_animations(CALayer.layer())
+            overlay.setBackgroundColor_(CGColorCreateGenericRGB(*color))
+            container.addSublayer_(overlay)
+            overlays.append(overlay)
+        host.addSublayer_(container)
+        self.led_container_layer = container
+        self.led_band_layers = tuple(bands)
+        self.led_overlay_layers = tuple(overlays)
+        self.led_layers_enabled = True
+        self.led_layout_key = None
+        self.last_led_colors = None
+        self.setNeedsDisplay_(True)
+        self.updateLedLayers()
+
+    def refreshLeds(self):
+        if self.led_layers_enabled and not self.compact_preview:
+            self.updateLedLayers()
+        else:
+            self.setNeedsDisplay_(True)
+
+    @objc.python_method
+    def _layout_led_layers(self, width, height):
+        bands = notch_led_bands(width, height)
+        self.led_container_layer.setFrame_(((0.0, 0.0), (width, height)))
+        mask = self.led_container_layer.mask()
+        mask.setFrame_(((0.0, 0.0), (width, height)))
+        mask.setPath_(notch_bar_cgpath(width, height))
+        for layer, (rect, _boost, _alpha) in zip(self.led_band_layers, bands):
+            layer.setFrame_(rect)
+        shade, highlight = self.led_overlay_layers
+        shade.setFrame_(((0.0, LED_BAND_HEIGHT - 0.55), (width, 0.55)))
+        highlight.setFrame_(((0.0, 0.0), (width, 0.45)))
+        for overlay in self.led_overlay_layers:
+            overlay.setHidden_(not self.has_notch)
+
+    def updateLedLayers(self):
+        if not self.led_layers_enabled:
+            return
+        width = float(self.bounds().size.width)
+        height = float(self.bounds().size.height)
+        layout_key = (width, height, self.has_notch)
+        colors = self._colors_for_draw()
+        if layout_key == self.led_layout_key and colors == self.last_led_colors:
+            return
+        if layout_key != self.led_layout_key:
+            self._layout_led_layers(width, height)
+            self.led_layout_key = layout_key
+        rows = notch_band_pixels(colors, width, notch_led_bands(width, height))
+        for layer, row in zip(self.led_band_layers, rows):
+            layer.setContents_(rgba_row_image(row))
+        self.last_led_colors = colors
 
     def setCompactPreview_(self, compact_preview):
         compact_preview = bool(compact_preview)
@@ -295,7 +532,7 @@ class VirtualLedView(NSView):
             source_program == self.current_program
             and rendered_program == self.rendered_program
         ):
-            self.setNeedsDisplay_(True)
+            self.refreshLeds()
             return
         self.current_program = source_program
         self.rendered_program = rendered_program
@@ -307,7 +544,7 @@ class VirtualLedView(NSView):
                 self.wasm_error = None
             except Exception as exc:
                 self.wasm_error = str(exc)
-        self.setNeedsDisplay_(True)
+        self.refreshLeds()
 
     def setBatteryPercent_brightness_(self, percent, brightness):
         self.current_program = None
@@ -325,7 +562,7 @@ class VirtualLedView(NSView):
                 rgb = (0.0, 1.0, 0.4)
             colors.append(tuple(channel * scale * amount for channel in rgb) + (amount,))
         self.fixed_colors = colors
-        self.setNeedsDisplay_(True)
+        self.refreshLeds()
 
     def _ensure_wasm_controller(self) -> bool:
         if self.wasm_controller is not None:
@@ -361,9 +598,9 @@ class VirtualLedView(NSView):
         )
 
     def drawRect_(self, _rect):
-        colors = self._colors_for_draw()
         width = self.bounds().size.width
         height = self.bounds().size.height
+        colors = None if self.led_layers_enabled and not self.compact_preview else self._colors_for_draw()
 
         if self.compact_preview:
             pill_height = min(12.0, max(4.0, height - 4.0))
@@ -432,6 +669,8 @@ class VirtualLedView(NSView):
                 0.006, 0.007, 0.010, 0.93
             ).set()
             body.fill()
+        if self.led_layers_enabled:
+            return
 
         NSGraphicsContext.saveGraphicsState()
         body.addClip()
@@ -560,8 +799,8 @@ class VirtualStatusDevice(NSObject):
         window_frame = virtual_window_frame_for_screen(screen)
         self.window.setFrame_display_(window_frame, True)
         if self.view is not None:
-            self.view.setHasNotch_(screen_has_notch(screen))
             self.view.setFrame_(((0, 0), window_frame[1]))
+            self.view.setHasNotch_(screen_has_notch(screen))
 
     def _build_window(self):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -581,8 +820,9 @@ class VirtualStatusDevice(NSObject):
         )
         self.view = VirtualLedView.alloc().initWithFrame_(((0, 0), (WINDOW_WIDTH, WINDOW_HEIGHT)))
         self.window.setContentView_(self.view)
+        self.view.enableLedLayers()
 
     @objc.IBAction
     def redraw_(self, _sender):
         if self.view is not None:
-            self.view.setNeedsDisplay_(True)
+            self.view.refreshLeds()
