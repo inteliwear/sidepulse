@@ -5421,18 +5421,15 @@ def provider_icon_for_provider(provider: str):
             image = app_icon(path)
             if image is not None:
                 break
-        image = image or image_for_symbol("sparkles", "Codex")
     elif provider == "claude":
         image = app_icon("/Applications/Claude.app")
-        image = image or image_for_symbol("brain.head.profile", "Claude")
     elif provider == "grok":
         image = app_icon("/Applications/Grok.app")
-        image = image or grok_badge_icon()
     else:
-        # Any other provider resolves its own app by name, so a new agent needs no branch
-        # here. Only providers with an alias or a custom glyph need one.
+        # Resolve apps outside /Applications as well, including new providers.
         image = provider_app_icon(provider)
-        image = image or image_for_symbol("terminal", provider_label(provider) or "Agent")
+    if image is None:
+        image = builtin_provider_icon(provider)
     _provider_icon_cache[provider] = image
     return image
 
@@ -5560,7 +5557,6 @@ def normalized_origin_text(origin: str | None) -> str:
     return " ".join(str(origin or "").strip().lower().replace("-", " ").split())
 
 
-_grok_badge_icon = None
 _app_icon_cache = {}
 _provider_icon_cache = {}
 _origin_icon_cache = {}
@@ -5568,15 +5564,30 @@ _session_row_icon_cache = {}
 _symbol_icon_cache = {}
 
 
-def grok_badge_icon():
-    global _grok_badge_icon
-    if _grok_badge_icon is not None:
-        return _grok_badge_icon
+# Drawn locally so CLI-only agents need neither an installed app nor SF Symbols.
+_BUILTIN_PROVIDER_BADGES = {
+    "codex": ("CX", (0.12, 0.38, 0.32)),
+    "claude": ("CL", (0.65, 0.31, 0.21)),
+    "grok": ("G", (0.05, 0.055, 0.065)),
+    "cursor": ("CU", (0.23, 0.27, 0.34)),
+    "junie": ("J", (0.36, 0.24, 0.70)),
+    "opencode": ("OC", (0.18, 0.36, 0.58)),
+}
+
+
+@lru_cache(maxsize=128)
+def builtin_provider_icon(provider: str):
+    """Return an 18-point badge for any provider, including custom agents."""
+    provider = provider.lower()
+    initials = "".join(char for char in provider if char.isalnum())[:2].upper() or "A"
+    label, color = _BUILTIN_PROVIDER_BADGES.get(
+        provider, (initials, (0.32, 0.36, 0.43)),
+    )
 
     image = NSImage.alloc().initWithSize_((18, 18))
     try:
         image.lockFocus()
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.05, 0.055, 0.065, 1.0).set()
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(*color, 1.0).set()
         badge = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             ((1.0, 1.0), (16.0, 16.0)),
             4.0,
@@ -5585,17 +5596,19 @@ def grok_badge_icon():
         badge.fill()
 
         attrs = {
-            NSFontAttributeName: NSFont.boldSystemFontOfSize_(12.0),
+            NSFontAttributeName: NSFont.boldSystemFontOfSize_(12.0 if len(label) == 1 else 8.5),
             NSForegroundColorAttributeName: NSColor.whiteColor(),
         }
-        NSString.stringWithString_("G").drawInRect_withAttributes_(
-            ((4.6, 1.8), (10.0, 14.0)),
+        text = NSString.stringWithString_(label)
+        size = text.sizeWithAttributes_(attrs)
+        text.drawInRect_withAttributes_(
+            (((18.0 - size.width) / 2, (18.0 - size.height) / 2), (size.width, size.height)),
             attrs,
         )
     finally:
         image.unlockFocus()
     image.setSize_((18, 18))
-    _grok_badge_icon = image
+    image.setAccessibilityDescription_(provider_label(provider) or "Agent")
     return image
 
 

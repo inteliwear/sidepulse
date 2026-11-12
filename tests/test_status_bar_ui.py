@@ -82,6 +82,7 @@ from sidepulse.firmware import FirmwareDevice  # noqa: E402
 from sidepulse.firmware_status import FirmwareStatus  # noqa: E402
 from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
+from sidepulse.providers import HOOK_PROVIDERS  # noqa: E402
 from sidepulse.settings import AgentMonitorSettings  # noqa: E402
 
 
@@ -1333,9 +1334,32 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(sb.session_row_icon_for_status(status), NSImage)
 
     def test_provider_icons_do_not_raise(self):
-        for provider in ("claude", "codex", "grok", "opencode", "nonsense"):
+        for provider in (*HOOK_PROVIDERS, "opencode", "nonsense"):
             with self.subTest(provider=provider):
-                sb.provider_icon_for_provider(provider)
+                self.assertIsInstance(sb.provider_icon_for_provider(provider), NSImage)
+
+    def test_every_provider_has_a_distinct_builtin_icon_without_apps_or_symbols(self):
+        rendered = set()
+        providers = (*HOOK_PROVIDERS, "opencode", "custom-agent", "")
+        with (
+            patch.dict(sb._provider_icon_cache, clear=True),
+            patch.object(sb, "app_icon", return_value=None),
+            patch.object(sb, "provider_app_icon", return_value=None),
+            patch.object(sb, "image_for_symbol", return_value=None),
+        ):
+            for provider in providers:
+                with self.subTest(provider=provider):
+                    image = sb.provider_icon_for_provider(provider)
+                    self.assertIsInstance(image, NSImage)
+                    self.assertEqual(tuple(image.size()), (18, 18))
+                    self.assertFalse(image.isTemplate())
+                    bitmap = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+                    self.assertGreater(bitmap.colorAtX_y_(
+                        bitmap.pixelsWide() // 2, bitmap.pixelsHigh() // 2,
+                    ).alphaComponent(), 0)
+                    rendered.add(bytes(image.TIFFRepresentation()))
+                    self.assertIs(sb.provider_icon_for_provider(provider.upper()), image)
+        self.assertEqual(len(rendered), len(providers))
 
     def test_mapped_providers_look_up_their_own_bundle(self):
         """The generic fallback would absorb a deleted branch without failing.
