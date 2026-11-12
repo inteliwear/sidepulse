@@ -35,7 +35,8 @@ def node_with_type_stripping() -> list[str] | None:
 
 
 def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code: int = 0,
-               command: str | None = None) -> tuple[list[dict], str]:
+               command: str | None = None, exit_early: bool = False,
+               reload: bool = False) -> tuple[list[dict], str]:
     """Run the plugin's real entry point; a fake `sidepulse` records each report."""
     node = node_with_type_stripping()
     assert node is not None
@@ -45,12 +46,13 @@ def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code
         fake.write_text(
             "#!/bin/sh\n"
             f'[ "$1 $2" = "report --json" ] || exit 64\n'
-            f'cat >> "{output}"\necho >> "{output}"\nexit {exit_code}\n'
+            f'body=$(cat); sleep 0.2\nprintf "%s\\n" "$body" >> "{output}"\nexit {exit_code}\n'
         )
         fake.chmod(0o755)
         result = subprocess.run(
             [*node, str(HARNESS), str(PLUGIN), command or str(fake)],
-            input=json.dumps({"sessions": sessions, "events": events, "copies": copies}),
+            input=json.dumps({"sessions": sessions, "events": events, "copies": copies, "exitEarly": exit_early,
+                              "reload": reload}),
             capture_output=True,
             text=True,
             timeout=30,
@@ -150,8 +152,16 @@ class OpenCodeInstallTests(unittest.TestCase):
         self.assertEqual(session_resume_command(status), "cd '/work/my app' && opencode --session ses_1")
 
 
-@unittest.skipUnless(node_with_type_stripping() and os.name != "nt", "needs Node.js 22.6 or newer and a POSIX shell")
 class OpenCodePluginTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if node_with_type_stripping() and os.name != "nt":
+            return
+        # CI sets this so the plugin coverage cannot silently disappear.
+        if os.environ.get("SIDEPULSE_REQUIRE_PLUGIN_TESTS") == "1":
+            raise AssertionError("OpenCode plugin tests need Node.js 22.6 or newer and a POSIX shell")
+        raise unittest.SkipTest("needs Node.js 22.6 or newer and a POSIX shell")
+
     sessions = {
         "ses_a": {"title": "Fix login", "location": {"directory": "/work"}},
         "ses_child": {"parentID": "ses_a", "title": "Explore auth"},
@@ -177,7 +187,7 @@ class OpenCodePluginTests(unittest.TestCase):
         self.assertEqual(reports[0]["status"], {"state": "working", "app": "opencode", "title": "Fix login"})
         self.assertEqual(reports[0]["context"], {
             "provider": "opencode", "session_id": "ses_a", "event_name": "session.execution.started",
-            "cwd": "/work", "title": "Fix login",
+            "cwd": "/work", "title": "Fix login", "title_source": "session",
         })
 
     def test_lifecycle_maps_to_states(self) -> None:
@@ -233,12 +243,57 @@ class OpenCodePluginTests(unittest.TestCase):
         ])
         self.assertEqual([report["status"].get("title") for report in reports], ["Fix login", "Fix login bug", "Fix login bug"])
 
+    def test_a_superseded_execution_leaves_the_new_one_working(self) -> None:
+        self.assertEqual(self.states([
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "session.execution.started", sessionID="ses_a"),
+            event("e3", "session.execution.interrupted", sessionID="ses_a", reason="superseded"),
+        ]), [("working", None, None), ("working", None, None)])
+
+    def test_a_finished_or_deleted_subagent_releases_its_prompts(self) -> None:
+        asked = [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "permission.asked", id="per_1", sessionID="ses_child", action="shell", resources=["ls"]),
+        ]
+        for ending in (
+            event("e3", "session.execution.failed", sessionID="ses_child", error={"type": "x", "message": "x"}),
+            event("e3", "session.deleted", sessionID="ses_child"),
+        ):
+            with self.subTest(ending=ending["type"]):
+                self.assertEqual(self.states([*asked, ending])[-1], ("working", None, None))
+
+    def test_a_failed_session_lookup_is_retried(self) -> None:
+        reports, _ = run_plugin({"ses_a": {"title": "Fix login", "failures": 1}}, [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "session.execution.started", sessionID="ses_a"),
+        ])
+        self.assertEqual([report["request_id"] for report in reports], ["opencode-e2"])
+
+    def test_reports_still_queued_at_exit_are_sent_in_order(self) -> None:
+        reports, _ = run_plugin(self.sessions, [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "session.renamed", sessionID="ses_a", title="Fix login bug"),
+            event("e3", "session.execution.succeeded", sessionID="ses_a"),
+        ], exit_early=True)
+        # The report in flight at exit is sent again; the daemon ignores the
+        # repeated request_id, so only first arrivals matter.
+        arrivals = list(dict.fromkeys(report["request_id"] for report in reports))
+        self.assertEqual(arrivals, ["opencode-e1", "opencode-e2", "opencode-e3"])
+
     def test_each_event_is_reported_once_when_several_copies_load(self) -> None:
         reports, _ = run_plugin(self.sessions, [
             event("e1", "session.execution.started", sessionID="ses_a"),
             event("e2", "session.execution.succeeded", sessionID="ses_a"),
         ], copies=3)
         self.assertEqual([report["request_id"] for report in reports], ["opencode-e1", "opencode-e2"])
+
+    def test_a_reloaded_plugin_takes_over_while_old_copies_are_still_loaded(self) -> None:
+        reports, stderr = run_plugin(self.sessions, [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "session.execution.succeeded", sessionID="ses_a"),
+        ], copies=2, reload=True)
+        self.assertEqual([report["request_id"] for report in reports], ["opencode-e1", "opencode-e2"])
+        self.assertNotIn("[sidepulse]", stderr)
 
     def test_a_failing_or_missing_sidepulse_is_reported_once_and_ignored(self) -> None:
         events = [

@@ -396,14 +396,24 @@ def default_opencode_plugin_path(home: Path | None = None) -> Path:
     return base / "opencode" / "plugins" / "sidepulse.ts"
 
 
+def opencode_plugin_is_managed(path: Path) -> bool:
+    try:
+        return OPENCODE_PLUGIN_MARKER in path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def detect_opencode_config(home: Path | None = None) -> ProviderConfig:
     plugin_path = default_opencode_plugin_path(home)
-    try:
-        managed = OPENCODE_PLUGIN_MARKER in plugin_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        managed = False
-    events = ("session.execution", "permission", "form") if managed else ()
-    return ProviderConfig("opencode", plugin_path, plugin_path.parent.parent.exists(), managed, events, ())
+    opencode_config_dir = plugin_path.parent.parent
+    return ProviderConfig(
+        "opencode",
+        plugin_path,
+        opencode_config_dir.exists(),
+        opencode_plugin_is_managed(plugin_path),
+        (),
+        (),
+    )
 
 
 def _entry_has_sidepulse_hook(entry: Any) -> bool:

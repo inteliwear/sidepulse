@@ -1201,6 +1201,9 @@ def install_hook_results(args: argparse.Namespace):
     providers = selected_hook_providers(args)
     results = []
     for provider in providers:
+        if provider == "opencode":
+            results.append(install_opencode_plugin(dry_run=args.dry_run))
+            continue
         log_path = install_log_path(provider, args)
         if provider == "codex":
             results.append(install_codex_hooks(log_path=log_path, dry_run=args.dry_run))
@@ -1210,8 +1213,6 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
-        elif provider == "opencode":
-            results.append(install_opencode_plugin(dry_run=args.dry_run))
         else:
             results.append(install_junie_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
@@ -1238,6 +1239,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     providers = selected_hook_providers(args)
     results = []
     for provider in providers:
+        if provider == "opencode":
+            results.append(uninstall_opencode_plugin(dry_run=args.dry_run))
+            continue
         log_path = uninstall_log_path(provider, args)
         if provider == "codex":
             results.append(uninstall_codex_hooks(log_path=log_path, dry_run=args.dry_run))
@@ -1247,8 +1251,6 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
-        elif provider == "opencode":
-            results.append(uninstall_opencode_plugin(dry_run=args.dry_run))
         else:
             results.append(uninstall_junie_hooks(log_path=log_path, dry_run=args.dry_run))
 
