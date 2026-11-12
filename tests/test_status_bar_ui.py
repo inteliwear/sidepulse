@@ -1297,7 +1297,11 @@ class StatusIconAnimationTests(StatusBarTestCase):
             for x in range(start_x, bitmaps[0].pixelsWide()):
                 self.assertEqual(bitmaps[0].colorAtX_y_(x, y), bitmaps[1].colorAtX_y_(x, y))
 
+    def use_animation_mode(self, mode):
+        self.target.settings = self.target.settings.with_menu_bar_icon_animation(mode)
+
     def test_timer_stops_for_idle_done_and_hidden_icon(self):
+        self.use_animation_mode(sb.MENU_BAR_ANIMATION_REDUCED)
         for state in (sb.STATE_WORKING, sb.STATE_ASK):
             self.target.status_item.isVisible.return_value = True
             self.target.set_status(state)
@@ -1331,6 +1335,75 @@ class StatusIconAnimationTests(StatusBarTestCase):
         self.target.menuDidClose_(menu)
         self.assertIsNone(self.target.status_icon_timer)
         self.assertIsNone(self.target.tracking_status_menu)
+
+    def test_reduced_mode_swaps_frames_at_low_rate(self):
+        self.use_animation_mode(sb.MENU_BAR_ANIMATION_REDUCED)
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertIsNotNone(self.target.status_icon_timer)
+        self.assertEqual(self.target.status_icon_timer_interval, sb.STATUS_ICON_REDUCED_FRAME_SECONDS)
+        self.assertIsNone(self.target.status_icon_layer)
+
+    def test_off_mode_keeps_static_icon_without_timer_or_layer(self):
+        self.use_animation_mode(sb.MENU_BAR_ANIMATION_OFF)
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertIsNone(self.target.status_icon_timer)
+        self.assertIsNone(self.target.status_icon_layer)
+        self.target.status_item.button().setImage_.assert_called_with(
+            sb.image_for_symbol(sb.STATE_WORKING.symbol, sb.STATE_WORKING.label),
+        )
+
+    def real_button(self):
+        button = NSButton.alloc().initWithFrame_(((0, 0), (32, 24)))
+        self.target.status_item.button.return_value = button
+        return button
+
+    def test_smooth_mode_animates_in_core_animation_without_timer(self):
+        button = self.real_button()
+        for state, key_path in ((sb.STATE_WORKING, "transform.rotation.z"), (sb.STATE_ASK, None)):
+            self.target.set_status(state)
+            layer = self.target.status_icon_layer
+            self.assertIsNotNone(layer)
+            self.assertIs(layer.superlayer(), button.layer())
+            self.assertIsNone(self.target.status_icon_timer)
+            animation = layer.animationForKey_(sb.STATUS_ICON_ANIMATION_KEY)
+            self.assertIsNotNone(animation)
+            if key_path:
+                self.assertEqual(animation.keyPath(), key_path)
+            else:
+                self.assertEqual(
+                    {a.keyPath() for a in animation.animations()}, {"transform.scale", "opacity"},
+                )
+            # Centered in the button so rotation pivots on the icon.
+            self.assertEqual(tuple(layer.position()), (16.0, 12.0))
+            self.assertEqual(button.image().size(), sb.image_for_symbol(state.symbol, state.label).size())
+
+    def test_smooth_mode_refresh_does_not_restart_or_swap_images(self):
+        button = self.real_button()
+        self.target.set_status(sb.STATE_WORKING)
+        layer = self.target.status_icon_layer
+        animation = layer.animationForKey_(sb.STATUS_ICON_ANIMATION_KEY)
+        placeholder = button.image()
+        self.target.set_status(sb.STATE_WORKING)
+        self.assertIs(self.target.status_icon_layer, layer)
+        self.assertEqual(layer.animationForKey_(sb.STATUS_ICON_ANIMATION_KEY), animation)
+        self.assertIs(button.image(), placeholder)
+
+    def test_smooth_mode_restores_static_icon_when_idle(self):
+        button = self.real_button()
+        self.target.set_status(sb.STATE_WORKING)
+        layer = self.target.status_icon_layer
+        self.target.set_status(sb.STATE_DONE)
+        self.assertIsNone(self.target.status_icon_layer)
+        self.assertIsNone(layer.superlayer())
+        self.assertIs(button.image(), sb.image_for_symbol(sb.STATE_DONE.symbol, sb.STATE_DONE.label))
+
+    def test_animation_popup_saves_mode(self):
+        popup = sb.add_menu_bar_animation_popup(NSView.alloc().init(), 0, 0, self.target)
+        popup.selectItemAtIndex_(2)
+        with patch.object(sb, "save_settings") as save:
+            self.target.setMenuBarIconAnimation_(popup)
+        self.assertEqual(self.target.settings.menu_bar_icon_animation, sb.MENU_BAR_ANIMATION_OFF)
+        save.assert_called_once()
 
     def test_reduce_motion_keeps_static_icons(self):
         self.target.set_status(sb.STATE_WORKING)

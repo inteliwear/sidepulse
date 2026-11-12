@@ -825,6 +825,12 @@ from Finder or Spotlight. Check **Show menu bar icon** to restore it.
 Running `sidepulse status-bar` (or `sidepulse status-bar start`) also restores
 the icon immediately. Automatic starts at login retain your visibility preference.
 
+The Working and Ask icons animate while agents run. **Animation** next to
+**Show menu bar icon** chooses how: **Smooth** (default) hands the spin and
+pulse to Core Animation, so the app does no per-frame work; **Reduced** swaps
+icon images at 8 frames per second; **Off** keeps static icons. The macOS
+Reduce Motion accessibility setting also keeps the icons static.
+
 Click the status-bar item to expand the recent session list. Click a session
 row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the

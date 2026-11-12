@@ -34,6 +34,15 @@ LED_DISPLAY_AGENT = "agent"
 LED_DISPLAY_BATTERY = "battery"
 LED_DISPLAY_CUSTOM = "custom"
 LED_DISPLAY_CHOICES = (LED_DISPLAY_AGENT, LED_DISPLAY_BATTERY, LED_DISPLAY_CUSTOM)
+# Menu-bar icon animation: Core Animation, low-rate image frames, or static icons.
+MENU_BAR_ANIMATION_SMOOTH = "smooth"
+MENU_BAR_ANIMATION_REDUCED = "reduced"
+MENU_BAR_ANIMATION_OFF = "off"
+MENU_BAR_ANIMATION_CHOICES = (
+    MENU_BAR_ANIMATION_SMOOTH,
+    MENU_BAR_ANIMATION_REDUCED,
+    MENU_BAR_ANIMATION_OFF,
+)
 AGENT_ANIMATION_DEFAULT = "default"
 AGENT_ANIMATION_SLOW_OFF = "off"
 AGENT_ANIMATION_IMMEDIATE_OFF = "immediate-off"
@@ -332,6 +341,7 @@ class AgentMonitorSettings:
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
     show_menu_bar_icon: bool = True
+    menu_bar_icon_animation: str = MENU_BAR_ANIMATION_SMOOTH
     phone_session_sync: dict[str, bool] = field(default_factory=dict)
 
     def transcript_enabled(self, provider: str) -> bool:
@@ -778,6 +788,11 @@ class AgentMonitorSettings:
     def with_menu_bar_icon(self, visible: bool) -> "AgentMonitorSettings":
         return replace(self, show_menu_bar_icon=bool(visible))
 
+    def with_menu_bar_icon_animation(self, mode: str) -> "AgentMonitorSettings":
+        if mode not in MENU_BAR_ANIMATION_CHOICES:
+            raise ValueError(f"Unknown menu bar icon animation: {mode}")
+        return replace(self, menu_bar_icon_animation=mode)
+
     def with_virtual_status_device(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, virtual_status_device_enabled=bool(enabled))
 
@@ -812,6 +827,7 @@ class AgentMonitorSettings:
         return {
             "led_display": self.led_display,
             "show_menu_bar_icon": self.show_menu_bar_icon,
+            "menu_bar_icon_animation": self.menu_bar_icon_animation,
             "phone_session_sync": dict(sorted(self.phone_session_sync.items())),
             "devices": [device.to_dict() for device in self.devices],
             "sleep_prevention_policy": self.sleep_prevention_policy,
@@ -961,6 +977,11 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         phone_session_sync = {}
     return AgentMonitorSettings(
         show_menu_bar_icon=_bool_setting(data.get("show_menu_bar_icon"), True),
+        menu_bar_icon_animation=(
+            data["menu_bar_icon_animation"]
+            if data.get("menu_bar_icon_animation") in MENU_BAR_ANIMATION_CHOICES
+            else MENU_BAR_ANIMATION_SMOOTH
+        ),
         phone_session_sync={
             key: value for key, value in phone_session_sync.items()
             if isinstance(key, str) and isinstance(value, bool)

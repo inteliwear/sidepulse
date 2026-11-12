@@ -68,6 +68,15 @@ try:
         NSSquareStatusItemLength,
     )
     from Foundation import NSMutableAttributedString, NSRunLoop, NSRunLoopCommonModes, NSObject, NSString, NSTimer, NSURL
+    from Quartz import (
+        CABasicAnimation,
+        CAAnimationGroup,
+        CALayer,
+        CAMediaTimingFunction,
+        kCAGravityResizeAspect,
+        kCAMediaTimingFunctionEaseInEaseOut,
+        kCAMediaTimingFunctionLinear,
+    )
 except ImportError as exc:  # pragma: no cover - only exercised on non-macOS setups.
     raise SystemExit(
         f"The status-bar app requires PyObjC/AppKit ({exc}):\n"
@@ -164,6 +173,10 @@ from .session_actions import (
     session_open_target,
 )
 from .settings import (
+    MENU_BAR_ANIMATION_CHOICES,
+    MENU_BAR_ANIMATION_OFF,
+    MENU_BAR_ANIMATION_REDUCED,
+    MENU_BAR_ANIMATION_SMOOTH,
     ANIMATION_STATE_LID_CLOSED,
     ANIMATION_STATE_LID_OPEN,
     ANIMATION_STATES,
@@ -359,6 +372,18 @@ STATE_DONE = StatusBarState("Done", "checkmark.circle", 3)
 STATE_ASK = StatusBarState("Ask", "questionmark.circle", 1)
 STATUS_ICON_FRAME_SECONDS = 1.0 / 30.0
 STATUS_ICON_FRAME_COUNT = 48
+# One full rotation or pulse cycle, matching the image-frame animation.
+STATUS_ICON_CYCLE_SECONDS = STATUS_ICON_FRAME_SECONDS * STATUS_ICON_FRAME_COUNT
+# Each image swap makes AppKit redraw every status-item replicant, so the
+# fallback frame animation runs at a much lower rate than the frame clock.
+STATUS_ICON_REDUCED_FRAME_SECONDS = 1.0 / 8.0
+STATUS_ICON_LAYER_SIZE = 15.0
+STATUS_ICON_ANIMATION_KEY = "sidepulse-status-icon"
+MENU_BAR_ANIMATION_LABELS = {
+    MENU_BAR_ANIMATION_SMOOTH: "Smooth",
+    MENU_BAR_ANIMATION_REDUCED: "Reduced",
+    MENU_BAR_ANIMATION_OFF: "Off",
+}
 STATUS_BAR_DEVICE_PRIORITY = ("sidepulsepro", "sidepulsedot", "pulsedot")
 STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
     "SidePulsePro",
@@ -497,6 +522,9 @@ class StatusBarController(NSObject):
         self.event_server = None
         self.status_item = None
         self.status_icon_timer = None
+        self.status_icon_timer_interval = None
+        self.status_icon_layer = None
+        self.status_icon_layer_state = None
         self.tracking_status_menu = None
         self.timer = None
         self.device_timer = None
@@ -862,6 +890,22 @@ class StatusBarController(NSObject):
         self.show_settings_window()
 
     @objc.IBAction
+    def setMenuBarIconAnimation_(self, sender):
+        selected = sender.selectedItem()
+        mode = selected.representedObject() if selected is not None else None
+        if mode not in MENU_BAR_ANIMATION_CHOICES:
+            return
+        try:
+            self.settings = self.settings.with_menu_bar_icon_animation(str(mode))
+            save_settings(self.settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save icon animation: {exc}")
+            self.settings = load_settings()
+            self.refresh_settings_window()
+            return
+        self.update_status_icon_animation()
+
+    @objc.IBAction
     def setMenuBarIconFromCheckbox_(self, sender):
         settings = self.settings.with_menu_bar_icon(sender.state() == NSOnState)
         save_settings(settings)
@@ -1128,7 +1172,6 @@ class StatusBarController(NSObject):
         if button is None:
             return
         button.setTitle_("")
-        button.setImage_(image_for_symbol(state.symbol, state.label))
         label = f"SidePulse Agent Monitor: {state.label}"
         if self.device_errors:
             label += " — LED output failed"
@@ -1148,9 +1191,98 @@ class StatusBarController(NSObject):
         self.update_status_icon_animation()
 
     def stop_status_icon_animation(self) -> None:
+        self.stop_status_icon_timer()
+        self.remove_status_icon_layer()
+
+    def stop_status_icon_timer(self) -> None:
         if self.status_icon_timer is not None:
             self.status_icon_timer.invalidate()
             self.status_icon_timer = None
+        self.status_icon_timer_interval = None
+
+    def start_status_icon_timer(self, interval: float) -> None:
+        if self.status_icon_timer is not None and self.status_icon_timer_interval == interval:
+            return
+        self.stop_status_icon_timer()
+        self.status_icon_timer = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
+            interval, self, "animateStatusIcons:", None, True,
+        )
+        self.status_icon_timer.setTolerance_(min(0.02, interval / 4))
+        self.status_icon_timer_interval = interval
+        run_loop = NSRunLoop.mainRunLoop()
+        run_loop.addTimer_forMode_(self.status_icon_timer, NSRunLoopCommonModes)
+        run_loop.addTimer_forMode_(self.status_icon_timer, NSEventTrackingRunLoopMode)
+
+    def menu_bar_icon_animation_mode(self) -> str:
+        settings = getattr(self, "settings", None)
+        mode = getattr(settings, "menu_bar_icon_animation", MENU_BAR_ANIMATION_SMOOTH)
+        return mode if mode in MENU_BAR_ANIMATION_CHOICES else MENU_BAR_ANIMATION_SMOOTH
+
+    def apply_status_icon_layer(self, state: StatusBarState) -> bool:
+        """Animate the status icon in Core Animation instead of swapping images.
+
+        The render server runs the animation, so the app does no per-frame work
+        and AppKit does not redraw status-item replicants on every frame.
+        """
+        button = self.status_item.button() if self.status_item is not None else None
+        source = image_for_symbol(state.symbol, state.label)
+        if button is None or source is None:
+            return False
+        try:
+            button.setWantsLayer_(True)
+            host = button.layer()
+            if host is None:
+                return False
+            layer = self.status_icon_layer
+            if layer is None or layer.superlayer() is not host:
+                self.remove_status_icon_layer()
+                layer = CALayer.layer()
+                mask = CALayer.layer()
+                mask.setContentsGravity_(kCAGravityResizeAspect)
+                layer.setMask_(mask)
+                host.addSublayer_(layer)
+                self.status_icon_layer = layer
+            window = button.window()
+            scale = float(window.backingScaleFactor()) if window is not None else 2.0
+            bounds = button.bounds()
+            size = STATUS_ICON_LAYER_SIZE
+            layer.setBounds_(((0.0, 0.0), (size, size)))
+            layer.setPosition_((bounds.size.width / 2.0, bounds.size.height / 2.0))
+            layer.setContentsScale_(scale)
+            mask = layer.mask()
+            mask.setFrame_(((0.0, 0.0), (size, size)))
+            mask.setContentsScale_(scale)
+            mask.setContents_(source.layerContentsForContentsScale_(scale))
+            layer.setBackgroundColor_(status_icon_tint_color(button.effectiveAppearance()))
+            if (
+                self.status_icon_layer_state != state
+                or layer.animationForKey_(STATUS_ICON_ANIMATION_KEY) is None
+            ):
+                layer.removeAllAnimations()
+                layer.addAnimation_forKey_(
+                    status_icon_layer_animation(state, flipped=bool(host.contentsAreFlipped())),
+                    STATUS_ICON_ANIMATION_KEY,
+                )
+                self.status_icon_layer_state = state
+            placeholder = blank_status_icon(source.size().width, source.size().height)
+            if button.image() is not placeholder:
+                button.setImage_(placeholder)
+            return True
+        except Exception as exc:
+            log_status_bar(f"status_icon_layer error: {exc}")
+            self.remove_status_icon_layer()
+            return False
+
+    def remove_status_icon_layer(self) -> None:
+        layer = self.status_icon_layer
+        self.status_icon_layer = None
+        self.status_icon_layer_state = None
+        if layer is not None:
+            try:
+                layer.removeAllAnimations()
+                layer.removeFromSuperlayer()
+            except Exception:
+                pass
 
     @objc.IBAction
     def animateStatusIcons_(self, _timer):
@@ -1164,31 +1296,45 @@ class StatusBarController(NSObject):
                 status = item.representedObject()
                 if isinstance(status, AgentStatus) and item.action() == "openSessionPrimary:":
                     rows.append((item, status))
-        motion = not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-        animated = motion and (
-            (visible and self.current_state in (STATE_WORKING, STATE_ASK))
-            or any(state_for_mode(status.mode) in (STATE_WORKING, STATE_ASK) for _, status in rows)
+        mode = self.menu_bar_icon_animation_mode()
+        motion = (
+            mode != MENU_BAR_ANIMATION_OFF
+            and not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
         )
-        if animated and self.status_icon_timer is None:
-            self.status_icon_timer = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
-                STATUS_ICON_FRAME_SECONDS, self, "animateStatusIcons:", None, True,
+        state = self.current_state
+        icon_animated = motion and visible and state in (STATE_WORKING, STATE_ASK)
+        rows_animated = motion and any(
+            state_for_mode(status.mode) in (STATE_WORKING, STATE_ASK) for _, status in rows
+        )
+        layer_icon = (
+            icon_animated
+            and mode == MENU_BAR_ANIMATION_SMOOTH
+            and self.apply_status_icon_layer(state)
+        )
+        if not layer_icon:
+            self.remove_status_icon_layer()
+        frame_icon = icon_animated and not layer_icon
+        # Open menus still animate their row images; that only runs while tracking.
+        animated = frame_icon or rows_animated
+        if animated:
+            self.start_status_icon_timer(
+                STATUS_ICON_FRAME_SECONDS
+                if mode == MENU_BAR_ANIMATION_SMOOTH
+                else STATUS_ICON_REDUCED_FRAME_SECONDS
             )
-            self.status_icon_timer.setTolerance_(0.005)
-            run_loop = NSRunLoop.mainRunLoop()
-            run_loop.addTimer_forMode_(self.status_icon_timer, NSRunLoopCommonModes)
-            run_loop.addTimer_forMode_(self.status_icon_timer, NSEventTrackingRunLoopMode)
-        elif not animated:
-            self.stop_status_icon_animation()
+        else:
+            self.stop_status_icon_timer()
 
         frame = int(time.monotonic() / STATUS_ICON_FRAME_SECONDS) % STATUS_ICON_FRAME_COUNT
-        if visible:
-            state = self.current_state
+        if visible and not layer_icon:
             icon = (
                 animated_status_icon(state, frame)
-                if animated and state in (STATE_WORKING, STATE_ASK)
+                if frame_icon
                 else image_for_symbol(state.symbol, state.label)
             )
-            self.status_item.button().setImage_(icon)
+            button = self.status_item.button()
+            if button is not None and button.image() is not icon:
+                button.setImage_(icon)
         if rows:
             dark_mode = is_dark_appearance(self.tracking_status_menu.effectiveAppearance())
             for item, status in rows:
@@ -1470,6 +1616,9 @@ class StatusBarController(NSObject):
             self.settings_buttons.get("show_menu_bar_icon"),
             self.settings.show_menu_bar_icon,
         )
+        animation_popup = self.settings_fields.get("menu_bar_icon_animation")
+        if animation_popup is not None:
+            refresh_menu_bar_animation_popup(animation_popup, self.settings.menu_bar_icon_animation)
 
         codex = detect_codex_config()
         claude = detect_claude_config()
@@ -4254,9 +4403,11 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     )
     add_separator(behavior_tab, 24, 96, tab_width - 48)
     show_menu_bar_icon = add_checkbox(
-        behavior_tab, "Show menu bar icon", 32, 60, 280, 24,
+        behavior_tab, "Show menu bar icon", 32, 60, 170, 24,
         target, "setMenuBarIconFromCheckbox:",
     )
+    add_label(behavior_tab, "Animation", 210, 62, 72, 22)
+    menu_bar_icon_animation = add_menu_bar_animation_popup(behavior_tab, 284, 58, target)
     add_button(
         behavior_tab, "Open Setup…", 474, 58, 126, 28,
         target, "openSetup:",
@@ -4326,6 +4477,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "idle_timeout_minutes": idle_minutes,
         "sleep_prevention_min_battery_percent": min_battery_percent,
         "status_history_timeframe": history_timeframe,
+        "menu_bar_icon_animation": menu_bar_icon_animation,
         "status_history_status": history_status,
         "status_history_chart": history_chart,
         "agent_animation_profile": animation_profile,
@@ -4787,6 +4939,26 @@ def add_terminal_popup(parent, x: int, y: int, target, *, width: int = 150):
         item.setEnabled_(terminal_app_selectable(terminal_app))
     parent.addSubview_(popup)
     return popup
+
+
+def add_menu_bar_animation_popup(parent, x: int, y: int, target):
+    popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+        ((x, y), (130, 26)), False
+    )
+    popup.setTarget_(target)
+    popup.setAction_("setMenuBarIconAnimation:")
+    for mode in MENU_BAR_ANIMATION_CHOICES:
+        popup.addItemWithTitle_(MENU_BAR_ANIMATION_LABELS[mode])
+        popup.lastItem().setRepresentedObject_(mode)
+    parent.addSubview_(popup)
+    return popup
+
+
+def refresh_menu_bar_animation_popup(popup, mode: str) -> None:
+    for index in range(popup.numberOfItems()):
+        if popup.itemAtIndex_(index).representedObject() == mode:
+            popup.selectItemAtIndex_(index)
+            return
 
 
 def add_history_timeframe_popup(parent, x: int, y: int, target):
@@ -5352,6 +5524,47 @@ def session_row_icon_for_status(
 def status_icon_for_status(status: AgentStatus):
     state = state_for_mode(status.mode)
     return image_for_symbol(state.symbol, state.label)
+
+
+def status_icon_layer_animation(state: StatusBarState, *, flipped: bool = False):
+    """Core Animation equivalent of animated_status_icon: spin or pulse."""
+    if state == STATE_WORKING:
+        # Clockwise on screen, like the image frames; flipped layers invert z.
+        spin = CABasicAnimation.animationWithKeyPath_("transform.rotation.z")
+        spin.setFromValue_(0.0)
+        spin.setToValue_((2.0 if flipped else -2.0) * math.pi)
+        spin.setDuration_(STATUS_ICON_CYCLE_SECONDS)
+        spin.setRepeatCount_(float("inf"))
+        spin.setTimingFunction_(CAMediaTimingFunction.functionWithName_(kCAMediaTimingFunctionLinear))
+        return spin
+    scale = CABasicAnimation.animationWithKeyPath_("transform.scale")
+    scale.setFromValue_(1.0)
+    scale.setToValue_(0.82)
+    opacity = CABasicAnimation.animationWithKeyPath_("opacity")
+    opacity.setFromValue_(1.0)
+    opacity.setToValue_(0.45)
+    pulse = CAAnimationGroup.animation()
+    pulse.setAnimations_([scale, opacity])
+    pulse.setDuration_(STATUS_ICON_CYCLE_SECONDS / 2.0)
+    pulse.setAutoreverses_(True)
+    pulse.setRepeatCount_(float("inf"))
+    pulse.setTimingFunction_(CAMediaTimingFunction.functionWithName_(kCAMediaTimingFunctionEaseInEaseOut))
+    return pulse
+
+
+def status_icon_tint_color(appearance):
+    """Approximate template-image tinting for a layer drawn outside the button cell."""
+    dark = is_dark_appearance(appearance)
+    color = NSColor.whiteColor() if dark else NSColor.blackColor()
+    return color.colorWithAlphaComponent_(0.85 if not dark else 1.0).CGColor()
+
+
+@lru_cache(maxsize=8)
+def blank_status_icon(width: float, height: float):
+    """Transparent stand-in that keeps the button's width while the layer draws."""
+    image = NSImage.alloc().initWithSize_((width, height))
+    image.setTemplate_(True)
+    return image
 
 
 @lru_cache(maxsize=STATUS_ICON_FRAME_COUNT * 2)
