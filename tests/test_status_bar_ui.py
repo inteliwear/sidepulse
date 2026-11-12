@@ -1342,6 +1342,87 @@ class StatusIconAnimationTests(StatusBarTestCase):
         )
 
 
+class VirtualNotchLayerTests(StatusBarTestCase):
+    """The on-screen notch animates through layers instead of drawRect_."""
+
+    COLORS = [
+        (1.0, 0.2, 0.0, 1.0), (0.0, 0.9, 1.0, 0.8), (0.2, 0.2, 0.9, 0.5), (0.0, 0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0, 1.0), (0.5, 0.0, 0.5, 0.6), (0.0, 1.0, 0.0, 0.3), (1.0, 0.5, 0.0, 0.9),
+    ]
+
+    def make_view(self, *, layers=True):
+        view = vd.VirtualLedView.alloc().initWithFrame_(((0, 0), (185, 37)))
+        view.fixed_colors = list(self.COLORS)
+        if layers:
+            view.enableLedLayers()
+        return view
+
+    def test_band_pixels_match_reference_blend_and_tone_mapping(self):
+        width = 185.0
+        bands = vd.notch_led_bands(width, 37.0)
+        rows = vd.notch_band_pixels(self.COLORS, width, bands)
+        columns = vd.notch_band_column_count(width)
+        led_width = width / vd.LED_COUNT
+        for row, (_rect, boost, alpha_scale) in zip(rows, bands):
+            self.assertEqual(len(row), columns * 4)
+            for column in range(columns):
+                x = (column + 0.5) * width / columns
+                red, green, blue, alpha = vd.blended_led_color_at_x(self.COLORS, x, led_width)
+                r, g, b, a = vd.tone_mapped_led_color(
+                    red, green, blue, alpha, boost=boost, alpha_scale=alpha_scale,
+                )
+                if max(red, green, blue, alpha) <= 0.001:
+                    r = g = b = a = 0.0
+                expected = [round(r * a * 255), round(g * a * 255), round(b * a * 255), round(a * 255)]
+                actual = list(row[column * 4:column * 4 + 4])
+                for got, want in zip(actual, expected):
+                    self.assertLessEqual(abs(got - want), 2, (column, actual, expected))
+
+    def test_device_window_uses_layers_and_previews_do_not(self):
+        device = vd.VirtualStatusDevice.alloc().init()
+        device._build_window()
+        try:
+            self.assertTrue(device.view.led_layers_enabled)
+            self.assertEqual(len(device.view.led_band_layers), 4)
+        finally:
+            device.hide()
+            device.window.orderOut_(None)
+        self.assertFalse(self.make_view(layers=False).led_layers_enabled)
+
+    def test_layers_get_contents_without_redrawing_the_view(self):
+        view = self.make_view()
+        self.assertTrue(all(layer.contents() is not None for layer in view.led_band_layers))
+        with patch.object(view, "setNeedsDisplay_") as needs_display:
+            view.fixed_colors = list(reversed(self.COLORS))
+            view.refreshLeds()
+        needs_display.assert_not_called()
+
+    def test_unchanged_frames_skip_layer_updates(self):
+        view = self.make_view()
+        contents = [layer.contents() for layer in view.led_band_layers]
+        view.updateLedLayers()
+        self.assertEqual([layer.contents() for layer in view.led_band_layers], contents)
+        view.fixed_colors = list(reversed(self.COLORS))
+        view.updateLedLayers()
+        self.assertNotEqual([layer.contents() for layer in view.led_band_layers], contents)
+
+    def test_layout_follows_size_and_notch(self):
+        view = self.make_view()
+        view.setFrame_(((0, 0), (240, 40)))
+        view.setHasNotch_(False)
+        self.assertEqual(view.led_container_layer.frame().size.width, 240)
+        self.assertTrue(all(layer.isHidden() for layer in view.led_overlay_layers))
+        core = view.led_band_layers[2]
+        self.assertEqual(tuple(core.frame().size), (240, vd.LED_BAND_HEIGHT))
+
+    def test_compact_previews_keep_drawing(self):
+        view = self.make_view()
+        view.setCompactPreview_(True)
+        with patch.object(view, "setNeedsDisplay_") as needs_display:
+            view.refreshLeds()
+        needs_display.assert_called_with(True)
+
+
 class IconTests(StatusBarTestCase):
     """Icon builders return real images rather than None."""
 
