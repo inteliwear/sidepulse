@@ -30,8 +30,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The OpenCode plugin tests run its TypeScript under Node 22.6+.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install and test package
+        env:
+          SIDEPULSE_REQUIRE_PLUGIN_TESTS: "1"
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[test]'

@@ -24,12 +24,12 @@ from .providers import (
     GROK_EVENTS,
     JUNIE_EVENTS,
     JUNIE_MONITOR_EVENTS,
-    OPENCODE_PLUGIN_MARKER,
     default_cursor_hook_config_path,
     default_grok_hook_config_path,
     default_junie_hook_config_path,
     default_opencode_plugin_path,
     detect_log_path,
+    opencode_plugin_is_managed,
 )
 
 MANAGED_START = "# >>> agent-monitor hooks >>>"
@@ -356,13 +356,6 @@ def opencode_plugin_source() -> str:
     return files("sidepulse.resources").joinpath("opencode", "sidepulse.ts").read_text(encoding="utf-8")
 
 
-def opencode_plugin_is_managed(path: Path) -> bool:
-    try:
-        return OPENCODE_PLUGIN_MARKER in path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-
-
 def install_opencode_plugin(
     plugin_path: Path | None = None,
     dry_run: bool = False,
@@ -380,8 +373,11 @@ def install_opencode_plugin(
     if changed and not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        temporary.write_text(source, encoding="utf-8")
-        temporary.replace(target)
+        try:
+            temporary.write_text(source, encoding="utf-8")
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
     return InstallResult("opencode", target, None, changed, None, dry_run)
 
 

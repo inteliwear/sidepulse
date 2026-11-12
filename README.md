@@ -1028,7 +1028,9 @@ unless it passes. Four files, each guarding a different failure mode:
 | `tests/test_sidepulse.py` | Collector, settings, install, and provider logic. |
 
 The UI tests skip if AppKit is unavailable. Set `SIDEPULSE_REQUIRE_UI_TESTS=1`
-to turn that skip into a failure, which is how CI runs them.
+to turn that skip into a failure, which is how CI runs them. Likewise, the
+OpenCode plugin tests in `tests/test_opencode_provider.py` skip without Node.js
+22.6 or newer; CI sets `SIDEPULSE_REQUIRE_PLUGIN_TESTS=1` on Linux.
 
 The clean-room install tests take ~15s because they build a virtualenv and
 install into it. Set `SIDEPULSE_SKIP_CLEAN_INSTALL=1` to skip them while
