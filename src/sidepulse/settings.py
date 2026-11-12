@@ -9,7 +9,7 @@ from typing import Any
 
 from .battery import DEFAULT_POWER_CHANGE_PREVIEW_SECONDS
 from .models import AgentMode
-from .session_actions import SESSION_OPEN_CHOICES, SESSION_OPEN_TERMINAL
+from .session_actions import SESSION_OPEN_CHOICES, SESSION_OPEN_TERMINAL, is_t3_origin
 
 
 TERMINAL_APP_TERMINAL = "terminal"
@@ -480,6 +480,10 @@ class AgentMonitorSettings:
             )
             if action in SESSION_OPEN_CHOICES:
                 return action
+            # Provider-wide openers predate T3 Code and would send its sessions
+            # to another surface; only an origin-specific choice overrides T3.
+            if is_t3_origin(origin):
+                return None
 
         if provider_key == "grok":
             action = self.grok_session_open_action

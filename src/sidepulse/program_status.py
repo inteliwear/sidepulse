@@ -22,7 +22,8 @@ MAX_BYTES = 65536
 MAX_SESSIONS = 64
 CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
                   'cwd': 4096, 'origin': 512, 'display_name': 512, 'tool_name': 512,
-                  'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16}
+                  'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16,
+                  't3_link': 1024}
 # Leave room for push-provider framing, sender keys, and JSON string escaping.
 MAX_PHONE_STATUS_BYTES = 1800
 MAX_BRIDGE_MESSAGE_BYTES = 2048
@@ -254,7 +255,7 @@ class ProgramState:
             previous_context = previous.get('context', {}) if previous else {}
             if previous_context.get('title') and context.get('title_source') != 'session':
                 context['title'] = previous_context['title']
-            for field in ('cwd', 'origin', 'title'):
+            for field in ('cwd', 'origin', 'title', 't3_link'):
                 if field not in context and field in previous_context:
                     context[field] = previous_context[field]
             if context.get('title') or context.get('cwd'):
@@ -374,7 +375,8 @@ class ProgramState:
                 event_name=context.get('event_name') or 'ProgramStatus', session_id=context.get('session_id') or identity,
                 cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
                 seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(
-                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote)))
+                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote),
+                t3_link=context.get('t3_link') if sender == 'local' else None))
         return tuple(result)
 
     def close(self):
