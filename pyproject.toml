@@ -65,7 +65,7 @@ where = ["src"]
 include = ["sidepulse*", "agent_monitor*", "sidepulse_cli*"]
 
 [tool.setuptools.package-data]
-"sidepulse.resources" = ["sd_eject_guard.c", "sdled.wasm", "animations/*.LED"]
+"sidepulse.resources" = ["sd_eject_guard.c", "sdled.wasm", "animations/*.LED", "opencode/*.ts"]
 
 [tool.setuptools_scm]
 fallback_version = "0"

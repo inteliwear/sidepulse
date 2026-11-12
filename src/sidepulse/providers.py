@@ -92,7 +92,10 @@ JUNIE_MONITOR_EVENTS = tuple(
     event for event in JUNIE_EVENTS if event != "PermissionRequest"
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie", "opencode")
+# OpenCode reports through a plugin and `sidepulse report`, not hook logs.
+LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
+OPENCODE_PLUGIN_MARKER = "Managed by SidePulse: `sidepulse setup` replaces this file"
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
 )
@@ -155,6 +158,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_grok_config(home),
         detect_cursor_config(home),
         detect_junie_config(home),
+        detect_opencode_config(home),
     ]
 
 
@@ -382,6 +386,24 @@ def detect_junie_config(home: Path | None = None) -> ProviderConfig:
         tuple(sorted(set(hook_events))),
         _dedupe_paths(paths),
     )
+
+
+def default_opencode_plugin_path(home: Path | None = None) -> Path:
+    if home is None and os.environ.get("XDG_CONFIG_HOME"):
+        base = Path(os.environ["XDG_CONFIG_HOME"]).expanduser()
+    else:
+        base = (home or Path.home()) / ".config"
+    return base / "opencode" / "plugins" / "sidepulse.ts"
+
+
+def detect_opencode_config(home: Path | None = None) -> ProviderConfig:
+    plugin_path = default_opencode_plugin_path(home)
+    try:
+        managed = OPENCODE_PLUGIN_MARKER in plugin_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        managed = False
+    events = ("session.execution", "permission", "form") if managed else ()
+    return ProviderConfig("opencode", plugin_path, plugin_path.parent.parent.exists(), managed, events, ())
 
 
 def _entry_has_sidepulse_hook(entry: Any) -> bool:
