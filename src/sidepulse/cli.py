@@ -944,9 +944,6 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
 
     from .service_launch import install_service
 
-    relay_config = None
-    if sys.platform == "darwin" and not args.dry_run:
-        relay_config = ensure_receiver_config()
     service_result = install_service(start=True, dry_run=args.dry_run)
     service_action = "would install" if args.dry_run else "installed"
     if service_result.started:
@@ -956,8 +953,6 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     print(f"background service: {service_action}")
     if str(service_result.path):
         print(f"  config: {service_result.path}")
-    if relay_config is not None:
-        print(f"remote computer: {relay_link_command(relay_config)}")
 
     if sys.platform != "darwin":
         print("macOS integrations: skipped (CLI-only setup on this platform)")
