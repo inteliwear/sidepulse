@@ -466,7 +466,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, and Junie through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, Junie, and OpenCode through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -684,6 +684,7 @@ sidepulse setup claude
 sidepulse setup grok
 sidepulse setup cursor
 sidepulse setup junie
+sidepulse setup opencode
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -784,6 +785,7 @@ sidepulse setup claude --uninstall
 sidepulse setup grok --uninstall
 sidepulse setup cursor --uninstall
 sidepulse setup junie --uninstall
+sidepulse setup opencode --uninstall
 ```
 
 Install and start the macOS status-bar app:
@@ -873,6 +875,17 @@ connected to a JetBrains IDE; Junie hosted directly through IDE/ACP does not yet
 emit hooks. SidePulse intentionally does not register a Junie `PermissionRequest`
 hook because a successful observer hook would automatically approve the requested
 action. Junie's normal approval prompts therefore remain unchanged.
+
+OpenCode has no command hooks, so SidePulse installs a small plugin at
+`${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/sidepulse.ts` instead. OpenCode
+loads it automatically. The plugin follows OpenCode's session events and submits
+each state change with `sidepulse report --json`: Working while a session runs,
+Waiting for Input for a permission prompt or a question, then Done, Error, or
+Idle when it stops. Subagent sessions report through their parent session. The
+plugin sends the session title, its directory, and a short permission or
+question summary; it writes no log and never sends prompts or tool output.
+Setup never overwrites or removes a `sidepulse.ts` it did not install. The
+plugin requires OpenCode 2.
 
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`
@@ -1015,7 +1028,9 @@ unless it passes. Four files, each guarding a different failure mode:
 | `tests/test_sidepulse.py` | Collector, settings, install, and provider logic. |
 
 The UI tests skip if AppKit is unavailable. Set `SIDEPULSE_REQUIRE_UI_TESTS=1`
-to turn that skip into a failure, which is how CI runs them.
+to turn that skip into a failure, which is how CI runs them. Likewise, the
+OpenCode plugin tests in `tests/test_opencode_provider.py` skip without Node.js
+22.6 or newer; CI sets `SIDEPULSE_REQUIRE_PLUGIN_TESTS=1` on Linux.
 
 The clean-room install tests take ~15s because they build a virtualenv and
 install into it. Set `SIDEPULSE_SKIP_CLEAN_INSTALL=1` to skip them while
