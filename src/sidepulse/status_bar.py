@@ -91,6 +91,7 @@ from .audit import (
     export_status_audit_html,
     read_status_history_records,
 )
+from .collector import project_name
 from .device_writer import (
     DEFAULT_FILE_NAME,
     MOUNT_ROOT,
@@ -5789,7 +5790,7 @@ def primary_session_open_action(status: AgentStatus | object) -> str | None:
 
 
 def session_title_parts(status: AgentStatus) -> tuple[str, str | None]:
-    project = project_name_from_cwd(status.cwd)
+    project = project_name(status.cwd)
     title = strip_session_short_id(status.display_name, status.session_id)
     if project and title.startswith(f"{project}: "):
         title = title[len(project) + 2 :]
@@ -5819,16 +5820,6 @@ def strip_session_short_id(display_name: str, session_id: str | None) -> str:
         if 6 <= len(token) <= 12 and all(char.isalnum() or char == "-" for char in token):
             return prefix.strip()
     return text
-
-
-def project_name_from_cwd(cwd: str | None) -> str | None:
-    if not cwd:
-        return None
-    path = Path(cwd)
-    for candidate in (path, *path.parents):
-        if (candidate / ".git").exists():
-            return candidate.name or str(candidate)
-    return path.name or cwd
 
 
 def image_for_symbol(symbol: str, description: str):
