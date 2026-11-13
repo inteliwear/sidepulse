@@ -27,8 +27,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from hook_assertions import command_text, fail_open
+from sidepulse.providers import extract_log_paths_from_command
 from sidepulse import hook as hook_module
-from sidepulse.cli import build_parser, build_sidepulse_parser, cmd_hook_log
+from sidepulse.cli import build_sidepulse_parser, cmd_hook_log
 from sidepulse.hook import format_hook_payload, hook_log_main, routed_hook_payload
 from sidepulse.install import fail_open_command, hook_command
 
@@ -124,7 +126,6 @@ class FailOpenTests(HookIsolationMixin, unittest.TestCase):
         """
         collaborators = [
             "routed_hook_payload",
-            "send_hook_event",
             "write_hook_line",
             "write_hook_status_audit",
             "hook_event_socket_disabled",
@@ -157,8 +158,8 @@ class FailOpenTests(HookIsolationMixin, unittest.TestCase):
     def test_socket_send_failure_still_writes_log(self):
         """The log is the durable record; a dead status bar must not lose it."""
         with patch.dict(os.environ, {"SIDEPULSE_DISABLE_EVENT_SOCKET": "0"}):
-            with patch.object(
-                hook_module, "send_hook_event", side_effect=OSError("no listener")
+            with patch(
+                "sidepulse.program_transport.submit_status", side_effect=OSError("no listener")
             ):
                 code, _ = run_hook(
                     "claude", self.log_path, '{"hook_event_name": "Stop"}'
@@ -392,14 +393,8 @@ class EntryPointSubprocessTests(unittest.TestCase):
         record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
         self.assertEqual("Stop", record["hook_event_name"])
 
-    # A hook config in the wild can name any of these. `sidepulse hook-log`
-    # is what older installs wrote; `agent-monitor hook-log` is what the
-    # frozen-app command writes; `python -m sidepulse` reaches whichever of
-    # the two CLIs __main__ dispatches to. All of them must log.
-    CLI_ROUTES = (
-        ["hook-log"],
-        ["agent-monitor", "hook-log"],
-    )
+    # Installed scripts, frozen apps, and the module use the same hook command.
+    CLI_ROUTES = (["hook-log"],)
 
     def test_cli_hook_log_subcommand_matches_entry_point(self):
         for index, route in enumerate(self.CLI_ROUTES):
@@ -431,22 +426,15 @@ class EntryPointSubprocessTests(unittest.TestCase):
                     "", result.stdout, f"CLI printed to stdout: {result.stdout!r}"
                 )
 
-    def test_both_cli_parsers_accept_hook_log(self):
-        """`sidepulse` and `agent-monitor` are separate parsers.
-
-        They drifted apart once already: hook-log existed only on
-        `agent-monitor`, so `sidepulse hook-log` -- the command older installs
-        wrote into agent configs -- died with argparse exit code 2.
-        """
-        for build in (build_parser, build_sidepulse_parser):
-            for provider in PROVIDERS:
-                with self.subTest(parser=build.__name__, provider=provider):
-                    args = build().parse_args(
-                        ["hook-log", "--provider", provider, "--log", "/tmp/x.jsonl"]
-                    )
-                    self.assertEqual(provider, args.provider)
-                    self.assertEqual(Path("/tmp/x.jsonl"), args.log)
-                    self.assertIs(cmd_hook_log, args.func)
+    def test_cli_parser_accepts_hook_log_for_every_provider(self):
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                args = build_sidepulse_parser().parse_args(
+                    ["hook-log", "--provider", provider, "--log", "/tmp/x.jsonl"]
+                )
+                self.assertEqual(provider, args.provider)
+                self.assertEqual(Path("/tmp/x.jsonl"), args.log)
+                self.assertIs(cmd_hook_log, args.func)
 
 
 class InstalledCommandTests(unittest.TestCase):
@@ -462,7 +450,7 @@ class InstalledCommandTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 command = hook_command(provider, self.home / "log.jsonl")
                 self.assertTrue(
-                    command.rstrip().endswith("; true"),
+                    fail_open(command),
                     f"hook command is not fail-open: {command}",
                 )
 
@@ -471,7 +459,7 @@ class InstalledCommandTests(unittest.TestCase):
 
         weird = self.home / "path with spaces" / "log's file.jsonl"
         command = hook_command("claude", weird)
-        parts = shlex.split(command)
+        parts = [str(path) for path in extract_log_paths_from_command(command)]
         self.assertIn(str(weird), parts, "log path was not quoted intact")
 
     def test_command_exits_zero_when_python_is_missing(self):
@@ -502,6 +490,7 @@ class InstalledCommandTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(log_path.exists(), "installed hook command wrote nothing")
 
+    @unittest.skipIf(os.name == "nt", "POSIX shell wrapper; native PowerShell execution covered separately")
     def test_fail_open_wrapper_neutralizes_failure(self):
         # Note: a bare `exit 7` would terminate the shell before `; true` runs.
         # Hooks invoke a real program, which is what these cases model.

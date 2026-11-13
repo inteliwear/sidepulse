@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .hook_commands import observer_script, windows_log_path
+
 from .models import HookEvent, parse_datetime
 from .origin import origin_label_from_payload
 
@@ -324,7 +326,7 @@ def detect_cursor_config(home: Path | None = None) -> ProviderConfig:
                 and (
                     "sidepulse.cursor_hook" in str(entry.get("command") or "")
                     or "agent-monitor hook-log" in str(entry.get("command") or "")
-                    or "hook_entry.py" in str(entry.get("command") or "")
+                    or "hook_entry.py" in observer_script(str(entry.get("command") or ""))
                 )
             ]
             if managed_entries:
@@ -393,7 +395,7 @@ def _entry_has_sidepulse_hook(entry: Any) -> bool:
         and (
             "sidepulse hook-log" in str(hook.get("command") or "")
             or "agent-monitor hook-log" in str(hook.get("command") or "")
-            or "hook_entry.py" in str(hook.get("command") or "")
+            or "hook_entry.py" in observer_script(str(hook.get("command") or ""))
         )
         for hook in hooks
     )
@@ -544,6 +546,7 @@ def normalize_event_payload(raw: dict[str, Any], event_name: str, logged_at: Any
     _copy_alias(normalized, "workspaceRoot", "cwd")
     _copy_alias(normalized, "toolName", "tool_name")
     _copy_alias(normalized, "toolInput", "tool_input")
+    _copy_alias(normalized, "toolUseId", "tool_use_id")
     _copy_alias(normalized, "toolResponse", "tool_response")
     _copy_alias(normalized, "lastAssistantMessage", "last_assistant_message")
     _copy_alias(normalized, "notificationType", "notification_type")
@@ -582,6 +585,9 @@ def extract_log_paths_from_command(command: str) -> list[Path]:
     for match in re.finditer(r">>\s+(['\"]?)([^'\"\s]+)\1", command):
         paths.append(Path(match.group(2)).expanduser())
 
+    windows = windows_log_path(command)
+    if windows is not None:
+        return _dedupe_paths([Path(windows).expanduser()])
     try:
         parts = shlex.split(command)
     except ValueError:

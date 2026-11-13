@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from privacy import assert_private_file
 from unittest.mock import MagicMock, patch
 
 
@@ -108,7 +109,7 @@ class LinkStorageTests(unittest.TestCase):
             link = IOSLink("Peter's iPhone", TOKEN_A, linked_at="now")
             save_ios_links((link,), path)
             self.assertEqual(load_ios_links(path), (link,))
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            assert_private_file(path)
 
     def test_links_round_trip_development_and_legacy_production_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

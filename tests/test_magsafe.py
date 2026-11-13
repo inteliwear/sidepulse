@@ -333,7 +333,7 @@ class MagSafeMenuTests(unittest.TestCase):
             controller = sb.StatusBarController.alloc().init()
         controller.magsafe = Mock(ready=True, last_error=None)
         with (
-            patch.object(sb, "discover_devices", return_value=[]),
+            patch.object(controller, "monitor", Mock(devices=[], output_errors={})),
             patch.object(sb, "load_ios_links", return_value=()),
             patch.object(sb, "save_settings") as save,
             patch.object(sb, "write_led_program") as write,
@@ -349,7 +349,7 @@ class MagSafeMenuTests(unittest.TestCase):
             self.assertNotIn("Idle: normal charging light", titles)
             self.assertIn("Remove MagSafe 3 LED", titles)
             controller.sync_leds_now(AgentMode.WORKING, None, "agent")
-            self.assertEqual(controller.status_keepalive_targets(), [sb.MOUNT_ROOT / name / sb.KEEPALIVE_FILE_NAME for name in sb.STATUS_BAR_KEEPALIVE_VOLUME_NAMES])
+            self.assertEqual(controller.current_led_targets(), [])
             write.assert_not_called()
             save.assert_not_called()
             controller.magsafe.ready = False

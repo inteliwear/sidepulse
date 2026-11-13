@@ -39,6 +39,7 @@ class PhoneLink:
     token: str
     server: str = DEFAULT_BRIDGE_SERVER
     linked_at: str = ""
+    status_protocol: int = 0
 
     @property
     def platform(self) -> str:
@@ -56,13 +57,14 @@ class PhoneLink:
             return hashlib.sha256(self.device_token.encode("ascii")).hexdigest()[:12]
         return self.token[:12]
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.link_id,
             "name": self.name,
             "token": self.token,
             "server": self.server,
             "linked_at": self.linked_at,
+            "status_protocol": self.status_protocol,
         }
 
 
@@ -151,6 +153,7 @@ def load_ios_links(path: Path | None = None) -> tuple[IOSLink, ...]:
                         token=normalizer(str(item["token"])),
                         server=normalize_server(str(item.get("server") or DEFAULT_BRIDGE_SERVER)),
                         linked_at=str(item.get("linked_at") or ""),
+                        status_protocol=item["status_protocol"] if type(item.get("status_protocol")) is int and item["status_protocol"] in (1, 2) else 0,
                     )
                 )
             except (KeyError, LinkError):
@@ -171,6 +174,10 @@ def save_ios_links(links: Iterable[IOSLink], path: Path | None = None) -> Path:
         "ios": [link.to_dict() for link in phones if link.platform == "ios"],
         "android": [link.to_dict() for link in phones if link.platform == "android"],
     }
+    if os.name == 'nt':
+        from .windows_support import private_text
+        private_text(target, json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        return target
     temporary = target.with_suffix(target.suffix + ".tmp")
     # Create privately before writing credentials, including under a permissive umask.
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -281,6 +288,7 @@ def parse_ios_registration(value: str, *, server: str) -> IOSLink:
     name = str(device.get("name") or "iPhone").strip()[:80] or "iPhone"
     token = normalize_apns_token(str(device.get("push_token") or ""))
     return IOSLink(
+        status_protocol=device["status_protocol"] if type(device.get("status_protocol")) is int and device["status_protocol"] in (1, 2) else 0,
         name=name,
         token=token,
         server=normalize_server(server),
@@ -319,6 +327,7 @@ def parse_phone_registration(value: str, *, server: str) -> PhoneLink:
     if not isinstance(device, dict) or device.get("platform") != "android" or device.get("package_id") != ANDROID_PACKAGE_ID:
         raise LinkError("Pairing response did not include a supported SidePulse Android device.")
     return PhoneLink(
+        status_protocol=device["status_protocol"] if type(device.get("status_protocol")) is int and device["status_protocol"] in (1, 2) else 0,
         name=str(device.get("name") or "Android phone").strip()[:80] or "Android phone",
         token=normalize_fcm_token(str(device.get("push_token") or "")),
         server=normalize_server(server),

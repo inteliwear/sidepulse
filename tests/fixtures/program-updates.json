@@ -1,0 +1,514 @@
+{
+  "now": 2000000,
+  "cases": [
+    {
+      "name": "working-is-explicit",
+      "expected": [
+        "working"
+      ],
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "working",
+              "app": "codex",
+              "msg": "Running…",
+              "progress": 20
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "replacement-and-stale-replay",
+      "expected": [
+        "working",
+        "blocked",
+        "blocked"
+      ],
+      "expected_msg": "Approve deployment?",
+      "expected_app": null,
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "working",
+              "app": "codex",
+              "msg": "Running…",
+              "progress": 20
+            }
+          }
+        ],
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 2,
+            "updated_at": 1000,
+            "status": {
+              "state": "blocked",
+              "kind": "permission",
+              "msg": "Approve deployment?"
+            }
+          }
+        ],
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "working",
+              "app": "codex",
+              "msg": "Running…",
+              "progress": 20
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "clear-and-late-replay",
+      "expected": [
+        "blocked",
+        "idle",
+        "idle"
+      ],
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "blocked",
+              "kind": "permission",
+              "msg": "Approve deployment?"
+            }
+          }
+        ],
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 3,
+            "updated_at": 0,
+            "status": {
+              "state": "clear"
+            }
+          }
+        ],
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "blocked",
+              "kind": "permission",
+              "msg": "Approve deployment?"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "complete-permission-state",
+      "expected": [
+        "blocked"
+      ],
+      "expected_app": "claude-code",
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 2000,
+            "status": {
+              "state": "blocked",
+              "id": "agents/a/tool",
+              "kind": "question",
+              "msg": "Choose",
+              "app": "claude-code"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "done-visibility",
+      "expected": [
+        "idle"
+      ],
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "done"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "error-persists",
+      "expected": [
+        "error"
+      ],
+      "updates": [
+        [
+          {
+            "v": 1,
+            "type": "program_status",
+            "publisher": "publisher-a",
+            "scope": "session",
+            "seq": 1,
+            "updated_at": 1000,
+            "status": {
+              "state": "error",
+              "msg": "Failure"
+            }
+          }
+        ]
+      ]
+    }
+  ],
+  "normalization": [
+    {
+      "input": {
+        "state": "blocked",
+        "kind": "auth",
+        "progress": 0,
+        "msg": "🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂",
+        "title": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+      },
+      "expected": {
+        "state": "blocked",
+        "kind": "auth",
+        "progress": 0,
+        "msg": "🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂",
+        "title": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+      }
+    },
+    {
+      "input": {
+        "state": "working",
+        "kind": "permission",
+        "progress": true,
+        "app": "bad app",
+        "future_field": {
+          "anything": true
+        }
+      },
+      "expected": {
+        "state": "working"
+      }
+    },
+    {
+      "input": {
+        "state": "blocked",
+        "kind": [
+          "permission"
+        ],
+        "progress": 100.5
+      },
+      "expected": {
+        "state": "blocked"
+      }
+    },
+    {
+      "input": {
+        "state": "done",
+        "kind": "auth",
+        "progress": 100,
+        "title": "",
+        "msg": ""
+      },
+      "expected": {
+        "state": "done",
+        "title": "",
+        "msg": ""
+      }
+    },
+    {
+      "input": {
+        "state": "working",
+        "progress": 100,
+        "app": "my-app.v1",
+        "id": "a/b"
+      },
+      "expected": {
+        "state": "working",
+        "progress": 100,
+        "app": "my-app.v1",
+        "id": "a/b"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown-state",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 1000,
+        "status": {
+          "state": "ask",
+          "app": "codex",
+          "msg": "Running…",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "invalid-path",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 1000,
+        "status": {
+          "state": "working",
+          "app": "codex",
+          "msg": "Running…",
+          "progress": 20,
+          "id": "a//b"
+        }
+      }
+    },
+    {
+      "name": "control-message",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 1000,
+        "status": {
+          "state": "working",
+          "app": "codex",
+          "msg": "bad\u001btext",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "overlong-message",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 1000,
+        "status": {
+          "state": "working",
+          "app": "codex",
+          "msg": "😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃😃",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "boolean-revision",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": true,
+        "updated_at": 1000,
+        "status": {
+          "state": "working",
+          "app": "codex",
+          "msg": "Running…",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "negative-seq",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": -1,
+        "updated_at": 1000,
+        "status": {
+          "state": "working",
+          "app": "codex",
+          "msg": "Running…",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "array-state",
+      "update": {
+        "v": 1,
+        "type": "program_status",
+        "publisher": "publisher-a",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 1000,
+        "status": {
+          "state": [],
+          "app": "codex",
+          "msg": "Running…",
+          "progress": 20
+        }
+      }
+    },
+    {
+      "name": "removed-scope_end",
+      "update": {
+        "v": 1,
+        "type": "scope_end",
+        "publisher": "p",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 2000000,
+        "status": {
+          "state": "working"
+        }
+      }
+    },
+    {
+      "name": "removed-scope_reset",
+      "update": {
+        "v": 1,
+        "type": "scope_reset",
+        "publisher": "p",
+        "scope": "session",
+        "seq": 1,
+        "updated_at": 2000000,
+        "status": {
+          "state": "working"
+        }
+      }
+    }
+  ],
+  "session_list": [
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "build",
+      "seq": 1,
+      "updated_at": 1999500,
+      "status": {
+        "state": "blocked",
+        "id": "permissions/deploy",
+        "kind": "permission",
+        "msg": "Approve database migration",
+        "app": "claude-code",
+        "title": "Checkout flow"
+      }
+    },
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "tests",
+      "seq": 1,
+      "updated_at": 1999800,
+      "status": {
+        "state": "working",
+        "title": "Regression tests",
+        "app": "codex",
+        "progress": 72
+      }
+    },
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "done",
+      "seq": 1,
+      "updated_at": 1999700,
+      "status": {
+        "state": "done",
+        "title": "Update documentation",
+        "app": "cursor"
+      }
+    },
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "expired",
+      "seq": 1,
+      "updated_at": 1,
+      "status": {
+        "state": "done",
+        "title": "Old work"
+      }
+    },
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "empty",
+      "seq": 1,
+      "updated_at": 0,
+      "status": {
+        "state": "clear"
+      }
+    },
+    {
+      "v": 1,
+      "type": "program_status",
+      "publisher": "sessions-fixture",
+      "scope": "error",
+      "seq": 1,
+      "updated_at": 1998000,
+      "status": {
+        "state": "error",
+        "title": "Mobile build",
+        "app": "gemini",
+        "msg": "Build failed"
+      }
+    }
+  ]
+}
