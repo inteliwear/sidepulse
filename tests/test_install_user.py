@@ -16,6 +16,7 @@ class UserInstallerTests(unittest.TestCase):
         self.assertIn('"$VENV_DIR/bin/python" -m pip install', text)
         self.assertNotIn("--break-system-packages", text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX shell syntax")
     def test_installer_shell_syntax(self) -> None:
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
@@ -35,8 +36,14 @@ class UserInstallerTests(unittest.TestCase):
         self.assertIn('SIDEPULSE_INSTALL_SPEC', text)
         self.assertIn("sys.version_info < (3, 10)", text)
         self.assertIn('"$VENV/bin/sidepulse" setup', text)
-        self.assertNotIn("sudo", text)
+        # Recovery instructions may mention sudo; the installer must never run it.
+        executable_text = text
+        if "cat >&2 <<'EOF'" in executable_text:
+            before, rest = executable_text.split("cat >&2 <<'EOF'", 1)
+            executable_text = before + rest.split("\nEOF", 1)[1]
+        self.assertNotIn("sudo", executable_text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX shell syntax")
     def test_curl_setup_shell_syntax(self) -> None:
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

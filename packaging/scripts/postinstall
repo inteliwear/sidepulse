@@ -12,6 +12,7 @@ APP_BINARY="/Applications/SidePulse.app/Contents/MacOS/SidePulse"
 
 /bin/mkdir -p /usr/local/bin
 /bin/ln -sfn "$APP_BINARY" /usr/local/bin/sidepulse
+/bin/ln -sfn "$APP_BINARY" /usr/local/bin/sp
 
 # Install the narrow pmset helper while the package installer already has
 # privileges. This lets "Keep Awake With Lid Closed" work without exposing a

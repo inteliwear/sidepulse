@@ -1,0 +1,60 @@
+name: Windows installation probes
+
+# Native Windows support is being measured. Keep this explicit/manual while
+# unsupported product capabilities are still failures in the probe results.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-windows:
+    name: Windows x64 / ${{ matrix.path }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        path: [fresh, main-upgrade]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Run package installation and migration probes
+        shell: pwsh
+        env:
+          INSTALL_PATH: ${{ matrix.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $probeRoot = Join-Path $env:USERPROFILE "SidePulseCI-$env:INSTALL_PATH"
+          $evidenceRoot = Join-Path $probeRoot 'evidence'
+          Add-Content -Path $env:GITHUB_ENV -Value "SIDEPULSE_WINDOWS_EVIDENCE=$evidenceRoot"
+          if (Test-Path $probeRoot) { throw 'Refusing to reuse an existing probe root' }
+          $codes = @()
+          if ($env:INSTALL_PATH -eq 'fresh') {
+            python scripts/windows-vm/probe.py fresh --scope ci --root $probeRoot --installer --full-suite
+            $codes += $LASTEXITCODE
+          } else {
+            python scripts/windows-vm/probe.py main --scope ci --root $probeRoot
+            $codes += $LASTEXITCODE
+            # Keep the baseline's failures and still measure the actual upgrade
+            # when its package installation succeeded. No failure is erased.
+            if (Test-Path (Join-Path $probeRoot 'main-installed.json')) {
+              python scripts/windows-vm/probe.py upgrade --scope ci --root $probeRoot --installer --full-suite
+              $codes += $LASTEXITCODE
+              python scripts/windows-vm/probe.py repeat --scope ci --root $probeRoot --installer
+              $codes += $LASTEXITCODE
+            }
+          }
+          if ($codes | Where-Object { $_ -ne 0 }) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-installed-${{ matrix.path }}
+          path: ${{ env.SIDEPULSE_WINDOWS_EVIDENCE }}
+          if-no-files-found: warn

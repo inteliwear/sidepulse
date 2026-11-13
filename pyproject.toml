@@ -29,7 +29,9 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
+    "pywinpty>=3.1.2,<4; sys_platform == 'win32'",
     "libusb-package>=1.0.26,<2",
+    "watchdog>=6,<7",
     "qrcode>=8,<9",
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
@@ -55,8 +57,7 @@ test = [
 
 [project.scripts]
 sidepulse = "sidepulse.cli:sidepulse_main"
-agent-monitor = "sidepulse.cli:main"
-agent-status-bar = "sidepulse.status_bar:main"
+sp = "sidepulse.cli:sidepulse_main"
 sidepulse-reply = "sidepulse.reply_classifier:main"
 
 [tool.setuptools.packages.find]
@@ -68,3 +69,10 @@ include = ["sidepulse*", "agent_monitor*", "sidepulse_cli*"]
 
 [tool.setuptools_scm]
 fallback_version = "0"
+version_file = "src/sidepulse/_build_info.py"
+version_file_template = '''
+"""Generated during packaging; do not edit."""
+version = "{version}"
+revision = "{scm_version.node}"
+built_at = "{scm_version.time:%Y-%m-%dT%H:%M:%SZ}"
+'''
