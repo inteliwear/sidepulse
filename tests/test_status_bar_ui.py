@@ -1402,6 +1402,30 @@ class IconTests(StatusBarTestCase):
                     sb.provider_icon_for_provider(provider)
                 self.assertIn(bundle, looked_up)
 
+    def test_tern_origin_looks_up_the_tern_bundle(self):
+        """Sessions hosted in Tern carry origin "Tern"; the row shows the Tern app icon."""
+        for origin, bundle in (("Tern", "/Applications/Tern.app"), ("tern", "/Applications/Tern.app")):
+            with self.subTest(origin=origin):
+                looked_up: list[str] = []
+                sb._origin_icon_cache.pop("tern", None)
+                self.addCleanup(sb._origin_icon_cache.pop, "tern", None)
+                with patch.object(sb, "app_icon", lambda path: looked_up.append(path) and None):
+                    image = sb.host_icon_for_origin(origin)
+                self.assertEqual(looked_up, [bundle])
+                self.assertIsInstance(image, NSImage)
+
+    def test_tern_matches_whole_words_only(self):
+        """Labels merely containing "tern" (internal, pattern) never look for Tern.app."""
+        for origin in ("Claude Code CLI", "Terminal", "internal tool", "Pattern Lab"):
+            with self.subTest(origin=origin):
+                looked_up: list[str] = []
+                key = sb.normalized_origin_text(origin)
+                sb._origin_icon_cache.pop(key, None)
+                self.addCleanup(sb._origin_icon_cache.pop, key, None)
+                with patch.object(sb, "app_icon", lambda path: looked_up.append(path) and None):
+                    sb.host_icon_for_origin(origin)
+                self.assertNotIn("/Applications/Tern.app", looked_up)
+
     def test_opencode_uses_generic_app_resolution(self):
         """OpenCode may be registered outside the system Applications directory."""
         expected = NSImage.alloc().initWithSize_((18, 18))
