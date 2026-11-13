@@ -50,7 +50,31 @@ OUTPUT_PKG="$DIST_DIR/SidePulse-${VERSION}-${ARCH}.pkg"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$APP_PATH/Contents/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_PATH/Contents/Info.plist"
 
+# Bundled native service. Registration happens only when the user adds MagSafe.
+MAGSAFE_HELPER="$APP_PATH/Contents/Resources/sidepulse/resources/sidepulse-magsafe"
+mkdir -p "$(dirname "$MAGSAFE_HELPER")"
+xcrun clang -O2 -Wall -Wextra -Werror \
+    "-DSIDEPULSE_APP_ID=\"$APP_ID\"" \
+    "$ROOT_DIR/src/sidepulse/resources/magsafe.c" \
+    -framework IOKit -framework CoreFoundation -framework Security -o "$MAGSAFE_HELPER"
+mkdir -p "$APP_PATH/Contents/Library/LaunchDaemons"
+cat > "$APP_PATH/Contents/Library/LaunchDaemons/io.sidepulse.magsafe.helper.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>io.sidepulse.magsafe.helper</string>
+    <key>BundleProgram</key><string>Contents/Resources/sidepulse/resources/sidepulse-magsafe</string>
+    <key>ProgramArguments</key><array><string>sidepulse-magsafe</string><string>--daemon</string></array>
+    <key>Sockets</key><dict><key>MagSafe</key><dict>
+        <key>SockPathName</key><string>/var/run/sidepulse-magsafe.sock</string>
+        <key>SockPathMode</key><integer>438</integer>
+        <key>SockType</key><string>stream</string>
+    </dict></dict>
+</dict></plist>
+PLIST
+
 if [ -n "$APP_SIGN_IDENTITY" ]; then
+    codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" "$MAGSAFE_HELPER"
     codesign --force --deep --options runtime --timestamp \
         --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
         --sign "$APP_SIGN_IDENTITY" "$APP_PATH"

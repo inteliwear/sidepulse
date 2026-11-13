@@ -8,7 +8,7 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -61,6 +61,8 @@ try:
         NSViewHeightSizable,
         NSViewWidthSizable,
         NSWorkspace,
+        NSWorkspaceWillSleepNotification,
+        NSWorkspaceDidWakeNotification,
         NSWindow,
         NSWindowStyleMaskClosable,
         NSWindowStyleMaskMiniaturizable,
@@ -139,6 +141,8 @@ from .lid_sleep import (
     sleep_helper_installed,
 )
 from .models import AgentMode, AgentStatus, MODE_LABELS, provider_label
+from .daemon_runtime import lid_closed_led_state_should_hold
+from .magsafe import MAGSAFE_DEVICE_ID, MAGSAFE_DEVICE_NAME, MagSafeController
 from .providers import (
     ProviderConfig,
     detect_claude_config,
@@ -539,12 +543,17 @@ class StatusBarController(NSObject):
         self.last_connected_device_signature = None
         self.event_refresh_pending = False
         self.virtual_status_device = VirtualStatusDevice.alloc().init()
+        self.magsafe = MagSafeController(on_reconnect=self.schedule_magsafe_reconnect)
+        self.magsafe_suspended = False
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         install_standard_edit_menu()
         log_status_bar("launching status item")
+        center = NSWorkspace.sharedWorkspace().notificationCenter()
+        center.addObserver_selector_name_object_(self, "magsafeWillSleep:", NSWorkspaceWillSleepNotification, None)
+        center.addObserver_selector_name_object_(self, "magsafeDidWake:", NSWorkspaceDidWakeNotification, None)
         self.start_event_server()
 
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
@@ -627,7 +636,7 @@ class StatusBarController(NSObject):
     def check_firmware(self) -> None:
         roots = tuple(
             device.root for device in self.status_bar_devices(remember=False)
-            if device.connected and device.remote_link is None and device.device_id != VIRTUAL_DEVICE_ID
+            if device.connected and device.remote_link is None and device.device_id not in {VIRTUAL_DEVICE_ID, MAGSAFE_DEVICE_ID}
         )
         if self.firmware_check_in_flight or self.firmware_upgrade_root is not None:
             return
@@ -1115,6 +1124,8 @@ class StatusBarController(NSObject):
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
+        NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(self)
+        self.magsafe.stop()
         self.stop_status_icon_animation()
         self.stop_agent_animation_preview_timer()
         self.stop_event_server()
@@ -1813,6 +1824,8 @@ class StatusBarController(NSObject):
     def set_device_display(self, device_id: str | None, display: str) -> None:
         if not device_id:
             return
+        if device_id == MAGSAFE_DEVICE_ID:
+            return  # MagSafe supports Agent Status only.
         device = next(
             (
                 entry
@@ -1913,6 +1926,60 @@ class StatusBarController(NSObject):
                 self.last_battery_snapshot,
                 self.active_led_display_kind(self.last_battery_snapshot),
             )
+
+    @objc.IBAction
+    def toggleMagSafeLed_(self, _sender):
+        enabled = not self.settings.magsafe_led_enabled
+        try:
+            settings = replace(self.settings, magsafe_led_enabled=enabled)
+            save_settings(settings)
+            self.settings = settings
+        except Exception as exc:
+            self.set_settings_message(f"Could not save MagSafe setting: {exc}")
+            return
+        if not enabled:
+            self.magsafe.stop()
+        else:
+            self.magsafe.request_approval()
+        self.refresh_(None)
+
+    @objc.IBAction
+    def approveMagSafeHelper_(self, _sender):
+        self.magsafe.request_approval()
+        self.refresh_(None)
+
+    def magsafeWillSleep_(self, _notification):
+        self.magsafe_suspended = True
+        self.magsafe.stop()
+
+    def schedule_magsafe_reconnect(self):
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "refreshMagSafeConnection:", None, False,
+        )
+
+    def refreshMagSafeConnection_(self, _sender):
+        self.refresh_(None)
+
+    def magsafeDidWake_(self, _notification):
+        self.magsafe_suspended = False
+        self.refresh_(None)
+
+    def sync_magsafe(self, mode: AgentMode) -> None:
+        if self.magsafe_suspended:
+            return
+        if not self.settings.magsafe_led_enabled or not self.leds_enabled:
+            self.magsafe.stop()
+            return
+        runtime = getattr(self.monitor, 'runtime', {})
+        agents_active = None if self.last_snapshot is None else self.last_snapshot.aggregate.active_count > 0
+        sleep_allowed = lid_closed_led_state_should_hold(
+            lid_closed=runtime.get('lid_closed'),
+            sleep_prevention_policy=self.settings.sleep_prevention_policy,
+            agents_active=agents_active,
+            battery_safeguard_active=runtime.get('battery_safeguard_active', False),
+        )
+        self.magsafe.update(mode, sleep_allowed=sleep_allowed)
+        self.magsafe.start()
 
     def set_virtual_status_device(self, enabled: bool) -> None:
         if not SIDEPULSE_NOTCH_FEATURE_ENABLED:
@@ -2346,7 +2413,7 @@ class StatusBarController(NSObject):
             for device in self.status_bar_devices()
             if (
                 device.connected
-                and device.device_id != VIRTUAL_DEVICE_ID
+                and device.device_id not in {VIRTUAL_DEVICE_ID, MAGSAFE_DEVICE_ID}
                 and device.remote_link is None
                 and device.display != LED_DISPLAY_CUSTOM
             )
@@ -2481,7 +2548,7 @@ class StatusBarController(NSObject):
                 for device in self.status_bar_devices()
                 if (
                     device.connected
-                    and device.device_id != VIRTUAL_DEVICE_ID
+                    and device.device_id not in {VIRTUAL_DEVICE_ID, MAGSAFE_DEVICE_ID}
                     and device.remote_link is None
                     and device.display != LED_DISPLAY_CUSTOM
                 )
@@ -2625,6 +2692,16 @@ class StatusBarController(NSObject):
 
     def status_bar_devices(self, *, remember: bool = True) -> list[StatusBarDevice]:
         entries_by_id: dict[str, StatusBarDevice] = {}
+        if self.settings.magsafe_led_enabled:
+            entries_by_id[MAGSAFE_DEVICE_ID] = StatusBarDevice(
+                device_id=MAGSAFE_DEVICE_ID,
+                name=MAGSAFE_DEVICE_NAME,
+                root=Path(MAGSAFE_DEVICE_ID),
+                target=Path(MAGSAFE_DEVICE_ID),
+                connected=self.magsafe.ready,
+                display=LED_DISPLAY_AGENT,
+                reason=self.magsafe.status_reason,
+            )
         candidates = getattr(self.monitor, 'devices', [])
 
         for candidate in candidates:
@@ -2660,6 +2737,8 @@ class StatusBarController(NSObject):
             )
 
         for device in self.settings.devices:
+            if device.device_id == MAGSAFE_DEVICE_ID:
+                continue
             if device.device_id == VIRTUAL_DEVICE_ID:
                 if (
                     SIDEPULSE_NOTCH_FEATURE_ENABLED
@@ -2744,7 +2823,7 @@ class StatusBarController(NSObject):
     def remember_connected_devices(self, devices: list[StatusBarDevice]) -> None:
         settings = self.settings
         for device in devices:
-            if not device.connected or device.remote_link is not None:
+            if not device.connected or device.remote_link is not None or device.device_id == MAGSAFE_DEVICE_ID:
                 continue
             settings = settings.with_remembered_device(
                 device_id=device.device_id,
@@ -2775,6 +2854,7 @@ class StatusBarController(NSObject):
         # The virtual Notch is a view. Physical output and timers belong to the daemon.
         if self.leds_enabled:
             self.sync_virtual_status_device(mode, battery_snapshot)
+        self.sync_magsafe(mode)
         self.sync_leds_now(mode, battery_snapshot, display_kind)
 
     def sync_virtual_status_device(
@@ -2844,6 +2924,7 @@ class StatusBarController(NSObject):
         self.last_led_error = None
 
     def disconnect_device(self) -> None:
+        self.magsafe.stop()
         try:
             daemon_command({'type': 'output_control', 'enabled': False})
             self.leds_enabled = False
@@ -2869,7 +2950,7 @@ class StatusBarController(NSObject):
 
     def current_led_targets(self) -> list[Path]:
         return [device.target for device in self.status_bar_devices(remember=False)
-            if device.connected and device.remote_link is None and device.device_id != VIRTUAL_DEVICE_ID]
+            if device.connected and device.remote_link is None and device.device_id not in {VIRTUAL_DEVICE_ID, MAGSAFE_DEVICE_ID}]
 
     def ensure_device_selection(self) -> None:
         # Selection is a daemon concern; the tray only lists available devices.
@@ -2927,6 +3008,13 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
         )
         virtual_toggle.setTarget_(target)
         menu.addItem_(virtual_toggle)
+
+    if not target.settings.magsafe_led_enabled:
+        magsafe_toggle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Add MagSafe 3 LED", "toggleMagSafeLed:", ""
+        )
+        magsafe_toggle.setTarget_(target)
+        menu.addItem_(magsafe_toggle)
 
     menu.addItem_(NSMenuItem.separatorItem())
     menu.addItem_(disabled_menu_item("Closed-Lid Sleep Prevention"))
@@ -3032,6 +3120,27 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
         agent.setState_(1 if device.display == LED_DISPLAY_AGENT else 0)
         submenu.addItem_(agent)
 
+    if device.device_id == MAGSAFE_DEVICE_ID:
+        # The entry exists while enabled, including while awaiting reconnection.
+        item.setState_(1)
+        submenu.addItem_(NSMenuItem.separatorItem())
+        if not device.connected:
+            submenu.addItem_(disabled_menu_item(device.reason))
+        if not device.connected and target.magsafe.needs_setup:
+            approve = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Set Up MagSafe Helper…", "approveMagSafeHelper:", ""
+            )
+            approve.setTarget_(target)
+            submenu.addItem_(approve)
+        remove = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Remove MagSafe 3 LED", "toggleMagSafeLed:", ""
+        )
+        remove.setTarget_(target)
+        submenu.addItem_(remove)
+        item.setSubmenu_(submenu)
+        return item
+
+    if device.remote_link is None:
         battery = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Battery Level",
             "setDeviceDisplayBattery:",
@@ -3052,7 +3161,7 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
         custom.setState_(1 if device.display == LED_DISPLAY_CUSTOM else 0)
         submenu.addItem_(custom)
 
-    if device.device_id != VIRTUAL_DEVICE_ID and device.remote_link is None:
+    if device.device_id not in {VIRTUAL_DEVICE_ID, MAGSAFE_DEVICE_ID} and device.remote_link is None:
         submenu.addItem_(NSMenuItem.separatorItem())
         if device.connected:
             status = target.firmware_status.get(device.root)

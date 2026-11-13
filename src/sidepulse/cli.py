@@ -282,10 +282,12 @@ def add_sidepulse_status_bar_parser(subparsers: argparse._SubParsersAction) -> N
             "install-sleep-helper",
             "uninstall-sleep-helper",
             "sleep-helper-status",
+            "uninstall-magsafe-helper",
+            "magsafe-helper-status",
         ),
         nargs="?",
         default="start",
-        help="Start/stop the menu-bar app, or manage the closed-lid sleep helper. Default: start.",
+        help="Start/stop the menu-bar app, or manage its helpers. Default: start.",
     )
     status_bar.add_argument(
         "--foreground",
@@ -295,7 +297,7 @@ def add_sidepulse_status_bar_parser(subparsers: argparse._SubParsersAction) -> N
     status_bar.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show sleep-helper changes without writing them.",
+        help="Show helper changes without writing them.",
     )
     status_bar.set_defaults(func=cmd_sidepulse_status_bar)
 
@@ -782,6 +784,28 @@ def cmd_sidepulse_unlink(args: argparse.Namespace) -> int:
 
 
 def cmd_sidepulse_status_bar(args: argparse.Namespace) -> int:
+    if args.status_bar_command == "magsafe-helper-status":
+        from .magsafe import native_service
+        states = {0: "not registered", 1: "enabled", 2: "requires approval", 3: "not found"}
+        try:
+            status = int(native_service().status())
+        except Exception as exc:
+            print(f"MagSafe helper: {exc}", file=sys.stderr)
+            return 1
+        print(f"MagSafe helper: {states.get(status, 'unknown')}")
+        return 0
+    if args.status_bar_command == "uninstall-magsafe-helper":
+        if args.dry_run:
+            print("MagSafe helper: would unregister")
+            return 0
+        try:
+            from .magsafe import unregister_helper
+            unregister_helper()
+        except Exception as exc:
+            print(f"MagSafe helper: {exc}", file=sys.stderr)
+            return 1
+        print("MagSafe helper: unregistered")
+        return 0
     if args.status_bar_command == "install-sleep-helper":
         return cmd_sidepulse_sleep_helper_install(args)
     if args.status_bar_command == "uninstall-sleep-helper":

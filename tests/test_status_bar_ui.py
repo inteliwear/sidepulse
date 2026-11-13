@@ -1549,3 +1549,49 @@ class TrayDaemonOwnershipTests(unittest.TestCase):
         preview.assert_called_once()
         events.assert_called_once()
         command.assert_not_called()
+
+
+class MagSafeDaemonIntegrationTests(StatusBarTestCase):
+    def setUp(self):
+        from dataclasses import replace
+        self.target = sb.StatusBarController.alloc().init()
+        self.target.settings = replace(self.target.settings, magsafe_led_enabled=True)
+        self.target.magsafe = Mock(ready=True, needs_setup=False, status_reason='Connected')
+        self.target.monitor = SimpleNamespace(devices=[], runtime={})
+        self.target.last_snapshot = make_snapshot([make_status(mode=AgentMode.WORKING)])
+
+    def test_daemon_lid_and_battery_policy_release_and_resume_magsafe(self):
+        self.target.monitor.runtime = {'lid_closed': True, 'battery_safeguard_active': False}
+        self.target.sync_magsafe(AgentMode.WORKING)
+        self.target.magsafe.update.assert_called_with(AgentMode.WORKING, sleep_allowed=False)
+        self.target.monitor.runtime['battery_safeguard_active'] = True
+        self.target.sync_magsafe(AgentMode.WORKING)
+        self.target.magsafe.update.assert_called_with(AgentMode.WORKING, sleep_allowed=True)
+        self.target.monitor.runtime['lid_closed'] = False
+        self.target.sync_magsafe(AgentMode.WORKING)
+        self.target.magsafe.update.assert_called_with(AgentMode.WORKING, sleep_allowed=False)
+
+    def test_daemon_output_disable_stops_magsafe_on_refresh(self):
+        self.target.monitor.outputs_enabled = False
+        self.target.read_battery_snapshot()
+        self.target.sync_leds(AgentMode.WORKING, None, sb.LED_DISPLAY_AGENT)
+        self.target.magsafe.stop.assert_called_once()
+        self.target.magsafe.start.assert_not_called()
+        self.target.magsafe.update.assert_not_called()
+
+    def test_magsafe_is_not_a_firmware_or_file_target(self):
+        self.assertEqual(self.target.current_led_targets(), [])
+        with patch.object(sb.threading, 'Thread') as worker:
+            self.target.check_firmware()
+        worker.assert_not_called()
+
+    def test_unplugged_magsafe_stays_selected_with_agent_only_menu(self):
+        self.target.magsafe.ready = False
+        device = next(d for d in self.target.status_bar_devices() if d.device_id == sb.MAGSAFE_DEVICE_ID)
+        item = sb.build_device_menu_item(device, self.target)
+        self.assertEqual(item.state(), 1)
+        titles = [entry.title() for entry in walk_menu(item.submenu())]
+        self.assertIn('Agent Status', titles)
+        self.assertIn('Remove MagSafe 3 LED', titles)
+        self.assertNotIn('Battery Level', titles)
+        self.assertNotIn('Manual', titles)

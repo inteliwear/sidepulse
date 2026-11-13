@@ -878,6 +878,27 @@ Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`
 and shows the path from provider hook event to interpreted SidePulse status.
 
+On a compatible MagSafe 3 Mac, **Devices → Add MagSafe 3 LED** provides an optional
+**Agent Status** output without requiring SidePulse hardware. It uses a bundled
+native helper approved in macOS System Settings. Three fixed active patterns are
+provided: Working alternates green and amber, Input / Ask blinks amber, and
+Complete / Done blinks green. Idle returns LED control to macOS for the normal
+charging light. SidePulse's existing aggregate states and timers determine these
+patterns; animation customization is outside this initial implementation and can
+be added separately. Removing the device, quitting,
+or losing the app connection restores the charging light. Restoration seeds the
+expected charge color before returning control to macOS, following the approach
+used by [MagDot](https://github.com/maxim-kich/MagDot).
+MagDot and SidePulse share an ownership lock and cannot control the LED together.
+Unplugging releases the LED session while keeping the device enabled. Reconnecting
+or waking resumes the current SidePulse state using the existing helper approval.
+Unknown port status pauses LED control; temporary helper failures retry automatically.
+The helper accepts only the SidePulse app signed by its own signing team. Local
+ad-hoc builds cannot use this authentication flow; use a signed app build.
+This requires macOS 13 or later and does not change SidePulse's sleep policy.
+The helper can be inspected with `sidepulse status-bar magsafe-helper-status`
+and unregistered with `sidepulse status-bar uninstall-magsafe-helper`.
+
 The `Keep Awake With Lid Closed` menu section controls the stronger sleep
 prevention policy:
 
