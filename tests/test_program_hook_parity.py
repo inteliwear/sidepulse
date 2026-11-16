@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from sidepulse.collector import LiveAgentMonitor
+from sidepulse.collector import AgentMonitor, LiveAgentMonitor, SourceSpec
 from sidepulse.models import AgentMode
 from sidepulse.program_adapter import hook_report
 from sidepulse.program_presentation import ProgramMonitor
@@ -105,6 +105,49 @@ def test_internal_codex_session_stays_suppressed_across_sparse_hooks(runtime):
     for event, fields in [('UserPromptSubmit', {'prompt': 'Generate 0 to 3 hyperpersonalized suggestions'}), ('PreToolUse', {'tool_name': 'shell'}), ('Stop', {})]:
         actual, expected = emit(runtime, event, provider='codex', **fields)
         assert actual.statuses == expected.statuses == ()
+
+
+def test_codex_composer_prediction_is_cleared_and_stays_hidden(runtime, tmp_path):
+    prompt = (
+        "This is an app-generated request for a suggested next user message. "
+        "The user did not write this message.\n\nGenerate a follow-up suggestion."
+    )
+    prediction_id = 'prediction-session'
+    real_id = 'ordinary-fork'
+    now = datetime.now(timezone.utc).isoformat()
+    events = [
+        {'hook_event_name': 'SessionStart', 'source': 'fork',
+         'session_id': real_id, 'transcript_path': '/tmp/ordinary-fork.jsonl'},
+        {'hook_event_name': 'UserPromptSubmit', 'prompt': prompt,
+         'session_id': real_id, 'transcript_path': '/tmp/ordinary-fork.jsonl'},
+        {'hook_event_name': 'SessionStart', 'source': 'fork',
+         'session_id': prediction_id, 'transcript_path': None},
+        {'hook_event_name': 'UserPromptSubmit', 'prompt': prompt,
+         'session_id': prediction_id, 'transcript_path': None},
+        {'hook_event_name': 'Interrupt', 'session_id': prediction_id, 'transcript_path': None},
+    ]
+    latest = tmp_path / 'latest.json'
+    cached = LiveAgentMonitor(latest_state_path=latest)
+    cached.ingest_record(parse_log_line('codex', json.dumps({**events[2], 'logged_at': now})))
+    assert prediction_id in latest.read_text()
+
+    for index, event in enumerate(events):
+        fields = dict(event)
+        name = fields.pop('hook_event_name')
+        live, legacy = emit(runtime, name, 'codex', **fields)
+        if index >= 3:
+            for snapshot in (live, legacy):
+                assert {row.session_id for row in snapshot.statuses + snapshot.stale_statuses} == {real_id}
+
+    log = tmp_path / 'codex.jsonl'
+    log.write_text(''.join(json.dumps({'logged_at': now, 'event': event}) + '\n' for event in events))
+    sources = (SourceSpec('codex', log),)
+    replayed = AgentMonitor(sources=sources).snapshot()
+    recovered = LiveAgentMonitor(recovery_sources=sources, latest_state_path=latest)
+    recovered.ingest_record(parse_log_line('codex', json.dumps(events[-1])))
+    for snapshot in (replayed, recovered.snapshot()):
+        assert {row.session_id for row in snapshot.statuses + snapshot.stale_statuses} == {real_id}
+    assert prediction_id not in latest.read_text()
 
 
 @pytest.mark.parametrize('failure', [None, 'adapter', 'persistence'])

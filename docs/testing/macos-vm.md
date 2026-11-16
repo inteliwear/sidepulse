@@ -238,6 +238,19 @@ normal host-key verification. It never enables SSH or copies credentials for you
 
 ## Harness regression checks
 
+The macOS suite includes a CPU budget check for the menu-bar icon. Run it on
+a host or guest with a window server and Reduce Motion off:
+
+```sh
+SIDEPULSE_REQUIRE_UI_TESTS=1 python -m pytest tests/test_status_bar_cpu.py -q -s
+```
+
+The test drives a real AppKit status item in a separate process, with its menu
+closed. After each state settles, it measures three seconds of process CPU time
+against elapsed time. Idle must stay below 5% of one core; working and waiting
+for input must stay below 15%. Both active states must animate. These numbers
+measure the SidePulse UI process; they do not include WindowServer or the daemon.
+
 ```sh
 .venv/bin/python -m pytest -q tests/test_macos_vm_harness.py
 .venv/bin/python -m pytest -q tests/test_macos_vm_visual.py
