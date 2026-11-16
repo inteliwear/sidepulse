@@ -840,7 +840,7 @@ class WindowBuildTests(StatusBarTestCase):
 
     def test_open_running_junie_session_uses_its_terminal_tab(self):
         status = make_status(provider="junie")
-        terminal = sb.JunieTerminal("/dev/ttys028", sb.TERMINAL_APP_TERMINAL)
+        terminal = sb.AgentTerminal("/dev/ttys028", sb.TERMINAL_APP_TERMINAL)
         settings = AgentMonitorSettings().with_provider_session_open_action(
             "junie", sb.SESSION_OPEN_JETBRAINS
         )
@@ -862,7 +862,7 @@ class WindowBuildTests(StatusBarTestCase):
 
     def test_open_running_junie_session_does_not_resume_if_tab_cannot_be_focused(self):
         status = make_status(provider="junie")
-        terminal = sb.JunieTerminal("/dev/ttys028", None)
+        terminal = sb.AgentTerminal("/dev/ttys028", None)
         with (
             patch.object(sb, "junie_session_terminal", return_value=terminal),
             patch.object(sb, "open_terminal_command") as resume,
@@ -877,19 +877,19 @@ class WindowBuildTests(StatusBarTestCase):
         tab = SimpleNamespace(terminals=lambda: [first, second])
         window = SimpleNamespace(tabs=lambda: [tab])
         app = SimpleNamespace(isRunning=lambda: True, windows=lambda: [window])
-        terminal = sb.JunieTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
+        terminal = sb.AgentTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
         with (
             patch.object(sb, "ghostty_application", return_value=app),
             patch.object(sb, "focus_ghostty_terminal") as focus,
         ):
-            self.assertTrue(sb.focus_junie_terminal(terminal))
+            self.assertTrue(sb.focus_agent_terminal(terminal, provider="junie"))
 
         focus.assert_called_once_with(window, tab, second, app)
 
     def test_focus_running_junie_in_ghostty_1_3_requires_a_unique_exact_task_name(self):
         task_name = "Continue reviewing the complete task name even when the menu title is shortened"
         session = SimpleNamespace(task_name=task_name)
-        terminal = sb.JunieTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
+        terminal = sb.AgentTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
         pane = SimpleNamespace(name=lambda: task_name)
         for other_name, should_focus in [(f"{task_name} 2", True), (task_name, False)]:
             with self.subTest(other_name=other_name):
@@ -907,10 +907,37 @@ class WindowBuildTests(StatusBarTestCase):
                     patch.object(sb, "focus_ghostty_terminal") as focus,
                 ):
                     self.assertEqual(
-                        sb.focus_junie_terminal(terminal, session_id="junie-session"),
+                        sb.focus_agent_terminal(terminal, provider="junie", session_id="junie-session"),
                         should_focus,
                     )
                 lookup.assert_called_once_with("junie-session")
+                if should_focus:
+                    focus.assert_called_once_with(window, tab, pane, app)
+                else:
+                    focus.assert_not_called()
+
+    def test_open_running_claude_in_ghostty_1_3_requires_a_unique_pane_in_its_project(self):
+        status = make_status(provider="claude", origin="Claude Code CLI")
+        terminal = sb.AgentTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY, "/work/project")
+        pane = SimpleNamespace(name=lambda: "Claude Code", workingDirectory=lambda: "/work/project")
+        for other_cwd, should_focus in [("/work/other", True), ("/work/project", False)]:
+            with self.subTest(other_cwd=other_cwd):
+                other = SimpleNamespace(name=lambda: "Claude Code", workingDirectory=lambda: other_cwd)
+                tab = SimpleNamespace(terminals=lambda: [other, pane])
+                window = SimpleNamespace(tabs=lambda: [tab])
+                app = SimpleNamespace(
+                    version=lambda: "1.3.1",
+                    isRunning=lambda: True,
+                    windows=lambda: [window],
+                )
+                with (
+                    patch.object(sb, "claude_session_terminal", return_value=terminal),
+                    patch.object(sb, "ghostty_application", return_value=app),
+                    patch.object(sb, "focus_ghostty_terminal") as focus,
+                    patch.object(sb, "open_terminal_command") as resume,
+                ):
+                    self.controller.open_session(status, None, remember=False)
+                resume.assert_not_called()
                 if should_focus:
                     focus.assert_called_once_with(window, tab, pane, app)
                 else:

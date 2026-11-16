@@ -8,6 +8,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -139,8 +140,8 @@ from .lid_sleep import (
     sleep_helper_install_command,
     sleep_helper_installed,
 )
+from .agent_terminal import AgentTerminal, claude_session_terminal, junie_session_terminal
 from .junie_index import junie_session_info
-from .junie_terminal import JunieTerminal, junie_session_terminal
 from .models import AgentMode, AgentStatus, MODE_LABELS, provider_label
 from .providers import (
     ProviderConfig,
@@ -2152,11 +2153,14 @@ class StatusBarController(NSObject):
         if not isinstance(status, AgentStatus):
             return
         provider = status.provider.lower()
-        if provider == "junie" and action in {None, SESSION_OPEN_TERMINAL}:
-            terminal = junie_session_terminal(status.session_id)
+        terminal_lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
+        if terminal_lookup and action in {None, SESSION_OPEN_TERMINAL}:
+            terminal = terminal_lookup(status.session_id)
             if terminal is not None:
-                if not focus_junie_terminal(terminal, session_id=status.session_id):
-                    self.set_settings_message("Junie is running, but its terminal tab could not be selected.")
+                if not focus_agent_terminal(terminal, provider=provider, session_id=status.session_id):
+                    self.set_settings_message(
+                        f"{provider_label(provider)} is running, but its terminal tab could not be selected."
+                    )
                 return
         requested_action = action or self.settings.session_open_action(
             provider, status.origin
@@ -6100,7 +6104,9 @@ def terminal_app_from_custom_path(path: str) -> str:
     return TERMINAL_APP_CUSTOM
 
 
-def focus_junie_terminal(terminal: JunieTerminal, *, session_id: str | None = None) -> bool:
+def focus_agent_terminal(
+    terminal: AgentTerminal, *, provider: str, session_id: str | None = None
+) -> bool:
     if terminal.app == TERMINAL_APP_TERMINAL:
         return focus_macos_terminal_session(tty=terminal.tty)
     if terminal.app == TERMINAL_APP_ITERM:
@@ -6110,18 +6116,35 @@ def focus_junie_terminal(terminal: JunieTerminal, *, session_id: str | None = No
         if app is None or not sb_bool(app, "isRunning"):
             return False
         if sb_text(app, "version").split(".")[:2] == ["1", "3"]:
+            if provider == "claude":
+                return focus_matching_ghostty_terminal(
+                    app, (), include_working_directory=False, require_unique=True,
+                    match_terminal=lambda pane: claude_ghostty_pane_matches(pane, terminal),
+                )
             session = junie_session_info(session_id)
             return bool(
                 session and session.task_name
                 and focus_matching_ghostty_terminal(
                     app, (), include_working_directory=False, require_unique=True,
-                    exact_name=session.task_name,
+                    match_terminal=lambda pane: sb_text(pane, "name") == session.task_name,
                 )
             )
+        tty = terminal.tty.removeprefix("/dev/")
         return focus_matching_ghostty_terminal(
-            app, (), include_working_directory=False, require_unique=True, tty=terminal.tty
+            app, (), include_working_directory=False, require_unique=True,
+            match_terminal=lambda pane: sb_text(pane, "tty").removeprefix("/dev/") == tty,
         )
     return False
+
+
+def claude_ghostty_pane_matches(pane, terminal: AgentTerminal) -> bool:
+    if not terminal.cwd or sb_text(pane, "workingDirectory") != terminal.cwd:
+        return False
+    name = normalize_match_text(sb_text(pane, "name"))
+    return bool(name and (
+        name == normalize_match_text(terminal.title)
+        or re.search(r"^claude(?:\s|$)|\bclaude code\b", name)
+    ))
 
 
 def focus_macos_terminal_session(terms: tuple[str, ...] = (), *, tty: str | None = None) -> bool:
@@ -6251,30 +6274,24 @@ def focus_matching_ghostty_terminal(
     *,
     include_working_directory: bool,
     require_unique: bool = False,
-    tty: str | None = None,
-    exact_name: str | None = None,
+    match_terminal: Callable[[object], bool] | None = None,
 ) -> bool:
     normalized_terms = tuple(normalize_match_text(term) for term in terms if term)
-    if not normalized_terms and not tty and not exact_name:
+    if not normalized_terms and match_terminal is None:
         return False
-    tty_name = tty.removeprefix("/dev/") if tty else None
     matches: list[tuple[object, object, object]] = []
     for window in sb_elements(sb_call(app, "windows")):
         window_name = sb_text(window, "name")
         for tab in sb_elements(sb_call(window, "tabs")):
             tab_name = sb_text(tab, "name")
             for terminal in sb_elements(sb_call(tab, "terminals")):
-                if tty_name:
-                    matched = sb_text(terminal, "tty").removeprefix("/dev/") == tty_name
+                if match_terminal is not None:
+                    matched = match_terminal(terminal)
                 else:
-                    terminal_name = sb_text(terminal, "name")
-                    if exact_name:
-                        matched = terminal_name == exact_name
-                    else:
-                        values = [window_name, tab_name, terminal_name]
-                        if include_working_directory:
-                            values.append(sb_text(terminal, "workingDirectory"))
-                        matched = values_match_terms(values, normalized_terms)
+                    values = [window_name, tab_name, sb_text(terminal, "name")]
+                    if include_working_directory:
+                        values.append(sb_text(terminal, "workingDirectory"))
+                    matched = values_match_terms(values, normalized_terms)
                 if matched:
                     matches.append((window, tab, terminal))
     if require_unique and len(matches) != 1:

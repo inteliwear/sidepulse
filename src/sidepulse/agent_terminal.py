@@ -4,23 +4,26 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .models import parse_datetime
-from .origin import is_junie_process, process_ancestry
+from .origin import is_junie_process, process_ancestry, process_basename
 from .providers import detect_log_path
 from .settings import TERMINAL_APP_GHOSTTY, TERMINAL_APP_ITERM, TERMINAL_APP_TERMINAL
 from .text_utils import read_recent_lines
 
 
 @dataclass(frozen=True)
-class JunieTerminal:
+class AgentTerminal:
     tty: str
     app: str | None
+    cwd: str = ""
+    title: str = ""
 
 
-def junie_session_terminal(session_id: str | None) -> JunieTerminal | None:
+def junie_session_terminal(session_id: str | None) -> AgentTerminal | None:
     if not session_id:
         return None
     try:
@@ -51,16 +54,61 @@ def junie_session_terminal(session_id: str | None) -> JunieTerminal | None:
         logged_at = parse_datetime(
             row.get("logged_at"), fallback=datetime.min.replace(tzinfo=timezone.utc)
         )
-        terminal = live_junie_terminal(pid, logged_at)
+        terminal = live_agent_terminal("junie", pid, logged_at)
         if terminal is not None:
             return terminal
         unavailable_processes.add(pid)
     return None
 
 
-def live_junie_terminal(pid: int, logged_at: datetime) -> JunieTerminal | None:
+def claude_session_terminal(session_id: str | None) -> AgentTerminal | None:
+    if not session_id:
+        return None
+    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    candidates: list[tuple[datetime, int, dict]] = []
+    try:
+        session_files = list((config_dir.expanduser() / "sessions").glob("*.json"))
+    except (OSError, RuntimeError):
+        return None
+
+    for path in session_files:
+        if not path.stem.isdecimal():
+            continue
+        try:
+            row = json.loads(path.read_text())
+            if not isinstance(row, dict) or row.get("sessionId") != session_id:
+                continue
+            pid = row.get("pid")
+            started_ms = row.get("startedAt")
+            if type(pid) is not int or pid <= 1 or str(pid) != path.stem or type(started_ms) is not int:
+                continue
+            started_at = datetime.fromtimestamp(started_ms / 1000, timezone.utc)
+        except (OSError, ValueError, OverflowError):
+            continue
+        candidates.append((started_at, pid, row))
+
+    # A second resume can leave two processes with the same Claude session ID.
+    # Favor the original instance while it is still attached to a terminal.
+    for started_at, pid, row in sorted(candidates, key=lambda candidate: candidate[0]):
+        terminal = live_agent_terminal("claude", pid, started_at)
+        if terminal is not None:
+            cwd, title = row.get("cwd"), row.get("name")
+            return replace(
+                terminal,
+                cwd=cwd if isinstance(cwd, str) else "",
+                title=title if isinstance(title, str) else "",
+            )
+    return None
+
+
+def live_agent_terminal(provider: str, pid: int, logged_at: datetime) -> AgentTerminal | None:
     ancestry = process_ancestry(pid)
-    if not ancestry or not is_junie_process(ancestry[0]):
+    if not ancestry:
+        return None
+    process = ancestry[0]
+    if provider == "junie" and not is_junie_process(process):
+        return None
+    if provider == "claude" and process_basename(process) not in {"claude", "claude-code"}:
         return None
     try:
         result = subprocess.run(
@@ -91,4 +139,4 @@ def live_junie_terminal(pid: int, logged_at: datetime) -> JunieTerminal | None:
         if app:
             break
 
-    return JunieTerminal(f"/dev/{tty}", app)
+    return AgentTerminal(f"/dev/{tty}", app)
