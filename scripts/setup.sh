@@ -26,35 +26,90 @@ PLATFORM=$(uname -s)
 AGENT_MONITOR=1
 SD_EJECT_GUARD=1
 STATUS_BAR=1
+terminal_settings=
 
-component_checkbox() {
-    if [ "$1" -eq 1 ]; then
-        printf '[x]'
+draw_component() {
+    pointer=' '
+    checked=' '
+    [ "$1" -ne "$focused_row" ] || pointer='>'
+    [ "$2" -ne 1 ] || checked=x
+    printf '%.*s\n' "$menu_width" "  $pointer [$checked] $3"
+}
+
+draw_checklist() {
+    if [ "$PLATFORM" = Darwin ]; then
+        draw_component 1 "$SD_EJECT_GUARD" 'SD card ejection prevention (important for deep sleep)'
+        draw_component 2 "$AGENT_MONITOR" 'Agent monitor'
+        draw_component 3 "$STATUS_BAR" 'Status-bar indicator'
     else
-        printf '[ ]'
+        draw_component 1 "$AGENT_MONITOR" 'Agent monitor'
     fi
+    printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter installs  q cancels'
+}
+
+menu_stty() {
+    stty "$@" </dev/tty 2>/dev/null
+}
+
+restore_menu_terminal() {
+    menu_stty "$terminal_settings"
 }
 
 select_components() {
+    focused_row=1
+    row_count=1
+    [ "$PLATFORM" != Darwin ] || row_count=3
+
+    # Keep each row on one line so the checklist can redraw in place.
+    terminal_size=$(menu_stty size) || terminal_size='0 80'
+    terminal_columns=${terminal_size#* }
+    [ "$terminal_columns" -gt 1 ] || terminal_columns=80
+    menu_width=$((terminal_columns - 1))
+
+    terminal_settings=$(menu_stty -g) || return 1
+    trap restore_menu_terminal EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    menu_stty -echo -icanon icrnl min 1 time 0 || return 1
+
+    escape=$(printf '\033')
+    enter=$(printf '\n.')
+    result=1
+    printf '\nSidePulse setup\n\nSelect optional components\n'
+    draw_checklist
     while :; do
-        printf '\nSidePulse setup\n\nSelect optional components\n'
-        if [ "$PLATFORM" = Darwin ]; then
-            printf '  1  %s SD card ejection prevention (important for deep sleep)\n' "$(component_checkbox "$SD_EJECT_GUARD")"
-            printf '  2  %s Agent monitor\n' "$(component_checkbox "$AGENT_MONITOR")"
-            printf '  3  %s Status-bar indicator\n' "$(component_checkbox "$STATUS_BAR")"
-        else
-            printf '  1  %s Agent monitor\n' "$(component_checkbox "$AGENT_MONITOR")"
-        fi
-        printf '\nType a number then Enter to toggle. Press Enter to install, or type q to cancel.\n> '
-        IFS= read -r choice || return 1
-        case "$PLATFORM:$choice" in
-            Darwin:1) SD_EJECT_GUARD=$((1 - SD_EJECT_GUARD)) ;;
-            Darwin:3) STATUS_BAR=$((1 - STATUS_BAR)) ;;
-            Darwin:2|*:1) AGENT_MONITOR=$((1 - AGENT_MONITOR)) ;;
-            *:) return 0 ;;
-            *:q|*:Q) return 1 ;;
+        # The suffix preserves Enter and distinguishes it from terminal EOF.
+        key=$(dd bs=1 count=1 2>/dev/null; printf .)
+        case "$key" in
+            "$escape".)
+                # Arrow keys send Escape plus two bytes. Time out on a lone Escape.
+                menu_stty min 0 time 2 || break
+                arrow=$(dd bs=1 count=2 2>/dev/null)
+                menu_stty min 1 time 0 || break
+                case "$arrow" in
+                    '[A'|OA) focused_row=$(( (focused_row + row_count - 2) % row_count + 1 )) ;;
+                    '[B'|OB) focused_row=$(( focused_row % row_count + 1 )) ;;
+                    *) continue ;;
+                esac
+                ;;
+            ' .')
+                case "$PLATFORM:$focused_row" in
+                    Darwin:1) SD_EJECT_GUARD=$((1 - SD_EJECT_GUARD)) ;;
+                    Darwin:3) STATUS_BAR=$((1 - STATUS_BAR)) ;;
+                    Darwin:2|*:1) AGENT_MONITOR=$((1 - AGENT_MONITOR)) ;;
+                esac
+                ;;
+            "$enter") result=0; break ;;
+            q.|Q.|.) break ;;
+            *) continue ;;
         esac
+        printf '\033[%dA\r\033[J' "$((row_count + 2))"
+        draw_checklist
     done
+    restore_menu_terminal || return 1
+    trap - EXIT HUP INT TERM
+    return "$result"
 }
 
 # In curl | sh, stdin holds the script. Read the choices from the terminal.
@@ -78,6 +133,12 @@ SERVICE_STOPPED=0
 STATUS_BAR_STOPPED=0
 STATUS_BAR_PLIST="$HOME/Library/LaunchAgents/io.sidepulse.agentstatus.plist"
 LAUNCH_DOMAIN=
+INSTALL_TTY_MUTED=0
+
+progress() {
+    printf '[%s/5] %s…\n' "$1" "$2" >&3
+    printf '\n[%s/5] %s\n' "$1" "$2"
+}
 
 resume_status_bar() {
     if ! launchctl print "$LAUNCH_DOMAIN/io.sidepulse.agentstatus" >/dev/null 2>&1; then
@@ -89,6 +150,13 @@ resume_status_bar() {
 cleanup() {
     result=$?
     trap - EXIT
+    if [ "$INSTALL_TTY_MUTED" -eq 1 ]; then
+        # Discard keys pressed during setup before returning control to the shell.
+        if menu_stty -icanon min 0 time 0; then
+            cat </dev/tty >/dev/null 2>&1 || :
+        fi
+        restore_menu_terminal || :
+    fi
     if [ "$result" -ne 0 ]; then
         if [ "$SERVICE_STOPPED" -eq 1 ]; then
             "$VENV/bin/sidepulse" service start || printf 'Could not restart the background service.\n' >&2
@@ -106,10 +174,17 @@ cleanup() {
     exit "$result"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-printf '\nInstalling SidePulse…\n' >&3
+if [ -n "$terminal_settings" ]; then
+    INSTALL_TTY_MUTED=1
+    menu_stty -echo || INSTALL_TTY_MUTED=0
+fi
+
+printf '\n' >&3
+progress 1 'Checking system requirements'
 
 need_apple_tools() {
     cat >&2 <<'EOF'
@@ -165,6 +240,8 @@ install_macos_python() (
         --no-config --no-project --managed-python 3.13
 )
 
+progress 2 'Preparing the Python environment'
+
 # Updates use the existing interpreter even if the shell's python3 is older.
 if [ -x "$VENV/bin/python" ]; then
     if ! usable_python "$VENV/bin/python"; then
@@ -203,6 +280,7 @@ if [ ! -x "$VENV/bin/python" ]; then
     fi
 fi
 
+progress 3 'Downloading and building packages'
 WHEEL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/sidepulse-setup.XXXXXX")
 
 # Fetch and build everything before pausing services. GitHub/network/build
@@ -214,6 +292,8 @@ if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
     exit 1
 fi
 SIDEPULSE_WHEEL=$1
+
+progress 4 'Installing SidePulse and command links'
 
 if [ -x "$VENV/bin/sidepulse" ] && "$VENV/bin/sidepulse" service status >/dev/null 2>&1; then
     "$VENV/bin/sidepulse" service stop
@@ -242,6 +322,7 @@ for legacy in agent-monitor agent-status-bar; do
     fi
 done
 
+progress 5 'Configuring the background service and selected components'
 set -- setup
 if [ "$AGENT_MONITOR" -eq 0 ]; then
     set -- "$@" --no-agent-monitor
@@ -258,7 +339,7 @@ if [ "$STATUS_BAR" -eq 0 ] && [ "$STATUS_BAR_STOPPED" -eq 1 ]; then
 fi
 "$VENV/bin/sidepulse" --version
 
-printf 'SidePulse is installed.\n' >&3
+printf '\nSidePulse is installed.\n' >&3
 printf 'Command: %s\n' "$BIN_DIR/sidepulse" >&3
 case ":${PATH:-}:" in
     *":$BIN_DIR:"*) ;;

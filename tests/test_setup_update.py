@@ -108,6 +108,13 @@ class SetupUpdateTests(unittest.TestCase):
     def test_fresh_install_then_same_version_update_loads_new_code_and_dependency(self):
         result = self.install(self.old)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([line for line in result.stdout.splitlines() if line.startswith('[')], [
+            '[1/5] Checking system requirements…',
+            '[2/5] Preparing the Python environment…',
+            '[3/5] Downloading and building packages…',
+            '[4/5] Installing SidePulse and command links…',
+            '[5/5] Configuring the background service and selected components…',
+        ])
         self.assertIn('SidePulse is installed.', result.stdout)
         self.assertNotIn('Configuring SidePulse components', result.stdout)
         self.assertEqual(result.stderr, '')
@@ -152,6 +159,8 @@ class SetupUpdateTests(unittest.TestCase):
         self.log.write_text('')
         result = self.install(self.root / 'missing.whl')
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('[3/5] Downloading and building packages', result.stdout)
+        self.assertNotIn('[4/5]', result.stdout)
         self.assertEqual(self.calls(), [])
         result = subprocess.run([str(self.bin / 'sidepulse'), '--version'], env=self.env, capture_output=True, text=True)
         self.assertIn('old', result.stdout)
@@ -174,7 +183,7 @@ class SetupUpdateTests(unittest.TestCase):
         log_path = Path(result.stderr.rsplit('Full log: ', 1)[1].strip())
         self.assertIn('Component setup failed', log_path.read_text())
 
-    def run_piped_setup_in_terminal(self, *inputs, headless=False):
+    def run_piped_setup_in_terminal(self, *inputs, headless=False, install_keys=b''):
         import pty
 
         stubs = self.root / 'stubs'
@@ -193,7 +202,30 @@ class SetupUpdateTests(unittest.TestCase):
             'SIDEPULSE_INSTALL_SPEC': str(self.new), 'SIDEPULSE_SETUP_NONINTERACTIVE': '0',
         }
         options = ['--headless'] if headless else []
-        command = ['sh', '-c', 'script=$1; shift; cat "$script" | sh -s -- "$@"', 'sh', str(SCRIPT), *options]
+        terminal_state = '''
+import termios
+
+settings = termios.tcgetattr(0)
+# BSD marks pending input for reprocessing when canonical mode is restored.
+settings[3] &= ~getattr(termios, 'PENDIN', 0)
+print(settings)
+'''
+        run_setup = '''
+            script=$1
+            python=$2
+            terminal_state=$3
+            shift 3
+            before=$("$python" -c "$terminal_state") || exit 99
+            cat "$script" | sh -s -- "$@"
+            result=$?
+            after=$("$python" -c "$terminal_state") || exit 99
+            if [ "$after" != "$before" ]; then
+                printf 'Terminal settings changed\nBefore %s\nAfter  %s\n' "$before" "$after"
+                exit 99
+            fi
+            exit "$result"
+        '''
+        command = ['sh', '-c', run_setup, 'sh', str(SCRIPT), sys.executable, terminal_state, *options]
         pid, terminal = pty.fork()
         if pid == 0:
             try:
@@ -203,15 +235,21 @@ class SetupUpdateTests(unittest.TestCase):
         output = bytearray()
         deadline = time.monotonic() + 60
         reaped = False
+
+        def wait_for_output(marker, start=0):
+            while marker not in output[start:]:
+                self.assertTrue(select.select([terminal], [], [], max(0, deadline - time.monotonic()))[0], output)
+                output.extend(os.read(terminal, 4096))
+
         try:
             for answer in inputs:
-                start = len(output)
-                while b'\n> ' not in output[start:]:
-                    self.assertTrue(select.select([terminal], [], [], max(0, deadline - time.monotonic()))[0], output)
-                    output.extend(os.read(terminal, 4096))
+                wait_for_output(b'q cancels\r\n', start=len(output))
                 self.assertFalse(self.install_root.exists())
                 self.assertFalse((self.root / 'state').exists())
-                os.write(terminal, answer + b'\n')
+                os.write(terminal, answer)
+            if install_keys:
+                wait_for_output(b'[3/5] Downloading and building packages')
+                os.write(terminal, install_keys)
             while True:
                 self.assertTrue(select.select([terminal], [], [], max(0, deadline - time.monotonic()))[0], output)
                 try:
@@ -233,11 +271,17 @@ class SetupUpdateTests(unittest.TestCase):
                 os.waitpid(pid, 0)
 
     def test_piped_setup_confirms_toggled_components_before_installing(self):
-        status, output = self.run_piped_setup_in_terminal(b'1', b'2', b'3', b'')
+        status, output = self.run_piped_setup_in_terminal(
+            b'\x1b[B', b' ', b'\x1b[A', b' ', b'\x1bOB', b'\x1b[B', b' ', b'\r',
+            install_keys=b'\x1b[C',
+        )
         self.assertEqual(status, 0, output)
+        self.assertNotIn('^[[C', output)
+        self.assertNotIn('\x1b[C', output)
         for component in ('SD card ejection prevention', 'Agent monitor', 'Status-bar indicator'):
             self.assertIn(f'[x] {component}', output)
-            self.assertIn(f'[ ] {component}', output)
+            self.assertIn(f'> [ ] {component}', output)
+        self.assertEqual(output.count('Select optional components'), 1)
         self.assertIn('important for deep sleep', output)
         self.assertEqual(self.calls()[0], [
             'new', ['setup', '--no-agent-monitor', '--no-sd-eject-guard', '--no-status-bar'],

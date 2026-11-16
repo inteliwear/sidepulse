@@ -39,14 +39,16 @@ Homebrew or administrator access. On Linux, install Python 3.10 or newer first. 
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
 at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 
-All available components are selected in the terminal menu. Type a component's
-number and press Enter to toggle it. Press Enter on an empty line to confirm,
-or enter `q` to cancel. macOS offers SD card ejection prevention (important for
-deep sleep), Agent monitor, and the status-bar indicator. Linux offers Agent
+All available components are selected in the terminal menu. Use the up and down
+arrow keys to move, Space to toggle, Enter to install, and `q` to cancel.
+macOS offers SD card ejection prevention (important for deep sleep), Agent
+monitor, and the status-bar indicator. Linux offers Agent
 monitor. Leaving a component unchecked skips its setup for this run. The core
 CLI and background service are included in every install.
 
-Setup keeps detailed output in
+Setup shows progress as it checks requirements, prepares Python, builds and
+installs packages, and configures services and selected components.
+It keeps detailed output in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidepulse/setup/`. On failure, it shows
 the last 30 lines and the full log path.
 
