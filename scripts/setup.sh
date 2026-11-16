@@ -24,11 +24,11 @@ VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 PLATFORM=$(uname -s)
 AGENTS='codex claude grok cursor junie'
-components=$AGENTS
+MAC_COMPONENTS='sd-eject-guard status-bar'
+selected_components=" $AGENTS "
 if [ "$PLATFORM" = Darwin ]; then
-    components="sd-eject-guard $components status-bar"
+    selected_components=" $MAC_COMPONENTS $AGENTS "
 fi
-selected_components=" $components "
 terminal_settings=
 
 component_selected() {
@@ -41,8 +41,10 @@ component_selected() {
 draw_setup_title() {
     menu_focus=
     menu_checked=
+    menu_heading=
     menu_reset=
     if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+        menu_heading=$(printf '\033[1m')
         menu_reset=$(printf '\033[0m')
         case "${TERM:-}:${COLORTERM:-}" in
             *256color:*|*:truecolor|*:24bit)
@@ -60,12 +62,13 @@ draw_setup_title() {
     else
         printf '\nSidePulse\n'
     fi
-    printf '\nSelect optional components\n'
 }
 
-draw_checklist() {
-    row_count=0
-    for component in $components; do
+draw_group() {
+    printf '\n%s%.*s%s\n' "$menu_heading" "$menu_width" "$1" "$menu_reset"
+    shift
+    menu_lines=$((menu_lines + 2 + $#))
+    for component do
         row_count=$((row_count + 1))
         pointer=' '
         checked=' '
@@ -82,11 +85,11 @@ draw_checklist() {
         fi
         case "$component" in
             sd-eject-guard) label='SD card ejection prevention (important for deep sleep)' ;;
-            codex) label='Codex hooks' ;;
-            claude) label='Claude Code hooks' ;;
-            grok) label='Grok hooks' ;;
-            cursor) label='Cursor hooks' ;;
-            junie) label='Junie hooks' ;;
+            codex) label='Codex' ;;
+            claude) label='Claude Code' ;;
+            grok) label='Grok' ;;
+            cursor) label='Cursor' ;;
+            junie) label='Junie' ;;
             status-bar) label='Status-bar indicator' ;;
         esac
         prefix="  $pointer [$checked]"
@@ -96,6 +99,15 @@ draw_checklist() {
         fi
         printf '\n'
     done
+}
+
+draw_checklist() {
+    row_count=0
+    menu_lines=2
+    if [ "$PLATFORM" = Darwin ]; then
+        draw_group 'macOS integrations' $MAC_COMPONENTS
+    fi
+    draw_group 'Agent hooks' $AGENTS
     printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter installs  q cancels'
 }
 
@@ -154,7 +166,7 @@ select_components() {
             q.|Q.|.) break ;;
             *) continue ;;
         esac
-        printf '\033[%dA\r\033[J' "$((row_count + 2))"
+        printf '\033[%dA\r\033[J' "$menu_lines"
         draw_checklist
     done
     restore_menu_terminal || return 1

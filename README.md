@@ -41,11 +41,11 @@ at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 
 All available components are selected in the terminal menu. Use the up and down
 arrow keys to move, Space to toggle, Enter to install, and `q` to cancel.
-Codex, Claude Code, Grok, Cursor, and Junie hooks can each be toggled on macOS
-and Linux. macOS also offers SD card ejection prevention (important for deep
-sleep) and the status-bar indicator. Leaving an item unchecked skips its
-setup for this run. The core CLI and background service are included in every
-install.
+The Agent hooks group lists Codex, Claude Code, Grok, Cursor, and Junie on
+macOS and Linux. The macOS integrations group lists SD card ejection prevention
+(important for deep sleep) and the status-bar indicator. Leaving an item
+unchecked skips its setup for this run. The core CLI and background service are
+included in every install.
 
 Setup shows progress as it checks requirements, prepares Python, builds and
 installs packages, and configures services and selected components.

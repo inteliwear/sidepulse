@@ -276,24 +276,34 @@ print(settings)
 
     def test_piped_setup_confirms_toggled_components_before_installing(self):
         status, output = self.run_piped_setup_in_terminal(
-            b'\x1b[A', b' ', b'\x1bOB', b' ',  # Status-bar indicator and SD eject prevention.
+            b'\x1b[A', b' ', b'\x1bOB', b' ',  # Junie and SD eject prevention.
+            b'\x1b[B', b' ',  # Status-bar indicator.
             b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ',  # Claude Code and Grok.
-            b'\x1b[B', b' ', b' ', b'\x1b[B', b' ', b'\r',  # Recheck Cursor and skip Junie.
+            b'\x1b[B', b' ', b' ', b'\r',  # Recheck Cursor.
             install_keys=b'\x1b[C',
         )
         self.assertEqual(status, 0, output)
         self.assertNotIn('^[[C', output)
         self.assertNotIn('\x1b[C', output)
         output = re.sub(r'\x1b\[[\d;]*m', '', output)
-        for agent in ('Codex', 'Claude Code', 'Grok', 'Cursor', 'Junie'):
-            self.assertIn(f'[x] {agent} hooks', output)
+        first_screen = output.split('Up/Down move', 1)[0].splitlines()
+        self.assertEqual([line.strip() for line in first_screen if line.strip()], [
+            'SidePulse',
+            'macOS integrations',
+            '> [x] SD card ejection prevention (important for deep sleep)',
+            '[x] Status-bar indicator',
+            'Agent hooks',
+            '[x] Codex',
+            '[x] Claude Code',
+            '[x] Grok',
+            '[x] Cursor',
+            '[x] Junie',
+        ])
         for component in (
-            'SD card ejection prevention', 'Claude Code hooks', 'Grok hooks', 'Junie hooks', 'Status-bar indicator',
+            'SD card ejection prevention', 'Claude Code', 'Grok', 'Junie', 'Status-bar indicator',
         ):
-            self.assertIn(f'[x] {component}', output)
             self.assertIn(f'> [ ] {component}', output)
-        self.assertEqual(output.count('Select optional components'), 1)
-        self.assertIn('important for deep sleep', output)
+        self.assertEqual(output.count('SidePulse\r\n'), 1)
         self.assertEqual(self.calls()[0], [
             'new', ['setup', '--agent', 'codex', '--agent', 'cursor', '--no-sd-eject-guard', '--no-status-bar'],
         ])
@@ -304,6 +314,8 @@ print(settings)
             platform='Linux',
         )
         self.assertEqual(status, 0, output)
+        self.assertIn('Agent hooks', output)
+        self.assertNotIn('macOS integrations', output)
         self.assertNotIn('SD card ejection prevention', output)
         self.assertNotIn('Status-bar indicator', output)
         self.assertEqual(self.calls()[0], ['new', ['setup', '--no-agent-monitor']])
@@ -331,7 +343,7 @@ print(settings)
     def test_piped_headless_setup_installs_defaults_without_terminal_input(self):
         status, output = self.run_piped_setup_in_terminal(headless=True)
         self.assertEqual(status, 0, output)
-        self.assertNotIn('Select optional components', output)
+        self.assertNotIn('Agent hooks', output)
         self.assertNotRegex(output, r'\x1b\[[\d;]*m')
         self.assertIn('SidePulse is installed.', output)
         self.assertEqual(self.calls()[0], ['new', ['setup']])
