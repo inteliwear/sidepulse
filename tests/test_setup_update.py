@@ -311,9 +311,13 @@ print(settings)
     def test_piped_setup_can_cancel_without_installing(self):
         status, output = self.run_piped_setup_in_terminal(b'q')
         self.assertEqual(status, 0, output)
-        self.assertIn('\x1b[1mSide\x1b[91mP\x1b[93mu\x1b[92ml\x1b[96ms\x1b[95me\x1b[0m setup', output)
-        self.assertIn('\x1b[1;96m  > [x]\x1b[0m', output)
-        self.assertIn('\x1b[92m    [x]\x1b[0m', output)
+        self.assertIn(
+            '\x1b[1mSide\x1b[38;5;174mP\x1b[38;5;179mu\x1b[38;5;108ml'
+            '\x1b[38;5;110ms\x1b[38;5;140me\x1b[0m\r\n',
+            output,
+        )
+        self.assertIn('\x1b[1;38;5;110m  > [x]\x1b[0m', output)
+        self.assertIn('\x1b[38;5;108m    [x]\x1b[0m', output)
         self.assertIn('SidePulse setup cancelled.', output)
         self.assertFalse(self.install_root.exists())
         self.assertFalse((self.root / 'state').exists())
@@ -321,7 +325,7 @@ print(settings)
     def test_piped_setup_respects_no_color(self):
         status, output = self.run_piped_setup_in_terminal(b'q', no_color=True)
         self.assertEqual(status, 0, output)
-        self.assertIn('SidePulse setup', output)
+        self.assertIn('\r\nSidePulse\r\n', output)
         self.assertNotRegex(output, r'\x1b\[[\d;]*m')
 
     def test_piped_headless_setup_installs_defaults_without_terminal_input(self):

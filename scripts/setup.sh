@@ -43,12 +43,22 @@ draw_setup_title() {
     menu_checked=
     menu_reset=
     if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
-        menu_focus=$(printf '\033[1;96m')
-        menu_checked=$(printf '\033[92m')
         menu_reset=$(printf '\033[0m')
-        printf '\n\033[1mSide\033[91mP\033[93mu\033[92ml\033[96ms\033[95me\033[0m setup\n'
+        case "${TERM:-}:${COLORTERM:-}" in
+            *256color:*|*:truecolor|*:24bit)
+                menu_focus=$(printf '\033[1;38;5;110m')
+                menu_checked=$(printf '\033[38;5;108m')
+                printf '\n\033[1mSide\033[38;5;174mP\033[38;5;179mu\033[38;5;108ml'
+                printf '\033[38;5;110ms\033[38;5;140me%s\n' "$menu_reset"
+                ;;
+            *)
+                menu_focus=$(printf '\033[1;36m')
+                menu_checked=$(printf '\033[32m')
+                printf '\n\033[1mSidePulse%s\n' "$menu_reset"
+                ;;
+        esac
     else
-        printf '\nSidePulse setup\n'
+        printf '\nSidePulse\n'
     fi
     printf '\nSelect optional components\n'
 }
