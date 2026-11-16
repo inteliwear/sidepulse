@@ -6,6 +6,7 @@ import json
 import os
 import re
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -44,6 +45,8 @@ class SetupUpdateTests(unittest.TestCase):
             with open(os.environ['SIDEPULSE_TEST_LOG'], 'a') as log:
                 log.write(json.dumps(['sudo', args]) + '\\n')
             if args[-1] == '-v':
+                with open('/dev/tty', 'w') as terminal:
+                    print('Mock administrator prompt', file=terminal)
                 sys.exit(0)
             if args[:2] != ['-n', '-H'] or os.environ.get('SIDEPULSE_TEST_SUDO_FAIL'):
                 sys.exit(1)
@@ -370,6 +373,8 @@ print(settings)
         status, output = self.run_piped_setup_in_terminal(headless=True)
         self.assertEqual(status, 0, output)
         self.assertNotIn('Agent hooks', output)
+        self.assertIn('sudo -n -H', output)
+        self.assertNotIn('Mock administrator prompt', output)
         self.assertNotRegex(output, r'\x1b\[[\d;]*m')
         self.assertIn('SidePulse is installed.', output)
         self.assertEqual(self.calls(), [
@@ -381,6 +386,8 @@ print(settings)
         ])
 
     def test_piped_setup_authorizes_only_the_system_guard(self):
+        self.install_root = self.root / "SidePulse's install with spaces"
+        self.env['SIDEPULSE_INSTALL_ROOT'] = str(self.install_root)
         status, output = self.run_piped_setup_in_terminal(b'\r', developer_tools=True)
         self.assertEqual(status, 0, output)
         self.assertIn('Administrator access is required', output)
@@ -389,6 +396,12 @@ print(settings)
         self.assertEqual([call for call in calls if call[0] == 'sudo'][1:], [
             ['sudo', ['-n', '-H', str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system']],
         ])
+        before_prompt = output.split('Mock administrator prompt', 1)[0]
+        self.assertIn('Mock administrator prompt', output)
+        shown_commands = [
+            shlex.split(line) for line in before_prompt.splitlines() if line.lstrip().startswith('sudo ')
+        ]
+        self.assertEqual(shown_commands, [['sudo', *args] for name, args in calls if name == 'sudo'])
         self.assertEqual(calls[-3:-1], [
             ['new', ['sdejectguard', 'uninstall', '--scope', 'user']],
             ['new', ['setup', '--no-sd-eject-guard']],
