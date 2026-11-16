@@ -18,7 +18,7 @@ from .models import (
     parse_datetime,
     provider_label,
 )
-from .junie_index import junie_session_project_dir, junie_session_title
+from .junie_index import junie_session_info, junie_session_project_dir
 from .origin import origin_label_from_payload
 from .providers import detect_log_path, parse_log_line
 from .settings import AgentMonitorSettings, load_settings
@@ -1038,24 +1038,36 @@ def metadata_for_record(
 
 
 def update_metadata(metadata: StatusMetadata, record: HookEvent) -> None:
-    if record.cwd:
-        metadata.cwd = record.cwd
+    cwd = project_dir_from_event(record)
+    if cwd:
+        metadata.cwd = cwd
 
-    title = title_from_event(record)
-    if title and (metadata.title is None or is_provider_session_title(record, title)):
-        metadata.title = title
+    title = provider_session_title(record)
+    if title or metadata.title is None:
+        metadata.title = title or prompt_title_from_event(record)
 
     origin = record.origin or origin_label_from_payload(record.provider, record.raw)
     if origin:
         metadata.origin = origin
 
 
-def is_provider_session_title(record: HookEvent, title: str) -> bool:
-    if record.provider == "codex":
-        return title == codex_session_title(record.session_id)
+def project_dir_from_event(record: HookEvent) -> str | None:
     if record.provider == "junie":
-        return title == junie_session_title(record.session_id)
-    return False
+        return (
+            _string_or_none(record.raw.get("project_path"))
+            or junie_session_project_dir(record.session_id)
+            or record.cwd
+        )
+    return record.cwd
+
+
+def provider_session_title(record: HookEvent) -> str | None:
+    if record.provider == "codex":
+        return codex_session_title(record.session_id)
+    if record.provider == "junie":
+        session = junie_session_info(record.session_id)
+        return session.title if session else None
+    return None
 
 
 def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None) -> AgentStatus | None:
@@ -1063,7 +1075,7 @@ def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None)
     if mode is None:
         return None
 
-    metadata = metadata or StatusMetadata(cwd=record.cwd)
+    metadata = metadata or StatusMetadata(cwd=project_dir_from_event(record))
     if should_ignore_record(record, metadata):
         return None
 
@@ -1086,7 +1098,7 @@ def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None)
         updated_at=record.logged_at,
         event_name=record.event_name,
         session_id=record.session_id,
-        cwd=record.cwd,
+        cwd=metadata.cwd or record.cwd,
         tool_name=record.tool_name,
         message=record.message,
         origin=record.origin or metadata.origin or origin_label_from_payload(record.provider, record.raw),
@@ -1403,12 +1415,13 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
                     display_name,
                 )
         elif provider == "junie" and session_id:
-            title = junie_session_title(session_id)
-            cwd = junie_session_project_dir(session_id) or cwd
-            if title:
+            session = junie_session_info(session_id)
+            if session:
+                cwd = session.project_dir or cwd
+            if session and session.title:
                 display_name = display_name_from_parts(
                     project_name(cwd),
-                    title,
+                    session.title,
                     session_id[:8],
                     display_name,
                 )
@@ -1586,15 +1599,10 @@ def _replace_mode(status: AgentStatus, mode: AgentMode) -> AgentStatus:
 
 
 def title_from_event(record: HookEvent) -> str | None:
-    if record.provider == "codex":
-        title = codex_session_title(record.session_id)
-        if title:
-            return title
-    elif record.provider == "junie":
-        title = junie_session_title(record.session_id)
-        if title:
-            return title
+    return provider_session_title(record) or prompt_title_from_event(record)
 
+
+def prompt_title_from_event(record: HookEvent) -> str | None:
     if record.event_name != "UserPromptSubmit":
         return None
     return summarize_prompt(record.raw.get("prompt"))

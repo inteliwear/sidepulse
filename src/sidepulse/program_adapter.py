@@ -13,8 +13,16 @@ def clean_text(value: str, limit: int) -> str:
 
 
 def hook_report(provider: str, line: dict) -> dict | None:
-    from .collector import (StatusMetadata, status_from_event, title_from_event,
-                            codex_session_title, codex_question_tool, explicit_mode_for_record)
+    from .collector import (
+        StatusMetadata,
+        codex_question_tool,
+        explicit_mode_for_record,
+        project_dir_from_event,
+        prompt_title_from_event,
+        provider_session_title,
+        should_ignore_record,
+        status_from_event,
+    )
     from .providers import parse_log_line
     record = parse_log_line(provider, json.dumps(line, ensure_ascii=False))
     if record is None:
@@ -22,10 +30,12 @@ def hook_report(provider: str, line: dict) -> dict | None:
     scope = provider + '-' + hashlib.sha256((record.session_id or record.status_key).encode()).hexdigest()[:32]
     base = {'v': 1, 'type': 'program_status', 'scope': scope,
             'request_id': str(uuid.uuid4())}
-    interpreted = status_from_event(record, StatusMetadata(cwd=record.cwd, title=title_from_event(record)))
+    session_title = provider_session_title(record)
+    title = session_title or prompt_title_from_event(record)
+    metadata = StatusMetadata(cwd=project_dir_from_event(record), title=title)
+    interpreted = status_from_event(record, metadata)
     if interpreted is None:
-        from .collector import should_ignore_record
-        if should_ignore_record(record, StatusMetadata(cwd=record.cwd, title=title_from_event(record))):
+        if should_ignore_record(record, metadata):
             return {**base, 'status': {'state': 'clear'}, '_hook_suppressed': True}
         return None
     mode = interpreted.mode.value
@@ -43,18 +53,17 @@ def hook_report(provider: str, line: dict) -> dict | None:
         status['kind'] = 'permission' if 'permission' in record.event_name.lower() else 'question'
     if interpreted.message:
         status['msg'] = clean_text(interpreted.message, MAX_OUTBOUND_MESSAGE_BYTES)
-    title = title_from_event(record)
     if title:
         status['title'] = clean_text(title, 192)
     # Presentation metadata travels as JSON context outside the OSC status fields.
     context = {key: value for key, value in {
         'provider': provider,
         'session_id': record.session_id, 'agent_id': record.agent_id,
-        'cwd': record.cwd, 'origin': interpreted.origin,
+        'cwd': interpreted.cwd, 'origin': interpreted.origin,
         'display_name': interpreted.display_name, 'tool_name': record.tool_name,
         'mode': interpreted.mode.value, 'event_name': record.event_name,
         'source_name': socket.gethostname(), 'title': title,
-        'title_source': 'session' if provider == 'codex' and title and title == codex_session_title(record.session_id) else 'prompt',
+        'title_source': 'session' if session_title else 'prompt',
     }.items() if value is not None}
     # Clean display text at the producer boundary. Identity and session-opening
     # paths stay exact and are still checked strictly by the receiver.

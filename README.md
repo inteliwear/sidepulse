@@ -881,8 +881,8 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, Grok, and Junie hooks. The transcript
-checkboxes apply only to explicit file-based diagnostics. The status-bar app reads
+window can install or uninstall Codex, Claude, Grok, Cursor, and Junie hooks.
+The transcript checkboxes apply only to explicit file-based diagnostics. The status-bar app reads
 accounted OSC-style JSON through the daemon socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.
 
@@ -892,6 +892,15 @@ connected to a JetBrains IDE; Junie hosted directly through IDE/ACP does not yet
 emit hooks. SidePulse intentionally does not register a Junie `PermissionRequest`
 hook because a successful observer hook would automatically approve the requested
 action. Junie's normal approval prompts therefore remain unchanged.
+
+Junie sessions use the project path from the hook or the Junie session index when
+available. The index at `~/.junie/sessions/index.jsonl` also supplies task names.
+In **Settings → Agents → Session
+Opening**, **Automatic** opens the recorded project in JetBrains for IDE-origin
+sessions when a matching installed IDE is available. Other Junie sessions resume
+in Terminal. You can also set either opener as the Junie preference. If SidePulse
+cannot find a matching installed IDE in JetBrains' recent projects, it falls back
+to Terminal.
 
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`

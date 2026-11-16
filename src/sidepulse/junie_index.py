@@ -46,8 +46,13 @@ def junie_session_index(path: Path | None = None) -> dict[str, JunieSessionInfo]
         ):
             return cached.sessions
 
+        try:
+            lines = read_recent_lines(index_path, JUNIE_SESSION_INDEX_MAX_LINES)
+        except OSError:
+            return {}
+
         sessions: dict[str, JunieSessionInfo] = {}
-        for line in read_recent_lines(index_path, JUNIE_SESSION_INDEX_MAX_LINES):
+        for line in lines:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
@@ -63,6 +68,7 @@ def junie_session_index(path: Path | None = None) -> dict[str, JunieSessionInfo]
                 row.get("projectDir")
                 or row.get("project_dir")
                 or row.get("projectPath")
+                or row.get("project_path")
             )
             sessions[session_id] = JunieSessionInfo(
                 title=truncate_text(title.strip(), 72)
@@ -80,17 +86,12 @@ def junie_session_index(path: Path | None = None) -> dict[str, JunieSessionInfo]
         return sessions
 
 
-def junie_session_title(session_id: str | None) -> str | None:
-    if not session_id:
-        return None
-    session = junie_session_index().get(session_id)
-    return session.title if session else None
+def junie_session_info(session_id: str | None) -> JunieSessionInfo | None:
+    return junie_session_index().get(session_id) if session_id else None
 
 
 def junie_session_project_dir(session_id: str | None) -> str | None:
-    if not session_id:
-        return None
-    session = junie_session_index().get(session_id)
+    session = junie_session_info(session_id)
     return session.project_dir if session else None
 
 

@@ -507,10 +507,10 @@ class AgentMonitorSettings:
         return replace(self, session_open_preferences=preferences)
 
     def with_provider_session_open_action(
-        self, provider: str, action: str
+        self, provider: str, action: str | None
     ) -> "AgentMonitorSettings":
-        """Set the provider-wide opener and discard older per-origin overrides."""
-        if action not in SESSION_OPEN_CHOICES:
+        """Set the provider-wide opener, using None to restore automatic selection."""
+        if action is not None and action not in SESSION_OPEN_CHOICES:
             raise ValueError(f"Unknown session open action: {action}")
         provider_key = provider.lower()
         prefix = f"origin:{provider_key}:"
@@ -523,9 +523,10 @@ class AgentMonitorSettings:
             return replace(
                 self,
                 session_open_preferences=preferences,
-                grok_session_open_action=action,
+                grok_session_open_action=action or SESSION_OPEN_TERMINAL,
             )
-        preferences[provider_key] = action
+        if action is not None:
+            preferences[provider_key] = action
         return replace(self, session_open_preferences=preferences)
 
     def with_session_terminal(

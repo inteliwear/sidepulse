@@ -72,7 +72,25 @@ def test_hook_sequences_match_existing_interpreter_and_preserve_metadata(runtime
         a, e = actual.statuses[0], expected.statuses[0]
         for field in ('provider', 'session_id', 'origin', 'display_name'):
             assert getattr(a, field) == getattr(e, field), (provider, event, field)
-        assert a.cwd == '/work/widget'  # Sparse JSON updates retain session-opening context.
+        assert a.cwd == e.cwd == '/work/widget'
+
+
+def test_junie_task_name_replaces_prompt_title_in_daemon(runtime, tmp_path):
+    index = tmp_path / 'index.jsonl'
+    with patch('sidepulse.junie_index.junie_session_index_path', return_value=index):
+        emit(runtime, 'UserPromptSubmit', 'junie', prompt='Initial prompt', cwd='/tmp/hook')
+        index.write_text(json.dumps({
+            'sessionId': 'session-12345678',
+            'taskName': 'Indexed task title',
+            'projectDir': '/work/project',
+        }) + '\n')
+        actual, legacy = emit(runtime, 'Stop', 'junie', cwd='/tmp/hook')
+
+    for snapshot in (actual, legacy):
+        status = snapshot.statuses[0]
+        assert status.cwd == '/work/project'
+        assert 'Indexed task title' in status.display_name
+        assert 'Initial prompt' not in status.display_name
 
 
 def test_metadata_survives_sparse_events_without_running_legacy_monitor(runtime):

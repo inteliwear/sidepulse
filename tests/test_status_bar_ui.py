@@ -814,6 +814,30 @@ class WindowBuildTests(StatusBarTestCase):
             ["open", "-b", "com.jetbrains.intellij", "/tmp/junie-project"]
         )
 
+    def test_unavailable_junie_ide_preference_falls_back_to_terminal(self):
+        status = make_status(
+            provider="junie", cwd="/tmp/junie-project", origin="Junie in JetBrains IDE"
+        )
+        settings = AgentMonitorSettings().with_provider_session_open_action(
+            "junie", sb.SESSION_OPEN_JETBRAINS
+        )
+        with (
+            patch.object(self.controller, "settings", settings),
+            patch("sidepulse.session_actions.jetbrains_launch_for_project", return_value=None) as resolve,
+            patch("sidepulse.status_bar.open_terminal_command") as open_terminal,
+        ):
+            menu = sb.build_session_options_menu(
+                status, datetime.now(timezone.utc), self.controller
+            )
+            self.assertEqual(menu.itemWithTitle_("Resume in Terminal").state(), 1)
+            resolve.assert_called_once()
+            resolve.reset_mock()
+
+            self.controller.open_session(status, None, remember=False)
+
+        resolve.assert_called_once()
+        open_terminal.assert_called_once()
+
     def test_open_junie_session_in_exact_ide_app_uses_app_path(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")
         with (
@@ -1670,11 +1694,9 @@ class PureUiLogicTests(unittest.TestCase):
 
         self.assertEqual(
             sb.provider_open_actions("junie"),
-            (sb.SESSION_OPEN_TERMINAL, sb.SESSION_OPEN_JETBRAINS),
+            ("automatic", sb.SESSION_OPEN_TERMINAL, sb.SESSION_OPEN_JETBRAINS),
         )
-        self.assertEqual(
-            sb.default_provider_open_action("junie"), sb.SESSION_OPEN_TERMINAL
-        )
+        self.assertEqual(sb.default_provider_open_action("junie"), "automatic")
         self.assertEqual(
             sb.provider_open_action_label("junie", sb.SESSION_OPEN_JETBRAINS),
             "JetBrains IDE",

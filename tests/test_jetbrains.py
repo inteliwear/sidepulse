@@ -21,6 +21,18 @@ def jetbrains_ide_for_project(project: Path, *, home: Path) -> JetBrainsIDE | No
 
 
 class JetBrainsIDESelectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        installed_apps = patch(
+            "sidepulse.jetbrains.installed_app_paths_for_bundle_id",
+            side_effect=lambda bundle_id: (Path("/Applications") / f"{bundle_id}.app",),
+        )
+        running_apps = patch(
+            "sidepulse.jetbrains.running_app_paths_for_bundle_id", return_value=()
+        )
+        for app_lookup in (installed_apps, running_apps):
+            app_lookup.start()
+            self.addCleanup(app_lookup.stop)
+
     def test_recent_project_and_its_ancestor_select_the_ide(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -35,9 +47,10 @@ class JetBrainsIDESelectionTests(unittest.TestCase):
                 },
             )
 
-            ide = jetbrains_ide_for_project(project, home=home)
+            launch = jetbrains_launch_for_project(project, home=home)
 
-        self.assertEqual(ide, JETBRAINS_IDES[0])
+        self.assertEqual(launch.ide, JETBRAINS_IDES[0])
+        self.assertEqual(launch.project_path, project.parent.resolve())
 
     def test_exact_project_beats_ancestor_in_another_ide(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,6 +303,27 @@ class JetBrainsIDESelectionTests(unittest.TestCase):
             ide = jetbrains_ide_for_project(home / "project", home=home)
 
         self.assertIsNone(ide)
+
+    def test_skips_recent_projects_for_uninstalled_ides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            project = home / "project"
+            self.write_recent_projects(
+                home, "JetBrains", "IntelliJIdea2025.1", {str(project): 200}
+            )
+            with patch(
+                "sidepulse.jetbrains.installed_app_paths_for_bundle_id",
+                side_effect=lambda bundle_id: (
+                    (home / "PyCharm.app",) if bundle_id == "com.jetbrains.pycharm" else ()
+                ),
+            ):
+                self.assertIsNone(jetbrains_launch_for_project(project, home=home))
+                self.write_recent_projects(
+                    home, "JetBrains", "PyCharm2025.1", {str(project): 100}
+                )
+                launch = jetbrains_launch_for_project(project, home=home)
+
+        self.assertEqual(launch.ide.name, "PyCharm")
 
     def test_malformed_recent_projects_file_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

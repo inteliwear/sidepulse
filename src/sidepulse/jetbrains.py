@@ -21,6 +21,7 @@ class JetBrainsIDE:
 class JetBrainsLaunch:
     ide: JetBrainsIDE
     app_path: Path | None
+    project_path: Path
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ def jetbrains_launch_for_project(
 
     home = home or Path.home()
     project = normalize_project_path(project_path, home)
-    recent_matches: list[tuple[int, int, int, JetBrainsIDE, Path]] = []
+    recent_matches: list[tuple[int, int, int, JetBrainsIDE, Path, Path]] = []
     for order, (ide, recent_projects) in enumerate(recent_project_files(home)):
         settings_dir = recent_projects.parent.parent
         try:
@@ -88,13 +89,17 @@ def jetbrains_launch_for_project(
                         -order,
                         ide,
                         settings_dir,
+                        recent.path,
                     )
                 )
 
-    if not recent_matches:
-        return None
-    _, _, _, ide, settings_dir = max(recent_matches, key=lambda match: match[:3])
-    return JetBrainsLaunch(ide, app_path_for_settings_directory(ide, settings_dir.name))
+    for _, _, _, ide, settings_dir, recent_path in sorted(
+        recent_matches, key=lambda match: match[:3], reverse=True
+    ):
+        launch = launch_for_settings_directory(ide, settings_dir.name, recent_path)
+        if launch is not None:
+            return launch
+    return None
 
 
 def recent_project_files(home: Path) -> tuple[tuple[JetBrainsIDE, Path], ...]:
@@ -102,7 +107,7 @@ def recent_project_files(home: Path) -> tuple[tuple[JetBrainsIDE, Path], ...]:
     for ide in JETBRAINS_IDES:
         settings_root = home / "Library" / "Application Support" / ide.settings_vendor
         try:
-            settings_dirs = tuple(settings_root.iterdir())
+            settings_dirs = sorted(settings_root.iterdir())
         except OSError:
             continue
         for settings_dir in settings_dirs:
@@ -205,19 +210,23 @@ def normalize_project_path(path: str | Path, home: Path) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def app_path_for_settings_directory(
+def launch_for_settings_directory(
     ide: JetBrainsIDE,
     settings_directory_name: str,
-) -> Path | None:
-    for app_path in installed_app_paths_for_bundle_id(ide.bundle_id):
+    project_path: Path,
+) -> JetBrainsLaunch | None:
+    installed_apps = installed_app_paths_for_bundle_id(ide.bundle_id)
+    for app_path in installed_apps:
         if app_data_directory_name(app_path) == settings_directory_name:
-            return app_path
+            return JetBrainsLaunch(ide, app_path, project_path)
 
     running_apps = running_app_paths_for_bundle_id(ide.bundle_id)
     for app_path in running_apps:
         if app_data_directory_name(app_path) == settings_directory_name:
-            return app_path
-    return running_apps[0] if running_apps else None
+            return JetBrainsLaunch(ide, app_path, project_path)
+    if running_apps:
+        return JetBrainsLaunch(ide, running_apps[0], project_path)
+    return JetBrainsLaunch(ide, None, project_path) if installed_apps else None
 
 
 def installed_app_paths_for_bundle_id(bundle_id: str) -> tuple[Path, ...]:

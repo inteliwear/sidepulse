@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from .jetbrains import JetBrainsIDE, jetbrains_launch_for_project
+from .jetbrains import jetbrains_launch_for_project
 from .junie_index import junie_session_project_dir
 from .models import AgentStatus
 
@@ -29,6 +29,7 @@ class IdeOpenTarget:
     bundle_id: str
     project_path: str
     app_path: str | None = None
+    ide_name: str | None = None
 
 
 SessionOpenTarget = tuple[str, str | IdeOpenTarget]
@@ -54,12 +55,6 @@ def session_vscode_link(status: AgentStatus) -> str | None:
     )
 
 
-def session_jetbrains_ide(status: AgentStatus) -> JetBrainsIDE | None:
-    project_dir = session_jetbrains_project_dir(status)
-    launch = jetbrains_launch_for_project(project_dir) if project_dir else None
-    return launch.ide if launch else None
-
-
 def session_jetbrains_target(status: AgentStatus) -> IdeOpenTarget | None:
     project_dir = session_jetbrains_project_dir(status)
     if not project_dir:
@@ -69,8 +64,9 @@ def session_jetbrains_target(status: AgentStatus) -> IdeOpenTarget | None:
         return None
     return IdeOpenTarget(
         bundle_id=launch.ide.bundle_id,
-        project_path=str(Path(project_dir).expanduser()),
+        project_path=str(launch.project_path),
         app_path=str(launch.app_path) if launch.app_path else None,
+        ide_name=launch.ide.name,
     )
 
 
@@ -106,8 +102,12 @@ def default_session_open_action(status: AgentStatus) -> str:
 
 def default_session_open_target(
     status: AgentStatus,
+    *,
+    skip_action: str | None = None,
 ) -> tuple[str, SessionOpenTarget] | None:
     for action in preferred_session_open_actions(status):
+        if action == skip_action:
+            continue
         target = session_open_target(status, action)
         if target:
             return action, target
@@ -117,7 +117,7 @@ def default_session_open_target(
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     origin = normalized_origin(status.origin)
     if origin:
-        if "jetbrains" in origin:
+        if status.provider.lower() == "junie" and "jetbrains" in origin:
             return (SESSION_OPEN_JETBRAINS, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP)
         if any(surface in origin for surface in SESSION_OPEN_VSCODE_SURFACES):
             return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
@@ -157,10 +157,21 @@ def session_open_target(
 
 
 def available_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
-    return tuple(action for action in SESSION_OPEN_CHOICES if session_open_target(status, action))
+    return tuple(available_session_open_targets(status))
 
 
-def session_open_action_label(status: AgentStatus, action: str) -> str:
+def available_session_open_targets(status: AgentStatus) -> dict[str, SessionOpenTarget]:
+    targets = {}
+    for action in SESSION_OPEN_CHOICES:
+        target = session_open_target(status, action)
+        if target is not None:
+            targets[action] = target
+    return targets
+
+
+def session_open_action_label(
+    status: AgentStatus, action: str, target: SessionOpenTarget | None = None
+) -> str:
     provider = status.provider.lower()
     if action == SESSION_OPEN_APP:
         if provider == "codex":
@@ -171,8 +182,10 @@ def session_open_action_label(status: AgentStatus, action: str) -> str:
     if action == SESSION_OPEN_VSCODE:
         return "Open in VS Code"
     if action == SESSION_OPEN_JETBRAINS:
-        ide = session_jetbrains_ide(status)
-        return f"Open in {ide.name}" if ide else "Open in JetBrains IDE"
+        ide_target = target[1] if target is not None else session_jetbrains_target(status)
+        if isinstance(ide_target, IdeOpenTarget) and ide_target.ide_name:
+            return f"Open in {ide_target.ide_name}"
+        return "Open in JetBrains IDE"
     if action == SESSION_OPEN_TERMINAL:
         return "Resume in Terminal"
     return action

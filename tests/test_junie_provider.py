@@ -17,9 +17,9 @@ from sidepulse.collector import (
 from sidepulse.cli import build_sidepulse_parser
 from sidepulse.hook import normalize_junie_payload
 from sidepulse.install import install_junie_hooks, uninstall_junie_hooks
+from sidepulse.jetbrains import JetBrainsIDE, JetBrainsLaunch
 from sidepulse.models import AgentMode, AgentStatus
 from sidepulse.providers import JUNIE_MONITOR_EVENTS, detect_junie_config, parse_log_line
-from sidepulse.jetbrains import JetBrainsIDE, JetBrainsLaunch
 from sidepulse.session_actions import (
     SESSION_OPEN_JETBRAINS,
     IdeOpenTarget,
@@ -115,13 +115,16 @@ class JunieProviderTests(unittest.TestCase):
             ),
             patch(
                 "sidepulse.session_actions.jetbrains_launch_for_project",
-                return_value=JetBrainsLaunch(ide, "/Applications/IntelliJ IDEA.app"),
+                return_value=JetBrainsLaunch(
+                    ide, Path("/Applications/IntelliJ IDEA.app"), Path("/tmp/indexed-project")
+                ),
             ) as resolve,
         ):
             expected = IdeOpenTarget(
                 ide.bundle_id,
                 "/tmp/indexed-project",
                 "/Applications/IntelliJ IDEA.app",
+                ide.name,
             )
             self.assertEqual(session_jetbrains_target(status), expected)
             self.assertEqual(
@@ -167,12 +170,12 @@ class JunieProviderTests(unittest.TestCase):
             ),
             patch(
                 "sidepulse.session_actions.jetbrains_launch_for_project",
-                return_value=JetBrainsLaunch(ide, None),
+                return_value=JetBrainsLaunch(ide, None, Path(status.cwd)),
             ) as resolve,
         ):
             self.assertEqual(
                 session_jetbrains_target(status),
-                IdeOpenTarget(ide.bundle_id, status.cwd, None),
+                IdeOpenTarget(ide.bundle_id, status.cwd, ide_name=ide.name),
             )
             resolve.assert_called_once_with(status.cwd)
 
@@ -191,9 +194,11 @@ class JunieProviderTests(unittest.TestCase):
             )
 
         claude_status = AgentStatus(
-            **{**status.__dict__, "provider": "claude"}
+            **{**status.__dict__, "provider": "claude", "origin": "Claude in JetBrains IDE"}
         )
         self.assertIsNone(session_open_target(claude_status, SESSION_OPEN_JETBRAINS))
+        self.assertEqual(default_session_open_action(claude_status), "vscode")
+
     def test_installer_preserves_existing_config_and_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
