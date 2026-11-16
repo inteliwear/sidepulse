@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
 
 
+@unittest.skipUnless(os.name == "posix", "POSIX release script")
 class ReleaseScriptTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

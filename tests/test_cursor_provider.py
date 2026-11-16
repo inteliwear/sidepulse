@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hook_assertions import command_text, fail_open
 from sidepulse.collector import AgentMonitor, SourceSpec
 from sidepulse.cursor_hook import normalize_payload
 from sidepulse.install import install_cursor_hooks, uninstall_cursor_hooks
@@ -41,9 +42,9 @@ class CursorProviderTests(unittest.TestCase):
             # Cursor routes through the shared hook_entry dispatcher, like every
             # other provider, so the hook keeps working when sidepulse is not on
             # the interpreter's import path.
-            self.assertTrue(any("hook_entry.py" in item for item in stop_commands))
-            self.assertTrue(any("--provider cursor" in item for item in stop_commands))
-            self.assertTrue(any("--event stop" in item for item in stop_commands))
+            self.assertTrue(any("hook_entry.py" in command_text(item) for item in stop_commands))
+            self.assertTrue(any("--provider cursor" in command_text(item) for item in stop_commands))
+            self.assertTrue(any("--event stop" in command_text(item) for item in stop_commands))
             detected = detect_cursor_config(home)
             self.assertTrue(detected.hooks_enabled)
             self.assertEqual(detected.log_paths, (log,))
@@ -144,7 +145,7 @@ class CursorProviderTests(unittest.TestCase):
 
         self.assertEqual(before["hook_event_name"], "PreToolUse")
         self.assertEqual(before["tool_name"], "read_file")
-        self.assertEqual(failed["hook_event_name"], "StopFailure")
+        self.assertEqual(failed["hook_event_name"], "PostToolUseFailure")
         self.assertEqual(failed["message"], "permission denied")
 
 

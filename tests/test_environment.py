@@ -98,7 +98,8 @@ class CleanInstallTests(unittest.TestCase):
             cls._tmp.cleanup()
             raise unittest.SkipTest(f"could not create virtualenv: {create.stderr}")
 
-        cls.python = cls.venv / "bin" / "python"
+        cls.bin = cls.venv / ("Scripts" if os.name == "nt" else "bin")
+        cls.python = cls.bin / ("python.exe" if os.name == "nt" else "python")
         cls.install_spec = install_spec()
 
         install = subprocess.run(
@@ -133,9 +134,13 @@ class CleanInstallTests(unittest.TestCase):
     def env(self) -> dict:
         """A minimal environment: no PYTHONPATH leaking the source tree in."""
         env = {
-            "PATH": f"{self.venv / 'bin'}:{os.environ.get('PATH', '')}",
+            "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
             "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            **{key: value for key, value in os.environ.items() if key in ("SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP")},
             "XDG_CONFIG_HOME": str(self.home / ".config"),
+            "XDG_STATE_HOME": str(self.home / ".local/state"),
+            "XDG_DATA_HOME": str(self.home / ".local/share"),
             "SIDEPULSE_DISABLE_EVENT_SOCKET": "1",
             "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         }
@@ -155,7 +160,7 @@ class CleanInstallTests(unittest.TestCase):
 
     def run_script(self, name: str, args: list[str], **kwargs):
         return subprocess.run(
-            [str(self.venv / "bin" / name), *args],
+            [str(self.bin / (name + ".exe" if os.name == "nt" else name)), *args],
             capture_output=True, text=True, timeout=300,
             env=self.env(), cwd=str(self.home), **kwargs,
         )
@@ -266,16 +271,20 @@ class CleanInstallTests(unittest.TestCase):
                 )
 
     def test_console_scripts_are_installed(self):
-        expected = ("sidepulse", "agent-monitor", "agent-status-bar", "sidepulse-reply")
+        expected = ("sidepulse", "sidepulse-reply")
         for name in expected:
             with self.subTest(script=name):
                 self.assertTrue(
-                    (self.venv / "bin" / name).exists(),
+                    (self.bin / (name + ".exe" if os.name == "nt" else name)).exists(),
                     f"console script {name} was not installed",
                 )
 
+    def test_legacy_console_scripts_are_not_installed(self):
+        for name in ("agent-monitor", "agent-status-bar"):
+            self.assertFalse((self.bin / (name + ".exe" if os.name == "nt" else name)).exists())
+
     def test_console_scripts_run(self):
-        for name in ("sidepulse", "agent-monitor", "sidepulse-reply"):
+        for name in ("sidepulse", "sidepulse-reply"):
             with self.subTest(script=name):
                 result = self.run_script(name, ["--help"])
                 self.assertIn(result.returncode, (0, 2), result.stderr)
@@ -322,7 +331,7 @@ class CleanInstallTests(unittest.TestCase):
         log_path = self.home / "hook.jsonl"
         result = subprocess.run(
             [
-                str(self.venv / "bin" / "agent-monitor"), "hook-log",
+                str(self.bin / ("sidepulse.exe" if os.name == "nt" else "sidepulse")), "hook-log",
                 "--provider", "claude", "--log", str(log_path),
             ],
             input=json.dumps({"hook_event_name": "Stop", "session_id": "s1"}),
@@ -369,7 +378,7 @@ class CleanInstallTests(unittest.TestCase):
     def test_status_bar_start_foreground_gets_past_startup(self):
         """`sidepulse status-bar start --foreground` must not die on imports.
 
-        This is the literal command that failed, run against a clean install.
+        This runs the CLI entry point against a clean install.
         It enters a GUI event loop, so success looks like "still running when
         we kill it"; failure looks like exiting immediately with the PyObjC
         dependency error.
@@ -382,11 +391,23 @@ class CleanInstallTests(unittest.TestCase):
             json.dumps({"setup_screen_completed": True}), encoding="utf-8"
         )
 
+        # launchd labels are per user, not per HOME. Automatic daemon recovery
+        # must never replace the developer's real service with this temporary
+        # installation, whose resources disappear when the test finishes.
+        startup = '''
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from sidepulse.cli import sidepulse_main
+from sidepulse.service_launch import ServiceInstallResult
+sys.argv = ['sidepulse', 'status-bar', 'start', '--foreground']
+result = ServiceInstallResult(Path(), False, False, 'isolated packaging test')
+with patch('sidepulse.service_launch.install_service', return_value=result), \
+     patch('sidepulse.service_launch.restart_service', return_value=result):
+    sidepulse_main()
+'''
         process = subprocess.Popen(
-            [
-                str(self.venv / "bin" / "sidepulse"),
-                "status-bar", "start", "--foreground",
-            ],
+            [str(self.python), '-c', textwrap.dedent(startup)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env=self.env(), cwd=str(self.home),
         )

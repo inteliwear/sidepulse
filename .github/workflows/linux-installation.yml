@@ -1,0 +1,100 @@
+name: Linux installation and migration
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-linux:
+    name: Ubuntu 24.04 / ${{ matrix.path }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        path: [fresh, main-upgrade]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare an isolated user and real systemd user manager
+        run: |
+          set -eu
+          systemd-detect-virt --vm --quiet
+          if id test >/dev/null 2>&1; then
+            echo 'Refusing to reuse an existing test account'
+            exit 1
+          fi
+          sudo apt-get update -q
+          sudo apt-get install -y python3-venv dbus-user-session
+          sudo useradd --create-home --shell /bin/bash test
+          echo 'test ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/sidepulse-test >/dev/null
+          cat /proc/sys/kernel/random/uuid | sudo tee /etc/sidepulse-test-vm >/dev/null
+          sudo loginctl enable-linger test
+          sudo systemctl start "user@$(id -u test).service"
+          test_uid=$(id -u test)
+          sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+            systemctl --user set-environment XDG_CONFIG_HOME=/home/test/.config \
+            XDG_STATE_HOME=/home/test/.local/state XDG_DATA_HOME=/home/test/.local/share
+          python3 scripts/linux-vm/host.py bundle --output "$RUNNER_TEMP/sidepulse-input"
+          sudo -iu test mkdir /home/test/sidepulse-source
+          sudo install -o test -g test -m 600 "$RUNNER_TEMP/sidepulse-input/source.tar.gz" /home/test/sidepulse-source.tar.gz
+          sudo -iu test tar -xzf /home/test/sidepulse-source.tar.gz -C /home/test/sidepulse-source
+      - name: Run the real installer, installed hooks, native mounts and crash recovery
+        env:
+          INSTALL_PATH: ${{ matrix.path }}
+        run: |
+          set -eu
+          test_uid=$(id -u test)
+          run_guest() {
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              XDG_CONFIG_HOME=/home/test/.config XDG_STATE_HOME=/home/test/.local/state \
+              XDG_DATA_HOME=/home/test/.local/share \
+              python3 /home/test/sidepulse-source/scripts/linux-vm/guest.py "$@"
+          }
+          if [ "$INSTALL_PATH" = fresh ]; then
+            run_guest fresh
+          else
+            run_guest main
+            run_guest upgrade
+            run_guest repeat
+          fi
+      - name: Collect reports even after a failure
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/sidepulse-linux-evidence"
+          if test -d /home/test/sidepulse-linux-results; then
+            sudo cp -a /home/test/sidepulse-linux-results/. "$RUNNER_TEMP/sidepulse-linux-evidence/"
+            sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/sidepulse-linux-evidence"
+          fi
+          if id test >/dev/null 2>&1; then
+            test_uid=$(id -u test)
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              systemctl --user status sidepulse.service --no-pager --full \
+              > "$RUNNER_TEMP/sidepulse-linux-evidence/service-status.log" 2>&1 || true
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              journalctl --user --unit sidepulse.service --boot --no-pager -n 100 \
+              > "$RUNNER_TEMP/sidepulse-linux-evidence/service-journal.log" 2>&1 || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-installed-${{ matrix.path }}
+          path: ${{ runner.temp }}/sidepulse-linux-evidence/
+          if-no-files-found: warn
+      - name: Stop the test user's service
+        if: always()
+        run: |
+          if id test >/dev/null 2>&1; then
+            test_uid=$(id -u test)
+            sudo -iu test env XDG_RUNTIME_DIR="/run/user/$test_uid" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$test_uid/bus" \
+              systemctl --user stop sidepulse.service || true
+          fi

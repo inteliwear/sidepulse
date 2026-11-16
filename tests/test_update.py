@@ -77,4 +77,13 @@ class UpdateTests(unittest.TestCase):
     def test_cli_dispatches_update(self):
         with patch('sidepulse.update.update_installation', return_value=7) as update:
             self.assertEqual(sidepulse_main(['update']), 7)
-            update.assert_called_once_with(dry_run=False)
+            update.assert_called_once_with(dry_run=False, headless=False)
+
+    def test_headless_update_sets_noninteractive_for_downstream_installer(self):
+        with patch('sidepulse.update.subprocess.run') as run:
+            self.assertEqual(sidepulse_main(['update', '--headless']), 0)
+
+        download, execute = run.call_args_list
+        self.assertEqual(download.args[0][0], 'curl')
+        self.assertEqual(execute.args[0][0], 'bash')
+        self.assertEqual(execute.kwargs['env']['SIDEPULSE_SETUP_NONINTERACTIVE'], '1')

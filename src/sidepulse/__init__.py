@@ -7,11 +7,11 @@ from .battery import (
     read_battery_snapshot,
 )
 from .collector import AgentMonitor, LiveAgentMonitor, MonitorSnapshot, SourceSpec
+from .device_writer import DeviceCandidate, DeviceWriteError, discover_devices, write_led_program
 from .ipc import (
-    HookEventServer,
+    UICommandServer,
     default_event_socket_path,
     default_latest_state_path,
-    send_hook_event,
 )
 from .led_status import (
     AgentLedController,
@@ -33,6 +33,10 @@ from .lid_sleep import (
 from .models import AgentMode, AgentStatus, AggregateStatus, HookEvent
 
 __all__ = [
+    "DeviceCandidate",
+    "DeviceWriteError",
+    "discover_devices",
+    "write_led_program",
     "AgentLedController",
     "AgentMode",
     "AgentStatus",
@@ -42,7 +46,7 @@ __all__ = [
     "AgentMonitor",
     "LiveAgentMonitor",
     "HookEvent",
-    "HookEventServer",
+    "UICommandServer",
     "LedDisplayState",
     "MonitorSnapshot",
     "SourceSpec",
@@ -59,7 +63,6 @@ __all__ = [
     "sleep_helper_install_command",
     "sleep_helper_installed",
     "uninstall_sleep_helper",
-    "send_hook_event",
     "program_for_display_state",
     "write_mode_to_leds",
 ]
@@ -69,4 +72,7 @@ try:
 
     __version__ = version("sidepulse")
 except Exception:  # pragma: no cover - only an unpackaged source tree.
-    __version__ = "0+unknown"
+    try:  # Frozen applications can lack distribution metadata.
+        from ._build_info import version as __version__
+    except ImportError:
+        __version__ = "0+unknown"

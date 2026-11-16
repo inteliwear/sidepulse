@@ -63,6 +63,7 @@ class MacServiceLaunchTests(unittest.TestCase):
             ["launchctl", "bootout"], ["launchctl", "bootstrap"],
         ])
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_launcher_executes_original_service_command_with_spaces(self):
         interpreter = self.home / "python with spaces"
         interpreter.parent.mkdir(parents=True)
@@ -88,6 +89,7 @@ class MacServiceLaunchTests(unittest.TestCase):
         self.assertTrue(install_launch_agent(start=False, dry_run=False).changed)
         self.assertTrue(os.access(self.launcher, os.X_OK))
 
+    @unittest.skipIf(os.name == 'nt', 'macOS/POSIX desktop launcher or UI socket')
     def test_reinstall_repairs_launcher_permissions(self):
         install_launch_agent(start=False, dry_run=False)
         self.launcher.chmod(0o644)

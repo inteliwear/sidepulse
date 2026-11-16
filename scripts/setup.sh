@@ -1,15 +1,151 @@
 #!/bin/sh
 set -eu
 
+HEADLESS=${SIDEPULSE_SETUP_NONINTERACTIVE:-0}
+for option do
+    case "$option" in
+        --headless) HEADLESS=1 ;;
+        -h|--help)
+            printf 'Usage: sh setup.sh [--headless]\n'
+            printf '  --headless  Install all available components without prompting.\n'
+            exit 0
+            ;;
+        *)
+            printf 'Unknown setup option: %s\n' "$option" >&2
+            exit 2
+            ;;
+    esac
+done
+
 PYTHON_BIN=${PYTHON_BIN:-python3}
 INSTALL_SPEC=${SIDEPULSE_INSTALL_SPEC:-"git+https://github.com/inteliwear/sidepulse.git"}
 INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
+PLATFORM=$(uname -s)
+AGENT_MONITOR=1
+SD_EJECT_GUARD=1
+STATUS_BAR=1
+
+component_checkbox() {
+    if [ "$1" -eq 1 ]; then
+        printf '[x]'
+    else
+        printf '[ ]'
+    fi
+}
+
+select_components() {
+    while :; do
+        printf '\nSidePulse setup\n\nSelect optional components\n'
+        if [ "$PLATFORM" = Darwin ]; then
+            printf '  1  %s SD card ejection prevention (important for deep sleep)\n' "$(component_checkbox "$SD_EJECT_GUARD")"
+            printf '  2  %s Agent monitor\n' "$(component_checkbox "$AGENT_MONITOR")"
+            printf '  3  %s Status-bar indicator\n' "$(component_checkbox "$STATUS_BAR")"
+        else
+            printf '  1  %s Agent monitor\n' "$(component_checkbox "$AGENT_MONITOR")"
+        fi
+        printf '\nType a number then Enter to toggle. Press Enter to install, or type q to cancel.\n> '
+        IFS= read -r choice || return 1
+        case "$PLATFORM:$choice" in
+            Darwin:1) SD_EJECT_GUARD=$((1 - SD_EJECT_GUARD)) ;;
+            Darwin:3) STATUS_BAR=$((1 - STATUS_BAR)) ;;
+            Darwin:2|*:1) AGENT_MONITOR=$((1 - AGENT_MONITOR)) ;;
+            *:) return 0 ;;
+            *:q|*:Q) return 1 ;;
+        esac
+    done
+}
+
+# In curl | sh, stdin holds the script. Read the choices from the terminal.
+if [ "$HEADLESS" = 1 ]; then
+    export PIP_NO_INPUT=1 GIT_TERMINAL_PROMPT=0
+elif ( : </dev/tty ) 2>/dev/null; then
+    if ! select_components </dev/tty >/dev/tty; then
+        printf '\nSidePulse setup cancelled.\n'
+        exit 0
+    fi
+fi
+
+LOG_DIR=${XDG_STATE_HOME:-"$HOME/.local/state"}/sidepulse/setup
+mkdir -p "$LOG_DIR"
+SETUP_LOG=$(mktemp "$LOG_DIR/install.XXXXXX")
+exec 3>&1 4>&2
+exec >>"$SETUP_LOG" 2>&1
+
+WHEEL_DIR=
+SERVICE_STOPPED=0
+STATUS_BAR_STOPPED=0
+STATUS_BAR_PLIST="$HOME/Library/LaunchAgents/io.sidepulse.agentstatus.plist"
+LAUNCH_DOMAIN=
+
+resume_status_bar() {
+    if ! launchctl print "$LAUNCH_DOMAIN/io.sidepulse.agentstatus" >/dev/null 2>&1; then
+        launchctl bootstrap "$LAUNCH_DOMAIN" "$STATUS_BAR_PLIST" || return 1
+    fi
+    STATUS_BAR_STOPPED=0
+}
+
+cleanup() {
+    result=$?
+    trap - EXIT
+    if [ "$result" -ne 0 ]; then
+        if [ "$SERVICE_STOPPED" -eq 1 ]; then
+            "$VENV/bin/sidepulse" service start || printf 'Could not restart the background service.\n' >&2
+        fi
+        if [ "$STATUS_BAR_STOPPED" -eq 1 ]; then
+            resume_status_bar || printf 'Could not restart the menu-bar app.\n' >&2
+        fi
+        printf '\nSidePulse setup failed. Recent output:\n' >&4
+        tail -n 30 "$SETUP_LOG" >&4
+        printf '\nFull log: %s\n' "$SETUP_LOG" >&4
+    fi
+    if [ -n "$WHEEL_DIR" ]; then
+        rm -rf "$WHEEL_DIR" || :
+    fi
+    exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+printf '\nInstalling SidePulse…\n' >&3
+
+need_apple_tools() {
+    cat >&2 <<'EOF'
+SidePulse setup needs Apple Command Line Tools.
+
+1. Run: xcode-select --install
+2. Complete Apple's installer and wait for installation to finish.
+3. Run this SidePulse installer again.
+
+If the tools are already installed, select them with:
+  sudo xcode-select --switch /Library/Developer/CommandLineTools
+For a full Xcode installation, select its Contents/Developer directory instead.
+EOF
+    exit 1
+}
+
+APPLE_TOOLS=1
+if [ "$PLATFORM" = Darwin ]; then
+    # Check before calling Apple shims, which can launch the tools installer.
+    if ! xcode-select -p; then
+        APPLE_TOOLS=0
+        case "$INSTALL_SPEC" in
+            git+*) [ "$(command -v git || :)" != /usr/bin/git ] || need_apple_tools ;;
+        esac
+    fi
+    if [ "$SD_EJECT_GUARD" -eq 1 ]; then
+        [ "$APPLE_TOOLS" -eq 1 ] && xcrun --find clang || need_apple_tools
+    fi
+fi
 
 usable_python() {
-    command -v "$1" >/dev/null 2>&1 &&
-        "$1" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1
+    python_path=$(command -v "$1") || return 1
+    if [ "$APPLE_TOOLS" -eq 0 ] && [ "$python_path" = /usr/bin/python3 ]; then
+        return 1
+    fi
+    "$python_path" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null
 }
 
 install_macos_python() (
@@ -46,7 +182,7 @@ elif ! usable_python "$PYTHON_BIN"; then
     done
     if [ -n "$found_python" ]; then
         PYTHON_BIN=$found_python
-    elif [ "$(uname -s)" = "Darwin" ]; then
+    elif [ "$PLATFORM" = Darwin ]; then
         if ! PYTHON_BIN=$(install_macos_python) || ! usable_python "$PYTHON_BIN"; then
             printf 'Could not install Python for SidePulse. Check your internet connection and try again.\n' >&2
             exit 1
@@ -68,31 +204,6 @@ if [ ! -x "$VENV/bin/python" ]; then
 fi
 
 WHEEL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/sidepulse-setup.XXXXXX")
-SERVICE_STOPPED=0
-STATUS_BAR_STOPPED=0
-SETUP_COMPLETE=0
-STATUS_BAR_PLIST="$HOME/Library/LaunchAgents/io.sidepulse.agentstatus.plist"
-LAUNCH_DOMAIN="gui/$(id -u)"
-
-cleanup() {
-    result=$?
-    trap - EXIT
-    if [ "$SETUP_COMPLETE" -eq 0 ]; then
-        if [ "$SERVICE_STOPPED" -eq 1 ]; then
-            "$VENV/bin/sidepulse" service start || printf 'Could not restart the background service.\n' >&2
-        fi
-        if [ "$STATUS_BAR_STOPPED" -eq 1 ]; then
-            if ! launchctl print "$LAUNCH_DOMAIN/io.sidepulse.agentstatus" >/dev/null 2>&1; then
-                launchctl bootstrap "$LAUNCH_DOMAIN" "$STATUS_BAR_PLIST" || printf 'Could not restart the menu-bar app.\n' >&2
-            fi
-        fi
-    fi
-    rm -rf "$WHEEL_DIR"
-    exit "$result"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # Fetch and build everything before pausing services. GitHub/network/build
 # failures leave the installed code and running services alone.
@@ -108,7 +219,8 @@ if [ -x "$VENV/bin/sidepulse" ] && "$VENV/bin/sidepulse" service status >/dev/nu
     "$VENV/bin/sidepulse" service stop
     SERVICE_STOPPED=1
 fi
-if [ "$(uname -s)" = "Darwin" ] && [ -f "$STATUS_BAR_PLIST" ]; then
+if [ "$PLATFORM" = Darwin ] && [ -f "$STATUS_BAR_PLIST" ]; then
+    LAUNCH_DOMAIN="gui/$(id -u)"
     if launchctl print "$LAUNCH_DOMAIN/io.sidepulse.agentstatus" >/dev/null 2>&1; then
         launchctl bootout "$LAUNCH_DOMAIN" "$STATUS_BAR_PLIST"
         STATUS_BAR_STOPPED=1
@@ -122,15 +234,33 @@ fi
 
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/sidepulse" "$BIN_DIR/sidepulse"
-ln -sf "$VENV/bin/agent-monitor" "$BIN_DIR/agent-monitor"
+ln -sf "$VENV/bin/sidepulse" "$BIN_DIR/sp"
+# Remove only aliases owned by this installation, including broken symlinks.
+for legacy in agent-monitor agent-status-bar; do
+    if [ -L "$BIN_DIR/$legacy" ] && [ "$(readlink "$BIN_DIR/$legacy")" = "$VENV/bin/$legacy" ]; then
+        rm "$BIN_DIR/$legacy"
+    fi
+done
 
-"$VENV/bin/sidepulse" setup
-SETUP_COMPLETE=1
+set -- setup
+if [ "$AGENT_MONITOR" -eq 0 ]; then
+    set -- "$@" --no-agent-monitor
+fi
+if [ "$SD_EJECT_GUARD" -eq 0 ]; then
+    set -- "$@" --no-sd-eject-guard
+fi
+if [ "$STATUS_BAR" -eq 0 ]; then
+    set -- "$@" --no-status-bar
+fi
+"$VENV/bin/sidepulse" "$@"
+if [ "$STATUS_BAR" -eq 0 ] && [ "$STATUS_BAR_STOPPED" -eq 1 ]; then
+    resume_status_bar
+fi
 "$VENV/bin/sidepulse" --version
 
-printf '\nSidePulse is installed.\n'
-printf 'Command: %s\n' "$BIN_DIR/sidepulse"
+printf 'SidePulse is installed.\n' >&3
+printf 'Command: %s\n' "$BIN_DIR/sidepulse" >&3
 case ":${PATH:-}:" in
     *":$BIN_DIR:"*) ;;
-    *) printf 'Add %s to PATH to run sidepulse directly.\n' "$BIN_DIR" ;;
+    *) printf 'Add %s to PATH to run sidepulse directly.\n' "$BIN_DIR" >&3 ;;
 esac

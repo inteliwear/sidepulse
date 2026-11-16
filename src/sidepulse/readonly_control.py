@@ -9,30 +9,12 @@ import subprocess
 import sys
 
 from .device_writer import DeviceWriteError
+from .status_reader import read_status_bytes
 
 # Accessed with device_write_lock held. A service tick is not authorization to
 # resubmit a USB command whose acknowledgement was lost. An explicit new CLI
 # invocation or a different program can start a new command.
 _uncertain_programs: dict[Path, bytes] = {}
-
-
-def read_status_bytes(path: Path) -> bytes:
-    """Read status with the read-only, uncached macOS transport."""
-    if sys.platform == "darwin":
-        from ._vendor.read2me import _MacFile
-
-        with _MacFile(path) as stream:
-            stream.invalidate_cache()
-            data = b""
-            for offset in range(0, 4096, 512):
-                block = stream.read_at(offset)
-                data += block
-                if len(block) < 512:
-                    break
-    else:
-        with path.open("rb") as stream:
-            data = stream.read(4096)
-    return data
 
 
 def read_device_info(root: Path) -> tuple[str, str]:

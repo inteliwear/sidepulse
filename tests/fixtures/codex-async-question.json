@@ -1,0 +1,167 @@
+{
+  "source": "Real Codex CLI 0.164.0 visual run 20261026-221928-visual-codex-abe24f; session identifiers sanitized",
+  "sequence": [
+    {
+      "event": {
+        "hook_event_name": "SessionStart",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "idle_ready"
+    },
+    {
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Use your shell tool to run `sleep 5; cat fixture.txt`. Then report the exact file contents and say that the task is complete. Do not modify files.",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "working"
+    },
+    {
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "sleep 5; cat fixture.txt"
+        },
+        "tool_use_id": "exec-28fd8fab-8a1b-4e7a-8e73-023472dfff07",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "tool_running"
+    },
+    {
+      "event": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "sleep 5; cat fixture.txt"
+        },
+        "tool_use_id": "exec-28fd8fab-8a1b-4e7a-8e73-023472dfff07",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "working"
+    },
+    {
+      "event": {
+        "hook_event_name": "Stop",
+        "last_assistant_message": "The task is complete.",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "completed"
+    },
+    {
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "use your interactive question tool to ask me whether this test should use red or blue. wait for my choice, then report it and finish.",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "working"
+    },
+    {
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "request_user_input_async",
+        "tool_input": {
+          "questions": [
+            {
+              "title": "Should this test use red or blue?",
+              "options": [
+                "Red",
+                "Blue"
+              ]
+            }
+          ]
+        },
+        "tool_use_id": "call_106fe4cb7f3342cf82becd4f6b41325e",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "request_user_input_async",
+        "tool_input": {
+          "questions": [
+            {
+              "title": "Should this test use red or blue?",
+              "options": [
+                "Red",
+                "Blue"
+              ]
+            }
+          ]
+        },
+        "tool_response": "{\"accepted\":true}",
+        "tool_use_id": "call_106fe4cb7f3342cf82becd4f6b41325e",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "clocksleep",
+        "tool_input": {
+          "duration_ms": 60000
+        },
+        "tool_use_id": "call_81966b4675ad4a78a5c54b6d64eda4cc",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "clocksleep",
+        "tool_input": {
+          "duration_ms": 60000
+        },
+        "tool_response": "Wall time: 60.0044 seconds\nSleep completed.",
+        "tool_use_id": "call_81966b4675ad4a78a5c54b6d64eda4cc",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "clocksleep",
+        "tool_input": {
+          "duration_ms": 60000
+        },
+        "tool_use_id": "call_7b16c26e47a64707a772b6e423ea5078",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "clocksleep",
+        "tool_input": {
+          "duration_ms": 60000
+        },
+        "tool_response": "Wall time: 46.7995 seconds\nSleep interrupted by new input.",
+        "tool_use_id": "call_7b16c26e47a64707a772b6e423ea5078",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "waiting_for_input"
+    },
+    {
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "red",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "working"
+    },
+    {
+      "event": {
+        "hook_event_name": "Stop",
+        "last_assistant_message": "The task is complete.",
+        "session_id": "recorded-codex-session"
+      },
+      "expected_mode": "completed"
+    }
+  ]
+}

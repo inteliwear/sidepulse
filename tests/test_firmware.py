@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 import zipfile
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,6 +72,18 @@ class FirmwareTests(unittest.TestCase):
     def test_explicit_renamed_drive_uses_status_not_volume_name(self):
         self.assertEqual(sidepulse_main(['firmware', 'version', '--device', str(self.device)]), 0)
         self.assertIn('SidePulse Pro: 1.0.5', self.stdout.getvalue())
+
+    def test_version_uses_uncached_status_reader(self):
+        status = b'release_version 1.1.0\nserial SP-123\n'
+        with patch.object(firmware, 'read_status_bytes', return_value=status) as read:
+            self.assertEqual(sidepulse_main(['firmware', 'version', '--device', str(self.device)]), 0)
+        read.assert_called_once_with(self.device.resolve() / 'STATUS.TXT', max_bytes=65536)
+        self.assertIn('SidePulse Pro: 1.1.0', self.stdout.getvalue())
+
+    def test_version_fails_if_cache_invalidation_fails(self):
+        with patch.object(firmware, 'read_status_bytes', side_effect=OSError('invalidation failed')):
+            self.assertEqual(sidepulse_main(['firmware', 'version', '--device', str(self.device)]), 1)
+        self.assertIn('invalidation failed', self.stderr.getvalue())
 
     def test_missing_device_fails_without_download(self):
         with patch.dict('os.environ', {'SIDEPULSE_MOUNT_ROOTS': str(self.root / 'missing')}), patch.object(firmware, 'download') as download:
@@ -141,7 +154,12 @@ class FirmwareTests(unittest.TestCase):
     def test_symlink_target_is_rejected(self):
         outside = self.root / 'unrelated'
         outside.write_bytes(b'keep me')
-        (self.device / 'FIRMWARE.BIN').symlink_to(outside)
+        try:
+            (self.device / 'FIRMWARE.BIN').symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account cannot create symlinks")
+            raise
         self.assertEqual(self.upgrade(self.make_package()), 1)
         self.assertEqual(outside.read_bytes(), b'keep me')
 

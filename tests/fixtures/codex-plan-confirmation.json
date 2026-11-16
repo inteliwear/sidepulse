@@ -1,0 +1,48 @@
+{
+  "source": "Sanitized real Codex CLI 0.164.0 plan-confirmation failure 20261027-085321-visual-codex-37a351; reviewed frames 85 and 95 show Implement this plan?",
+  "hook": {
+    "hook_event_name": "Stop",
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "22222222-2222-4222-8222-222222222222",
+    "permission_mode": "default",
+    "last_assistant_message": null
+  },
+  "transcript": [
+    {
+      "type": "turn_context",
+      "payload": {
+        "turn_id": "22222222-2222-4222-8222-222222222222",
+        "collaboration_mode": {
+          "mode": "plan"
+        }
+      }
+    },
+    {
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "<proposed_plan>\n### Test plan\n\n1. Run `sleep 5` using the shell tool without modifying files.\n2. Provide a detailed report confirming **Red** as the test color and **Detailed** as the report style, then state: \u201cThe test is complete.\u201d\n\nBoth choices have been received. Execution is pending because Plan Mode is active.\n</proposed_plan>",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "22222222-2222-4222-8222-222222222222"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "payload": {
+        "type": "task_complete",
+        "turn_id": "22222222-2222-4222-8222-222222222222",
+        "last_agent_message": null
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from privacy import assert_private_file
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -63,7 +64,7 @@ class AndroidLinkTests(unittest.TestCase):
             store_phone_link(pixel, path)
             store_phone_link(other, path)
             self.assertEqual(store_phone_link(updated, path), (iphone, updated, other))
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            assert_private_file(path)
             self.assertEqual(remove_phone_link(updated.token, path), updated)
             self.assertEqual(load_phone_links(path), (iphone, other))
 

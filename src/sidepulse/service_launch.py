@@ -42,6 +42,9 @@ def build_service_launcher_script() -> str:
 
 
 def install_service(*, start: bool = True, dry_run: bool = False) -> ServiceInstallResult:
+    if sys.platform == 'win32':
+        from .windows_service import install
+        return install(start=start, dry_run=dry_run)
     if sys.platform == "darwin":
         return install_launch_agent(start=start, dry_run=dry_run)
     if sys.platform.startswith("linux"):
@@ -168,7 +171,38 @@ def install_systemd_user_service(*, start: bool, dry_run: bool) -> ServiceInstal
     return ServiceInstallResult(path, changed, False, detail)
 
 
+def restart_service() -> ServiceInstallResult:
+    """Recover the installed service without registering the caller's Python/app."""
+    if sys.platform == 'win32':
+        from .windows_service import restart
+        return restart()
+    if sys.platform == 'darwin':
+        path = Path.home() / 'Library' / 'LaunchAgents' / f'{SERVICE_LABEL}.plist'
+        if not path.is_file():
+            return ServiceInstallResult(path, False, False, 'Service is not installed; run sidepulse setup')
+        domain = f'gui/{os.getuid()}'
+        result = subprocess.run(['launchctl', 'kickstart', '-k', f'{domain}/{SERVICE_LABEL}'],
+                                check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            # An installed plist may not be loaded, for example after a stop.
+            result = subprocess.run(['launchctl', 'bootstrap', domain, str(path)],
+                                    check=False, capture_output=True, text=True)
+        return ServiceInstallResult(path, False, result.returncode == 0, result.stderr.strip())
+    if sys.platform.startswith('linux'):
+        path = Path.home() / '.config' / 'systemd' / 'user' / 'sidepulse.service'
+        systemctl = shutil.which('systemctl')
+        if not path.is_file() or systemctl is None:
+            return ServiceInstallResult(path, False, False, 'Service is not installed or systemd is unavailable')
+        result = subprocess.run([systemctl, '--user', 'restart', 'sidepulse.service'],
+                                check=False, capture_output=True, text=True)
+        return ServiceInstallResult(path, False, result.returncode == 0, result.stderr.strip())
+    return ServiceInstallResult(Path(), False, False, 'unsupported platform')
+
+
 def stop_service() -> bool:
+    if sys.platform == 'win32':
+        from .windows_service import stop
+        return stop()
     if sys.platform == "darwin":
         path = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
         domain = f"gui/{subprocess.check_output(['id', '-u'], text=True).strip()}"
@@ -192,6 +226,9 @@ def stop_service() -> bool:
 
 
 def service_is_running() -> bool:
+    if sys.platform == 'win32':
+        from .windows_service import alive
+        return alive()
     if sys.platform == "darwin":
         domain = f"gui/{subprocess.check_output(['id', '-u'], text=True).strip()}"
         result = subprocess.run(

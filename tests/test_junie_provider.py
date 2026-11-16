@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from hook_assertions import command_text, fail_open
 from sidepulse.collector import (
     AgentMonitor,
     LiveAgentMonitor,
     SourceSpec,
     agent_status_from_dict,
 )
-from sidepulse.cli import build_parser
+from sidepulse.cli import build_sidepulse_parser
 from sidepulse.hook import normalize_junie_payload
 from sidepulse.install import install_junie_hooks, uninstall_junie_hooks
 from sidepulse.models import AgentMode, AgentStatus
@@ -234,7 +235,7 @@ class JunieProviderTests(unittest.TestCase):
                 for hook in entry["hooks"]
             ]
             self.assertIn("python guard.py", pre_tool_commands)
-            self.assertTrue(any("--provider junie" in command for command in pre_tool_commands))
+            self.assertTrue(any("--provider junie" in command_text(command) for command in pre_tool_commands))
             self.assertTrue(log.exists())
 
             second = install_junie_hooks(
@@ -330,8 +331,8 @@ class JunieProviderTests(unittest.TestCase):
             )
 
     def test_cli_accepts_junie_and_custom_log_path(self) -> None:
-        args = build_parser().parse_args(
-            ["install", "junie", "--junie-log", "/tmp/custom-junie.jsonl"]
+        args = build_sidepulse_parser().parse_args(
+            ["setup", "junie", "--junie-log", "/tmp/custom-junie.jsonl"]
         )
 
         self.assertEqual(args.provider, "junie")

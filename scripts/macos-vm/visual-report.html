@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>SidePulse · Screen comparison</title>
+<style>
+body{margin:0;background:#10151c;color:#e4ebf4;font:15px system-ui}header{padding:20px 28px;border-bottom:1px solid #334155}
+h1{font-size:23px;margin:0 0 8px}p{color:#aebed0}main{padding:20px;display:grid;grid-template-columns:2fr 1fr;gap:20px}
+img{width:100%;background:#000;border:1px solid #334155}section{min-width:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#18212e;padding:12px;max-height:320px;overflow:auto;font-size:12px}
+button,select{padding:9px;margin:5px;border:1px solid #63758b;border-radius:6px;background:#233146;color:white}input{width:100%;margin:20px 0}
+.state{font-size:20px;color:#98d9ff}.good{color:#8be3b0}.bad{color:#ffa3a3}a{color:#98d9ff}.note{font-size:13px}@media(max-width:900px){main{grid-template-columns:1fr}}
+</style>
+<header><h1 id="title"></h1><div id="summary"></div>
+<p>Inspect the agent’s actual screen, label its visible state, and compare with SidePulse at capture time. Screenshots are the independent evidence; hooks alone cannot establish correctness.</p>
+<button id="back">← Previous</button><button id="play">Play</button><button id="next">Next →</button><button id="export">Export review labels</button>
+<a href="terminal.raw">Raw terminal recording</a> · <a href="recording.json">Full evidence</a></header>
+<main><section><div id="time"></div><input id="slider" type="range" min="0" value="0" step="1"><img id="screen" alt="Guest display captured during the real agent session">
+<p class="note">The screenshot covers the guest display. Keep the agent visible during recording. LED file contents show what was written, not a camera observation of the physical LEDs.</p></section>
+<section><h2>What the screen shows</h2><select id="expected"><option value="">Unreviewed</option></select><div id="verdict"></div>
+<h2>SidePulse detected</h2><div id="detected" class="state"></div><h3>LEDS.LED at capture</h3><pre id="led"></pre>
+<details><summary>Daemon before / after capture</summary><pre id="daemon"></pre></details>
+<details><summary>Raw hooks for this recording</summary><pre id="hooks"></pre></details></section></main>
+<script>
+const data = /* RECORDING_DATA */;
+const modes=['idle_ready','working','tool_running','waiting_for_input','blocked_error','completed'];
+const labels={...(data.review_labels||{})}; let index=0, timer=null;
+const mismatch=data.frames.findIndex(f=>labels[f.id]&&!f.detected.includes(labels[f.id]));
+const firstReviewed=data.frames.findIndex(f=>labels[f.id]);
+index=mismatch>=0?mismatch:Math.max(0,firstReviewed);
+const $=id=>document.getElementById(id);
+for(const mode of modes){const option=document.createElement('option');option.value=mode;option.textContent=mode.replaceAll('_',' ');$('expected').append(option)}
+$('title').textContent=`${data.provider} · Actual screen vs SidePulse`;
+$('slider').max=Math.max(0,data.frames.length-1);
+$('hooks').textContent=JSON.stringify(data.hooks,null,2);
+function draw(){
+ const f=data.frames[index]; if(!f){$('summary').textContent='No captured frames. This recording is incomplete.';return}
+ $('slider').value=index; $('time').textContent=`Frame ${f.id} · ${f.t.toFixed(2)}–${f.end_t.toFixed(2)} seconds`;
+ $('screen').hidden=!f.screenshot;if(f.screenshot)$('screen').src=f.screenshot;
+ $('detected').textContent=f.detected.join(' / ')||'No matching session detected';
+ $('expected').value=labels[f.id]||'';
+ const expected=labels[f.id], match=expected&&f.screenshot&&f.detected.includes(expected);
+ $('verdict').textContent=!expected?'Awaiting visual review':match?'Matches visible state':'Mismatch / missing detection';
+ $('verdict').className=!expected?'':match?'good':'bad';
+ $('led').textContent=f.led.text??f.led.error;
+ $('daemon').textContent=JSON.stringify({before:f.before,after:f.after,capture_error:f.capture_error},null,2);
+ const reviewed=data.frames.filter(x=>labels[x.id]), wrong=reviewed.filter(x=>!x.screenshot||!x.detected.includes(labels[x.id]));
+ const covered=new Set(Object.values(labels)), missing=['working','waiting_for_input','completed'].filter(x=>!covered.has(x));
+ $('summary').textContent=`${reviewed.length}/${data.frames.length} frames reviewed · ${wrong.length} mismatches · Missing coverage: ${missing.join(', ')||'none'}${data.recording_error?' · Recording error: '+data.recording_error:''}`;
+}
+$('slider').oninput=e=>{index=Number(e.target.value);draw()};
+$('back').onclick=()=>{index=Math.max(0,index-1);draw()};$('next').onclick=()=>{index=Math.min(data.frames.length-1,index+1);draw()};
+$('expected').onchange=e=>{if(e.target.value)labels[data.frames[index].id]=e.target.value;else delete labels[data.frames[index].id];draw()};
+$('play').onclick=()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='Play'}else{$('play').textContent='Pause';timer=setInterval(()=>{if(index<data.frames.length-1){index++;draw()}else{clearInterval(timer);timer=null;$('play').textContent='Play'}},1000)}};
+$('export').onclick=()=>{const blob=new Blob([JSON.stringify({run_id:data.run_id,labels},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`review-${data.run_id}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+draw();
+</script></html>
