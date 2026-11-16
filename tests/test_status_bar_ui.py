@@ -83,6 +83,7 @@ from sidepulse.firmware import FirmwareDevice  # noqa: E402
 from sidepulse.firmware_status import FirmwareStatus  # noqa: E402
 from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
+from sidepulse.providers import HOOK_PROVIDERS  # noqa: E402
 from sidepulse.settings import AgentMonitorSettings  # noqa: E402
 
 
@@ -641,8 +642,9 @@ class MenuBuildTests(StatusBarTestCase):
     def test_menu_includes_core_actions(self):
         menu = sb.build_menu(make_snapshot(), sb.STATE_IDLE, self.controller)
         titles = [item.title() for item in walk_menu(menu)]
-        for expected in ("Setup...", "Settings...", "Quit"):
+        for expected in ("Settings...", "Quit"):
             self.assertIn(expected, titles)
+        self.assertNotIn("Setup...", titles)
 
     def test_menu_shows_linked_iphone_as_connected_device(self):
         link = sb.IOSLink(
@@ -787,6 +789,22 @@ class WindowBuildTests(StatusBarTestCase):
             {130.0},
         )
         self.assert_controls_are_wired(window)
+
+    def test_advanced_settings_can_open_setup(self):
+        window = sb.build_settings_window(self.controller)
+        tab_view = next(
+            view for view in window.contentView().subviews()
+            if hasattr(view, "numberOfTabViewItems")
+        )
+        advanced = tab_view.tabViewItemAtIndex_(
+            tab_view.indexOfTabViewItemWithIdentifier_("behavior")
+        ).view()
+        setup = next(
+            view for view in walk_views(advanced)
+            if isinstance(view, NSButton) and view.title() == "Open Setup…"
+        )
+        self.assertIn(setup.action(), ("openSetup:", b"openSetup:"))
+        self.assertEqual(setup.target(), self.controller)
 
     def test_settings_window_resizes_for_compact_animations_tab(self):
         window = sb.build_settings_window(self.controller)
@@ -1469,9 +1487,32 @@ class IconTests(StatusBarTestCase):
                 self.assertIsInstance(sb.session_row_icon_for_status(status), NSImage)
 
     def test_provider_icons_do_not_raise(self):
-        for provider in ("claude", "codex", "grok", "opencode", "nonsense"):
+        for provider in (*HOOK_PROVIDERS, "opencode", "nonsense"):
             with self.subTest(provider=provider):
-                sb.provider_icon_for_provider(provider)
+                self.assertIsInstance(sb.provider_icon_for_provider(provider), NSImage)
+
+    def test_every_provider_has_a_distinct_builtin_icon_without_apps_or_symbols(self):
+        rendered = set()
+        providers = (*HOOK_PROVIDERS, "opencode", "custom-agent", "")
+        with (
+            patch.dict(sb._provider_icon_cache, clear=True),
+            patch.object(sb, "app_icon", return_value=None),
+            patch.object(sb, "provider_app_icon", return_value=None),
+            patch.object(sb, "image_for_symbol", return_value=None),
+        ):
+            for provider in providers:
+                with self.subTest(provider=provider):
+                    image = sb.provider_icon_for_provider(provider)
+                    self.assertIsInstance(image, NSImage)
+                    self.assertEqual(tuple(image.size()), (18, 18))
+                    self.assertFalse(image.isTemplate())
+                    bitmap = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+                    self.assertGreater(bitmap.colorAtX_y_(
+                        bitmap.pixelsWide() // 2, bitmap.pixelsHigh() // 2,
+                    ).alphaComponent(), 0)
+                    rendered.add(bytes(image.TIFFRepresentation()))
+                    self.assertIs(sb.provider_icon_for_provider(provider.upper()), image)
+        self.assertEqual(len(rendered), len(providers))
 
     def test_mapped_providers_look_up_their_own_bundle(self):
         """The generic fallback would absorb a deleted branch without failing.

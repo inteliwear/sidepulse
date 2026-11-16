@@ -396,9 +396,8 @@ another bridge origin.
 
 ### Link a remote VM or computer (WIP)
 
-The receiving Mac gets a persistent, random relay channel during setup. Run
-`sidepulse link` on the Mac to see the short command for another computer, then
-paste that command into the VM. It looks like this:
+Run `sidepulse link` on the receiving Mac to enable the relay and get the command
+for the other computer. Paste that command into the VM. It looks like this:
 
 ```sh
 sidepulse link AbCdEfGhIjKlMnOpQrStUv
@@ -808,7 +807,7 @@ On first launch, the status-bar app shows a SidePulse Setup window. It can:
 - install or uninstall SidePulse Pro Eject Prevention, which keeps SidePulse Pro/SidePulse Dot available after sleep;
 - open the one-time closed-lid sleep prevention installer in Terminal.
 
-The Setup window can be reopened from the dropdown with `Setup...`.
+To reopen Setup, choose **Settings… → Advanced → Open Setup…**.
 
 The status-bar item uses a single icon, with the current state in its tooltip:
 
