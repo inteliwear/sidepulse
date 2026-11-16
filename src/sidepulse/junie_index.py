@@ -12,8 +12,12 @@ JUNIE_SESSION_INDEX_MAX_LINES = 5000
 
 @dataclass(frozen=True)
 class JunieSessionInfo:
-    title: str | None
+    task_name: str | None
     project_dir: str | None
+
+    @property
+    def title(self) -> str | None:
+        return truncate_text(self.task_name, 72) if self.task_name else None
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,7 @@ def junie_session_index(path: Path | None = None) -> dict[str, JunieSessionInfo]
             session_id = _string_or_none(row.get("sessionId") or row.get("session_id"))
             if not session_id:
                 continue
-            title = _string_or_none(row.get("taskName") or row.get("task_name"))
+            task_name = _string_or_none(row.get("taskName") or row.get("task_name"))
             project_dir = _string_or_none(
                 row.get("projectDir")
                 or row.get("project_dir")
@@ -71,9 +75,7 @@ def junie_session_index(path: Path | None = None) -> dict[str, JunieSessionInfo]
                 or row.get("project_path")
             )
             sessions[session_id] = JunieSessionInfo(
-                title=truncate_text(title.strip(), 72)
-                if title and title.strip()
-                else None,
+                task_name=(task_name or "").strip() or None,
                 project_dir=project_dir,
             )
 

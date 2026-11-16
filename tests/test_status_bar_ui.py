@@ -886,6 +886,36 @@ class WindowBuildTests(StatusBarTestCase):
 
         focus.assert_called_once_with(window, tab, second, app)
 
+    def test_focus_running_junie_in_ghostty_1_3_requires_a_unique_exact_task_name(self):
+        task_name = "Continue reviewing the complete task name even when the menu title is shortened"
+        session = SimpleNamespace(task_name=task_name)
+        terminal = sb.JunieTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
+        pane = SimpleNamespace(name=lambda: task_name)
+        for other_name, should_focus in [(f"{task_name} 2", True), (task_name, False)]:
+            with self.subTest(other_name=other_name):
+                other = SimpleNamespace(name=lambda: other_name)
+                tab = SimpleNamespace(terminals=lambda: [other, pane])
+                window = SimpleNamespace(tabs=lambda: [tab])
+                app = SimpleNamespace(
+                    version=lambda: "1.3.1",
+                    isRunning=lambda: True,
+                    windows=lambda: [window],
+                )
+                with (
+                    patch.object(sb, "ghostty_application", return_value=app),
+                    patch.object(sb, "junie_session_info", return_value=session) as lookup,
+                    patch.object(sb, "focus_ghostty_terminal") as focus,
+                ):
+                    self.assertEqual(
+                        sb.focus_junie_terminal(terminal, session_id="junie-session"),
+                        should_focus,
+                    )
+                lookup.assert_called_once_with("junie-session")
+                if should_focus:
+                    focus.assert_called_once_with(window, tab, pane, app)
+                else:
+                    focus.assert_not_called()
+
     def test_open_junie_session_in_exact_ide_app_uses_app_path(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")
         with (
