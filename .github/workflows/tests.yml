@@ -94,9 +94,14 @@ jobs:
           SIDEPULSE_REQUIRE_UI_TESTS: "1"
         run: python -m pytest tests/test_status_bar_ui.py -v
 
+      - name: Menu-bar CPU budget
+        env:
+          SIDEPULSE_REQUIRE_UI_TESTS: "1"
+        run: python -m pytest tests/test_status_bar_cpu.py -q -s
+
       # Catch-all for anything the named steps above do not cover. The
-      # clean-room install already ran, so skip rebuilding its virtualenv.
+      # clean-room install and CPU probe already ran.
       - name: Full suite
         env:
           SIDEPULSE_SKIP_CLEAN_INSTALL: "1"
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --ignore=tests/test_status_bar_cpu.py

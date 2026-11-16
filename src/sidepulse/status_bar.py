@@ -61,6 +61,7 @@ try:
         NSViewHeightSizable,
         NSViewWidthSizable,
         NSWorkspace,
+        NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
         NSWindow,
         NSWindowStyleMaskClosable,
         NSWindowStyleMaskMiniaturizable,
@@ -234,6 +235,7 @@ from .settings import (
     with_imported_agent_animation_profile,
 )
 from .status_bar_launch import install_launch_agent, launch_agent_installed
+from .status_icon import NativeStatusIconRenderer
 
 
 @dataclass(frozen=True)
@@ -497,6 +499,8 @@ class StatusBarController(NSObject):
         self.event_server = None
         self.status_item = None
         self.status_icon_timer = None
+        self.status_icon_renderer = None
+        self.status_icon_native_failed = False
         self.tracking_status_menu = None
         self.timer = None
         self.device_timer = None
@@ -552,10 +556,12 @@ class StatusBarController(NSObject):
         )
         button = self.status_item.button()
         button.setTitle_("")
-        button.setImage_(image_for_symbol(STATE_IDLE.symbol, STATE_IDLE.label))
-        button.setToolTip_("SidePulse Agent Monitor: Idle")
-        button.setAccessibilityLabel_("SidePulse Agent Monitor: Idle")
         self.status_item.setVisible_(self.settings.show_menu_bar_icon)
+        self.set_status(STATE_IDLE)
+        NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+            self, "statusIconAccessibilityChanged:",
+            NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification, None,
+        )
         log_status_bar("status item created")
 
         self.refresh_(None)
@@ -1115,7 +1121,12 @@ class StatusBarController(NSObject):
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
+        NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_name_object_(
+            self, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification, None,
+        )
         self.stop_status_icon_animation()
+        if self.status_icon_renderer is not None:
+            self.status_icon_renderer.close()
         self.stop_agent_animation_preview_timer()
         self.stop_event_server()
 
@@ -1127,8 +1138,6 @@ class StatusBarController(NSObject):
         button = self.status_item.button()
         if button is None:
             return
-        button.setTitle_("")
-        button.setImage_(image_for_symbol(state.symbol, state.label))
         label = f"SidePulse Agent Monitor: {state.label}"
         if self.device_errors:
             label += " — LED output failed"
@@ -1140,12 +1149,12 @@ class StatusBarController(NSObject):
 
     def menuWillOpen_(self, menu):
         self.tracking_status_menu = menu
-        self.update_status_icon_animation()
+        self.update_status_menu_icons()
 
     def menuDidClose_(self, menu):
         if self.tracking_status_menu == menu:
             self.tracking_status_menu = None
-        self.update_status_icon_animation()
+        self.update_status_menu_icons()
 
     def stop_status_icon_animation(self) -> None:
         if self.status_icon_timer is not None:
@@ -1153,25 +1162,68 @@ class StatusBarController(NSObject):
             self.status_icon_timer = None
 
     @objc.IBAction
-    def animateStatusIcons_(self, _timer):
+    def animateStatusMenuIcons_(self, _timer):
+        self.update_status_menu_icons()
+
+    @objc.IBAction
+    def statusIconAccessibilityChanged_(self, _notification):
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "refreshStatusIconAnimation:", None, False,
+        )
+
+    @objc.IBAction
+    def refreshStatusIconAnimation_(self, _sender):
         self.update_status_icon_animation()
 
     def update_status_icon_animation(self) -> None:
-        visible = self.status_item is not None and self.status_item.isVisible()
+        if self.status_item is not None:
+            renderer = self.status_icon_renderer
+            if self.status_item.isVisible():
+                button = self.status_item.button()
+                if button is not None:
+                    if renderer is None and not self.status_icon_native_failed:
+                        renderer = NativeStatusIconRenderer(
+                            button, duration=STATUS_ICON_FRAME_SECONDS * STATUS_ICON_FRAME_COUNT,
+                        )
+                        self.status_icon_renderer = renderer
+                    self.update_status_button_icon(button, renderer)
+            elif renderer is not None:
+                renderer.hide()
+        self.update_status_menu_icons()
+
+    def update_status_button_icon(self, button, renderer) -> None:
+        state = self.current_state
+        motion = None
+        if renderer is not None and not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion():
+            motion = {STATE_WORKING: "spin", STATE_ASK: "pulse"}.get(state)
+        static_icon = image_for_symbol(state.symbol, state.label)
+        if renderer is not None:
+            try:
+                image = animated_status_icon(state, 0) if motion else static_icon
+                renderer.update(image, motion)
+                return
+            except Exception as exc:
+                log_status_bar(f"native status icon unavailable: {exc}")
+                renderer.close()
+                self.status_icon_renderer = None
+                self.status_icon_native_failed = True
+        if button.image() != static_icon:
+            button.setImage_(static_icon)
+
+    def update_status_menu_icons(self) -> None:
         rows = []
         if self.tracking_status_menu is not None:
             for item in self.tracking_status_menu.itemArray():
                 status = item.representedObject()
                 if isinstance(status, AgentStatus) and item.action() == "openSessionPrimary:":
                     rows.append((item, status))
-        motion = not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-        animated = motion and (
-            (visible and self.current_state in (STATE_WORKING, STATE_ASK))
-            or any(state_for_mode(status.mode) in (STATE_WORKING, STATE_ASK) for _, status in rows)
+        animated = (
+            any(state_for_mode(status.mode) in (STATE_WORKING, STATE_ASK) for _, status in rows)
+            and not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
         )
         if animated and self.status_icon_timer is None:
             self.status_icon_timer = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
-                STATUS_ICON_FRAME_SECONDS, self, "animateStatusIcons:", None, True,
+                STATUS_ICON_FRAME_SECONDS, self, "animateStatusMenuIcons:", None, True,
             )
             self.status_icon_timer.setTolerance_(0.005)
             run_loop = NSRunLoop.mainRunLoop()
@@ -1180,20 +1232,15 @@ class StatusBarController(NSObject):
         elif not animated:
             self.stop_status_icon_animation()
 
-        frame = int(time.monotonic() / STATUS_ICON_FRAME_SECONDS) % STATUS_ICON_FRAME_COUNT
-        if visible:
-            state = self.current_state
-            icon = (
-                animated_status_icon(state, frame)
-                if animated and state in (STATE_WORKING, STATE_ASK)
-                else image_for_symbol(state.symbol, state.label)
-            )
-            self.status_item.button().setImage_(icon)
         if rows:
+            frame = (
+                int(time.monotonic() / STATUS_ICON_FRAME_SECONDS) % STATUS_ICON_FRAME_COUNT
+                if animated else None
+            )
             dark_mode = is_dark_appearance(self.tracking_status_menu.effectiveAppearance())
             for item, status in rows:
                 item.setImage_(session_row_icon_for_status(
-                    status, frame if animated else None, dark_mode=dark_mode,
+                    status, frame, dark_mode=dark_mode,
                 ))
 
     def build_monitor(self):

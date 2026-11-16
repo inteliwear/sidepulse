@@ -64,6 +64,7 @@ def tearDownModule():
 from AppKit import (  # noqa: E402
     NSApplication,
     NSBitmapImageRep,
+    NSButton,
     NSControl,
     NSEvent,
     NSEventModifierFlagCommand,
@@ -204,13 +205,25 @@ class MenuBarVisibilityTests(StatusBarTestCase):
         controller = sb.StatusBarController.alloc().init()
         self.addCleanup(controller.stop_status_icon_animation)
         controller.status_item = Mock()
-        button = controller.status_item.button.return_value
-        for state in (sb.STATE_IDLE, sb.STATE_WORKING, sb.STATE_DONE, sb.STATE_ASK):
-            controller.set_status(state)
-            button.setTitle_.assert_called_with("")
-            self.assertIsNotNone(button.setImage_.call_args.args[0])
-            button.setToolTip_.assert_called_with(f"SidePulse Agent Monitor: {state.label}")
-            button.setAccessibilityLabel_.assert_called_with(f"SidePulse Agent Monitor: {state.label}")
+        button = NSButton.alloc().initWithFrame_(((0, 0), (22, 24)))
+        button.setTitle_("")
+        controller.status_item.button.return_value = button
+        workspace = Mock()
+        workspace.accessibilityDisplayShouldReduceMotion.return_value = False
+        with patch.object(sb, "NSWorkspace") as workspace_class:
+            workspace_class.sharedWorkspace.return_value = workspace
+            for state in (sb.STATE_IDLE, sb.STATE_WORKING, sb.STATE_DONE, sb.STATE_ASK):
+                controller.set_status(state)
+                if state == sb.STATE_IDLE:
+                    self.addCleanup(controller.status_icon_renderer.close)
+                self.assertEqual(button.title(), "")
+                if state in (sb.STATE_WORKING, sb.STATE_ASK):
+                    self.assertFalse(controller.status_icon_renderer.view.isHidden())
+                else:
+                    self.assertIsNotNone(button.image())
+                label = f"SidePulse Agent Monitor: {state.label}"
+                self.assertEqual(button.toolTip(), label)
+                self.assertEqual(button.accessibilityLabel(), label)
 
     def test_hide_and_restore_preserve_controller_and_settings_window(self):
         controller = sb.StatusBarController.alloc().init()
@@ -1241,6 +1254,10 @@ class StatusIconAnimationTests(StatusBarTestCase):
         self.addCleanup(self.target.stop_status_icon_animation)
         self.target.status_item = Mock()
         self.target.status_item.isVisible.return_value = True
+        self.renderer = Mock()
+        renderer_patch = patch.object(sb, "NativeStatusIconRenderer", return_value=self.renderer)
+        renderer_patch.start()
+        self.addCleanup(renderer_patch.stop)
         self.workspace = Mock()
         self.workspace.accessibilityDisplayShouldReduceMotion.return_value = False
         self.workspace.fullPathForApplication_.return_value = None
@@ -1278,23 +1295,40 @@ class StatusIconAnimationTests(StatusBarTestCase):
             for x in range(start_x, bitmaps[0].pixelsWide()):
                 self.assertEqual(bitmaps[0].colorAtX_y_(x, y), bitmaps[1].colorAtX_y_(x, y))
 
-    def test_timer_stops_for_idle_done_and_hidden_icon(self):
-        for state in (sb.STATE_WORKING, sb.STATE_ASK):
+    def test_active_icon_never_starts_a_frame_timer(self):
+        for state, motion in ((sb.STATE_WORKING, "spin"), (sb.STATE_ASK, "pulse")):
             self.target.status_item.isVisible.return_value = True
             self.target.set_status(state)
-            timer = self.target.status_icon_timer
-            self.assertIsNotNone(timer)
+            self.assertIsNone(self.target.status_icon_timer)
+            self.renderer.update.assert_called_with(sb.animated_status_icon(state, 0), motion)
             self.target.status_item.isVisible.return_value = False
             self.target.update_status_icon_animation()
             self.assertIsNone(self.target.status_icon_timer)
-            self.assertFalse(timer.isValid())
+            self.renderer.hide.assert_called()
         self.target.status_item.isVisible.return_value = True
         for state in (sb.STATE_IDLE, sb.STATE_DONE):
             self.target.set_status(state)
             self.assertIsNone(self.target.status_icon_timer)
+            self.renderer.update.assert_called_with(sb.image_for_symbol(state.symbol, state.label), None)
+
+    def test_native_failure_falls_back_to_a_static_icon_without_retrying(self):
+        self.renderer.update.side_effect = RuntimeError("native layer unavailable")
+        state = sb.STATE_WORKING
+        static_icon = sb.image_for_symbol(state.symbol, state.label)
+        self.target.set_status(state)
+        button = self.target.status_item.button()
+        button.setImage_.assert_called_once_with(static_icon)
+        self.renderer.close.assert_called_once()
+        self.assertIsNone(self.target.status_icon_timer)
+
+        button.image.return_value = static_icon
+        self.target.update_status_icon_animation()
+        self.assertEqual(self.renderer.update.call_count, 1)
+        button.setImage_.assert_called_once_with(static_icon)
 
     def test_open_menu_animates_rows_and_closing_stops_row_animation(self):
-        self.target.current_state = sb.STATE_IDLE
+        self.target.set_status(sb.STATE_WORKING)
+        self.renderer.update.reset_mock()
         menu = NSMenu.alloc().init()
         for mode in (AgentMode.WORKING, AgentMode.WAITING_FOR_INPUT, AgentMode.COMPLETED):
             status = make_status(mode=mode, provider="nonsense")
@@ -1303,7 +1337,7 @@ class StatusIconAnimationTests(StatusBarTestCase):
             self.target.menuWillOpen_(menu)
         first = [bytes(item.image().TIFFRepresentation()) for item in menu.itemArray()]
         with patch.object(sb.time, "monotonic", return_value=0.4):
-            self.target.animateStatusIcons_(None)
+            self.target.animateStatusMenuIcons_(None)
         later = [bytes(item.image().TIFFRepresentation()) for item in menu.itemArray()]
         self.assertNotEqual(first[0], later[0])
         self.assertNotEqual(first[1], later[1])
@@ -1312,15 +1346,117 @@ class StatusIconAnimationTests(StatusBarTestCase):
         self.target.menuDidClose_(menu)
         self.assertIsNone(self.target.status_icon_timer)
         self.assertIsNone(self.target.tracking_status_menu)
+        self.renderer.update.assert_not_called()
 
     def test_reduce_motion_keeps_static_icons(self):
         self.target.set_status(sb.STATE_WORKING)
         self.workspace.accessibilityDisplayShouldReduceMotion.return_value = True
-        self.target.animateStatusIcons_(None)
+        self.target.refreshStatusIconAnimation_(None)
         self.assertIsNone(self.target.status_icon_timer)
-        self.target.status_item.button().setImage_.assert_called_with(
+        self.renderer.update.assert_called_with(
             sb.image_for_symbol(sb.STATE_WORKING.symbol, sb.STATE_WORKING.label),
+            None,
         )
+
+
+class NativeStatusIconRendererTests(StatusBarTestCase):
+    def setUp(self):
+        self.button = NSButton.alloc().initWithFrame_(((0, 0), (22, 24)))
+        self.renderer = sb.NativeStatusIconRenderer(self.button, duration=1.6)
+        self.addCleanup(self.renderer.close)
+
+    def test_rotation_and_scale_keep_the_glyph_center_fixed(self):
+        from Quartz import CATransform3DMakeRotation, CATransform3DMakeScale
+
+        self.renderer.update(sb.animated_status_icon(sb.STATE_WORKING, 0), "spin")
+        view = self.renderer.view
+        glyph = view.glyph_layer
+        self.assertFalse(view.layer().animationKeys())
+        self.assertEqual(set(glyph.animationKeys()), {"spin"})
+        self.assertEqual(glyph.anchorPoint(), (0.5, 0.5))
+        self.assertEqual(glyph.position(), (9, 9))
+        glyph.removeAllAnimations()
+        transforms = [CATransform3DMakeRotation(angle, 0, 0, 1)
+                      for angle in (0, sb.math.pi / 2, sb.math.pi, 3 * sb.math.pi / 2)]
+        transforms += [CATransform3DMakeScale(scale, scale, 1)
+                       for scale in (0.82, 0.9, 1.0)]
+        for transform in transforms:
+            glyph.setTransform_(transform)
+            center = glyph.convertPoint_toLayer_((9, 9), view.layer())
+            self.assertAlmostEqual(center.x, 9)
+            self.assertAlmostEqual(center.y, 9)
+
+    def test_spin_uses_original_frame_geometry_and_does_not_restart_on_refresh(self):
+        image = sb.animated_status_icon(sb.STATE_WORKING, 0)
+        self.renderer.update(image, "spin")
+        view = self.renderer.view
+        animation = view.glyph_layer.animationForKey_("spin")
+        self.assertEqual(view.source_image, image)
+        self.assertEqual(view.frame().origin, (2, 3))
+        self.assertEqual(view.frame().size, (18, 18))
+        self.assertAlmostEqual(animation.duration(), 1.6)
+        self.assertAlmostEqual(float(animation.toValue()), -2 * sb.math.pi)
+        self.assertIsNone(view.hitTest_((9, 9)))
+        # An unchanged status refresh must not replace/restart a layer animation.
+        view.glyph_layer.removeAnimationForKey_("spin")
+        self.renderer.update(image, "spin")
+        self.assertIsNone(view.glyph_layer.animationForKey_("spin"))
+
+    def test_pulse_preserves_period_opacity_and_scale(self):
+        self.renderer.update(sb.animated_status_icon(sb.STATE_ASK, 0), "pulse")
+        layer = self.renderer.view.glyph_layer
+        for key, minimum in (("opacity", 0.45), ("transform.scale", 0.82)):
+            animation = layer.animationForKey_(key)
+            self.assertAlmostEqual(animation.duration(), 1.6)
+            self.assertAlmostEqual(min(animation.values()), minimum)
+            self.assertAlmostEqual(max(animation.values()), 1.0)
+            self.assertEqual(animation.values()[0], animation.values()[-1])
+
+    def test_layer_bitmap_preserves_the_original_mask_with_template_tint(self):
+        from AppKit import NSColorSpace
+
+        for state, motion in ((sb.STATE_WORKING, "spin"), (sb.STATE_ASK, "pulse")):
+            image = sb.animated_status_icon(state, 0)
+            self.renderer.update(image, motion)
+            original = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+            rendered = NSBitmapImageRep.alloc().initWithCGImage_(
+                self.renderer.view.glyph_layer.contents()
+            )
+            tint_alpha = []
+            self.renderer.view.effectiveAppearance().performAsCurrentDrawingAppearance_(
+                lambda: tint_alpha.append(
+                    sb.NSColor.labelColor().colorUsingColorSpace_(
+                        NSColorSpace.deviceRGBColorSpace()
+                    ).alphaComponent()
+                )
+            )
+            self.assertEqual(original.pixelsWide(), rendered.pixelsWide())
+            self.assertEqual(original.pixelsHigh(), rendered.pixelsHigh())
+            for y in range(original.pixelsHigh()):
+                for x in range(original.pixelsWide()):
+                    self.assertAlmostEqual(
+                        original.colorAtX_y_(x, y).alphaComponent() * tint_alpha[0],
+                        rendered.colorAtX_y_(x, y).alphaComponent(),
+                        delta=1 / 255,
+                    )
+
+    def test_static_hidden_and_reappearing_states_remove_and_restore_motion(self):
+        image = sb.animated_status_icon(sb.STATE_WORKING, 0)
+        self.renderer.update(image, "spin")
+        self.renderer.hide()
+        self.assertFalse(self.renderer.view.glyph_layer.animationKeys())
+        self.assertTrue(self.renderer.view.isHidden())
+        self.renderer.update(image, "spin")
+        self.assertIsNotNone(self.renderer.view.glyph_layer.animationForKey_("spin"))
+        static = sb.image_for_symbol(sb.STATE_DONE.symbol, sb.STATE_DONE.label)
+        self.renderer.update(static, None)
+        self.assertFalse(self.renderer.view.glyph_layer.animationKeys())
+        self.assertTrue(self.renderer.view.isHidden())
+        self.assertEqual(self.button.image(), static)
+        self.renderer.close()
+        self.assertIsNone(self.renderer.view)
+        self.assertFalse(self.button.subviews())
+
 
 
 class IconTests(StatusBarTestCase):
