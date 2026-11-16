@@ -39,14 +39,23 @@ Homebrew or administrator access. On Linux, install Python 3.10 or newer first. 
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
 at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 
-All available components are selected in the terminal menu. Type a component's
-number and press Enter to toggle it. Press Enter on an empty line to confirm,
-or enter `q` to cancel. macOS offers SD card ejection prevention (important for
-deep sleep), Agent monitor, and the status-bar indicator. Linux offers Agent
-monitor. Leaving a component unchecked skips its setup for this run. The core
-CLI and background service are included in every install.
+All available components are checked by default, and **Install** is focused.
+Use the up and down arrow keys to move, Space to toggle a checkbox, and Enter
+on **Install** to start setup. Press `q` to cancel.
+The Agent hooks group lists Codex, Claude Code, Grok, Cursor, and Junie on
+macOS and Linux. The macOS integrations group lists SD card ejection prevention
+(important for deep sleep) and the status-bar indicator. Leaving an item
+unchecked skips its setup for this run. The core CLI and background service are
+included in every install.
 
-Setup keeps detailed output in
+The one-command installer sets up SD card ejection prevention as a system-wide
+LaunchDaemon so it can run before login. Selecting it requests administrator
+approval during interactive setup. Setup removes the old per-user guard after
+the system guard starts.
+
+Setup shows progress as it checks requirements, prepares Python, builds and
+installs packages, and configures services and selected components.
+It keeps detailed output in
 `${XDG_STATE_HOME:-$HOME/.local/state}/sidepulse/setup/`. On failure, it shows
 the last 30 lines and the full log path.
 
@@ -58,7 +67,9 @@ bash -o pipefail -c 'curl -fsSL https://sidepulse.io/setup.sh | env SIDEPULSE_SE
 ```
 
 From a checkout, run `sh scripts/setup.sh --headless`. For an existing install,
-run `sidepulse update --headless`.
+run `sidepulse update --headless`. Headless macOS setup needs non-interactive
+`sudo` to install the system eject guard. To skip the guard from a checkout,
+use `sh scripts/setup.sh --headless --no-sd-eject-guard`.
 
 `sp` is a short alias for `sidepulse`; for example, `sp status` runs
 `sidepulse status`.
@@ -640,13 +651,15 @@ Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
+For multiple providers, repeat `--agent`, for example
+`sidepulse setup --agent codex --agent cursor`.
 Use `--no-agent-monitor`, `--no-sd-eject-guard`, or `--no-status-bar` to skip
 individual components.
 
 SidePulse Pro Eject Prevention keeps the built-in SD reader attached after
-macOS hibernate or lock-screen mount refusals. By default setup installs it
-system-wide when already running with system permissions, otherwise as a
-per-user LaunchAgent:
+macOS hibernate or lock-screen mount refusals. When you run `sidepulse setup`
+directly, its `auto` scope chooses a system-wide daemon if the command already
+has administrator privileges and a per-user LaunchAgent otherwise.
 
 The guard checks whether macOS restarted Disk Arbitration. If it did, the
 guard exits and launchd starts it again with a fresh disk session. KeepAlive

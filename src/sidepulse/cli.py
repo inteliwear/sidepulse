@@ -162,12 +162,19 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
         "setup",
         help="Install agent hooks and, on macOS, start the status-bar app.",
     )
-    setup.add_argument(
+    agent_selection = setup.add_mutually_exclusive_group()
+    agent_selection.add_argument(
         "provider",
         choices=("all", *HOOK_PROVIDERS),
         nargs="?",
         default="all",
         help="Agent hooks to install. Default: all.",
+    )
+    agent_selection.add_argument(
+        "--agent",
+        choices=HOOK_PROVIDERS,
+        action="append",
+        help="Select one agent's hooks. Repeat for multiple agents.",
     )
     setup.add_argument("--log-dir", type=Path, help="Directory for provider JSONL files.")
     setup.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
@@ -1181,12 +1188,14 @@ def cmd_status_bar(args: argparse.Namespace) -> int:
     return 0
 
 
-def selected_hook_providers(provider: str) -> tuple[str, ...]:
-    return HOOK_PROVIDERS if provider == "all" else (provider,)
+def selected_hook_providers(args: argparse.Namespace) -> tuple[str, ...]:
+    if args.agent:
+        return tuple(dict.fromkeys(args.agent))
+    return HOOK_PROVIDERS if args.provider == "all" else (args.provider,)
 
 
 def install_hook_results(args: argparse.Namespace):
-    providers = selected_hook_providers(args.provider)
+    providers = selected_hook_providers(args)
     results = []
     for provider in providers:
         log_path = install_log_path(provider, args)
@@ -1218,7 +1227,7 @@ def print_install_results(results, *, dry_run: bool) -> None:
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
-    providers = selected_hook_providers(args.provider)
+    providers = selected_hook_providers(args)
     results = []
     for provider in providers:
         log_path = uninstall_log_path(provider, args)
