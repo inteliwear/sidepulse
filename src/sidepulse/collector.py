@@ -1143,7 +1143,9 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.WORKING
     if event in {"PreToolUse"}:
-        if codex_question_tool(record):
+        if codex_question_tool(record) or (
+            record.provider == "junie" and record.tool_name == "AskUserQuestion"
+        ):
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.TOOL_RUNNING
     if event in {"PostToolUse"}:

@@ -75,6 +75,24 @@ def test_hook_sequences_match_existing_interpreter_and_preserve_metadata(runtime
         assert a.cwd == e.cwd == '/work/widget'
 
 
+def test_junie_question_waits_for_input_until_tool_returns(runtime):
+    fields = {
+        'tool_name': 'AskUserQuestion',
+        'tool_input': {'questions': [{'question': 'Which option should I use?'}]},
+    }
+    actual, legacy = emit(runtime, 'PreToolUse', 'junie', **fields)
+    for snapshot in (actual, legacy):
+        assert snapshot.aggregate.mode == AgentMode.WAITING_FOR_INPUT
+        assert snapshot.statuses[0].mode == AgentMode.WAITING_FOR_INPUT
+    report = hook_report('junie', {'hook_event_name': 'PreToolUse', **fields})
+    assert report['status']['kind'] == 'question'
+
+    actual, legacy = emit(runtime, 'PostToolUse', 'junie', **fields)
+    for snapshot in (actual, legacy):
+        assert snapshot.aggregate.mode == AgentMode.WORKING
+        assert snapshot.statuses[0].mode == AgentMode.WORKING
+
+
 def test_junie_task_name_replaces_prompt_title_in_daemon(runtime, tmp_path):
     index = tmp_path / 'index.jsonl'
     with patch('sidepulse.junie_index.junie_session_index_path', return_value=index):
