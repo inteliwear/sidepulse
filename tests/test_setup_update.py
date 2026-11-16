@@ -44,13 +44,17 @@ class SetupUpdateTests(unittest.TestCase):
             args = sys.argv[1:]
             with open(os.environ['SIDEPULSE_TEST_LOG'], 'a') as log:
                 log.write(json.dumps(['sudo', args]) + '\\n')
-            if args[-1] == '-v':
+            if args[:2] == ['-H', '-p']:
                 with open('/dev/tty', 'w') as terminal:
                     print('Mock administrator prompt', file=terminal)
-                sys.exit(0)
-            if args[:2] != ['-n', '-H'] or os.environ.get('SIDEPULSE_TEST_SUDO_FAIL'):
+                command = args[3:]
+            elif args[:2] == ['-n', '-H']:
+                command = args[2:]
+            else:
+                sys.exit(2)
+            if os.environ.get('SIDEPULSE_TEST_SUDO_FAIL'):
                 sys.exit(1)
-            os.execv(args[2], args[2:])
+            os.execv(command[0], command)
         '''))
         sudo.chmod(0o755)
         self.env = {
@@ -385,16 +389,18 @@ print(settings)
             ['new', ['--version']],
         ])
 
-    def test_piped_setup_authorizes_only_the_system_guard(self):
+    def test_piped_setup_shows_and_runs_one_sudo_command_for_the_system_guard(self):
         self.install_root = self.root / "SidePulse's install with spaces"
         self.env['SIDEPULSE_INSTALL_ROOT'] = str(self.install_root)
         status, output = self.run_piped_setup_in_terminal(b'\r', developer_tools=True)
         self.assertEqual(status, 0, output)
         self.assertIn('Administrator access is required', output)
         calls = self.calls()
-        self.assertEqual(calls[0], ['sudo', ['-p', '[SidePulse] Administrator password for %p: ', '-v']])
-        self.assertEqual([call for call in calls if call[0] == 'sudo'][1:], [
-            ['sudo', ['-n', '-H', str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system']],
+        self.assertEqual([call for call in calls if call[0] == 'sudo'], [
+            ['sudo', [
+                '-H', '-p', '[SidePulse] Administrator password for %p: ',
+                str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system',
+            ]],
         ])
         before_prompt = output.split('Mock administrator prompt', 1)[0]
         self.assertIn('Mock administrator prompt', output)

@@ -239,13 +239,17 @@ print_shell_command() {
 }
 
 system_guard_sudo() {
-    sudo_action=$1
-    set -- sudo -n -H "$VENV/bin/sidepulse" sdejectguard start --scope system
-    if [ "$sudo_action" = preview ]; then
-        print_shell_command "$@" >&3
+    set -- "$VENV/bin/sidepulse" sdejectguard start --scope system
+    if [ -n "$terminal_settings" ]; then
+        printf '      Administrator access is required for system-wide SD card ejection prevention.\n' >&3
+        set -- sudo -H -p '[SidePulse] Administrator password for %p: ' "$@"
+        sudo_input=/dev/tty
     else
-        "$@"
+        set -- sudo -n -H "$@"
+        sudo_input=/dev/null
     fi
+    print_shell_command "$@" >&3
+    "$@" <"$sudo_input"
 }
 
 resume_status_bar() {
@@ -403,17 +407,6 @@ SIDEPULSE_WHEEL=$1
 
 progress 4 'Installing SidePulse and command links'
 
-if component_selected sd-eject-guard && [ -n "$terminal_settings" ] && [ "$(id -u)" -ne 0 ]; then
-    printf '      Administrator access is required for system-wide SD card ejection prevention.\n' >&3
-    set -- sudo -p '[SidePulse] Administrator password for %p: ' -v
-    print_shell_command "$@" >&3
-    system_guard_sudo preview
-    if ! "$@" </dev/tty; then
-        printf 'Could not authorize system-wide SD card ejection prevention.\n' >&2
-        exit 1
-    fi
-fi
-
 if [ -x "$VENV/bin/sidepulse" ] && "$VENV/bin/sidepulse" service status >/dev/null 2>&1; then
     "$VENV/bin/sidepulse" service stop
     SERVICE_STOPPED=1
@@ -466,13 +459,7 @@ if [ "$PLATFORM" = Darwin ]; then
         if [ "$(id -u)" -eq 0 ]; then
             "$VENV/bin/sidepulse" sdejectguard start --scope system
         else
-            sudo_input=/dev/null
-            if [ -n "$terminal_settings" ]; then
-                sudo_input=/dev/tty
-            else
-                system_guard_sudo preview
-            fi
-            if ! system_guard_sudo run <"$sudo_input"; then
+            if ! system_guard_sudo; then
                 printf 'System-wide SD card ejection prevention could not be installed.\n' >&2
                 if [ -z "$terminal_settings" ]; then
                     printf 'Headless setup requires non-interactive sudo for the eject guard. Rerun in a terminal to authorize it.\n' >&2
