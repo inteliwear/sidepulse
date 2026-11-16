@@ -301,10 +301,10 @@ print(settings)
 
     def test_piped_setup_confirms_toggled_components_before_installing(self):
         status, output = self.run_piped_setup_in_terminal(
-            b'\x1b[A', b' ', b'\x1bOB', b' ',  # Junie and SD eject prevention.
-            b'\x1b[B', b' ',  # Status-bar indicator.
+            b'\x1b[A', b' ', b'\x1bOB', b'\x1b[B', b' ',  # Junie and SD eject prevention.
+            b'\r\x1b[B', b' ',  # Enter on a checkbox does not install. Skip the status-bar indicator.
             b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ',  # Claude Code and Grok.
-            b'\x1b[B', b' ', b' ', b'\r',  # Recheck Cursor.
+            b'\x1b[B', b' ', b' ', b'\x1b[B', b'\x1b[B', b'\r',  # Recheck Cursor and select Install.
             install_keys=b'\x1b[C',
         )
         self.assertEqual(status, 0, output)
@@ -315,7 +315,7 @@ print(settings)
         self.assertEqual([line.strip() for line in first_screen if line.strip()], [
             'SidePulse',
             'macOS integrations',
-            '> [x] SD card ejection prevention (system-wide, important for deep sleep)',
+            '[x] SD card ejection prevention (system-wide, important for deep sleep)',
             '[x] Status-bar indicator',
             'Agent hooks',
             '[x] Codex',
@@ -323,6 +323,7 @@ print(settings)
             '[x] Grok',
             '[x] Cursor',
             '[x] Junie',
+            '> Install',
         ])
         for component in (
             'SD card ejection prevention', 'Claude Code', 'Grok', 'Junie', 'Status-bar indicator',
@@ -335,7 +336,7 @@ print(settings)
 
     def test_piped_linux_setup_can_skip_all_agents(self):
         status, output = self.run_piped_setup_in_terminal(
-            b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\r',
+            b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b'\r',
             platform='Linux',
         )
         self.assertEqual(status, 0, output)
@@ -353,7 +354,7 @@ print(settings)
             '\x1b[38;5;110ms\x1b[38;5;140me\x1b[0m\r\n',
             output,
         )
-        self.assertIn('\x1b[1;38;5;110m  > [x]\x1b[0m', output)
+        self.assertIn('\x1b[1;38;5;110m  > Install\x1b[0m', output)
         self.assertIn('\x1b[38;5;108m    [x]\x1b[0m', output)
         self.assertIn('SidePulse setup cancelled.', output)
         self.assertFalse(self.install_root.exists())

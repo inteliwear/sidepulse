@@ -39,8 +39,9 @@ Homebrew or administrator access. On Linux, install Python 3.10 or newer first. 
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
 at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 
-All available components are selected in the terminal menu. Use the up and down
-arrow keys to move, Space to toggle, Enter to install, and `q` to cancel.
+All available components are checked by default, and **Install** is focused.
+Use the up and down arrow keys to move, Space to toggle a checkbox, and Enter
+on **Install** to start setup. Press `q` to cancel.
 The Agent hooks group lists Codex, Claude Code, Grok, Cursor, and Junie on
 macOS and Linux. The macOS integrations group lists SD card ejection prevention
 (important for deep sleep) and the status-bar indicator. Leaving an item

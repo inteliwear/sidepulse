@@ -109,12 +109,22 @@ draw_group() {
 
 draw_checklist() {
     row_count=0
-    menu_lines=2
+    menu_lines=4 # The Install row, key hints, and the blank lines above them.
     if [ "$PLATFORM" = Darwin ]; then
         draw_group 'macOS integrations' $MAC_COMPONENTS
     fi
     draw_group 'Agent hooks' $AGENTS
-    printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter installs  q cancels'
+    row_count=$((row_count + 1))
+    pointer=' '
+    row_color=$menu_heading
+    if [ "$focused_row" -eq 0 ] || [ "$focused_row" -eq "$row_count" ]; then
+        focused_row=$row_count
+        focused_component=install
+        pointer='>'
+        row_color=$menu_focus
+    fi
+    printf '\n%s%.*s%s\n' "$row_color" "$menu_width" "  $pointer Install" "$menu_reset"
+    printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter on Install  q cancels'
 }
 
 menu_stty() {
@@ -126,7 +136,7 @@ restore_menu_terminal() {
 }
 
 select_components() {
-    focused_row=1
+    focused_row=0
 
     # Keep each row on one line so the checklist can redraw in place.
     terminal_size=$(menu_stty size) || terminal_size='0 80'
@@ -162,13 +172,18 @@ select_components() {
                 esac
                 ;;
             ' .')
+                [ "$focused_component" != install ] || continue
                 if component_selected "$focused_component"; then
                     selected_components="${selected_components%%" $focused_component "*} ${selected_components#*" $focused_component "}"
                 else
                     selected_components="$selected_components$focused_component "
                 fi
                 ;;
-            "$enter") result=0; break ;;
+            "$enter")
+                [ "$focused_component" = install ] || continue
+                result=0
+                break
+                ;;
             q.|Q.|.) break ;;
             *) continue ;;
         esac
