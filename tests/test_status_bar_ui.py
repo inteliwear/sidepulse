@@ -838,6 +838,54 @@ class WindowBuildTests(StatusBarTestCase):
         resolve.assert_called_once()
         open_terminal.assert_called_once()
 
+    def test_open_running_junie_session_uses_its_terminal_tab(self):
+        status = make_status(provider="junie")
+        terminal = sb.JunieTerminal("/dev/ttys028", sb.TERMINAL_APP_TERMINAL)
+        settings = AgentMonitorSettings().with_provider_session_open_action(
+            "junie", sb.SESSION_OPEN_JETBRAINS
+        )
+        with (
+            patch.object(self.controller, "settings", settings),
+            patch.object(sb, "junie_session_terminal", return_value=terminal),
+            patch.object(sb, "run_osascript_bool", return_value=True) as focus,
+            patch.object(sb, "open_terminal_command") as resume,
+            patch.object(sb, "session_open_target") as resolve,
+        ):
+            self.controller.open_session(status, None, remember=False)
+
+        script = focus.call_args.args[0]
+        self.assertIn('tty of tabRef is "/dev/ttys028"', script)
+        self.assertIn("set selected tab of windowRef to tabRef", script)
+        self.assertNotIn("contents of tabRef", script)
+        resolve.assert_not_called()
+        resume.assert_not_called()
+
+    def test_open_running_junie_session_does_not_resume_if_tab_cannot_be_focused(self):
+        status = make_status(provider="junie")
+        terminal = sb.JunieTerminal("/dev/ttys028", None)
+        with (
+            patch.object(sb, "junie_session_terminal", return_value=terminal),
+            patch.object(sb, "open_terminal_command") as resume,
+        ):
+            self.controller.open_session(status, sb.SESSION_OPEN_TERMINAL, remember=False)
+
+        resume.assert_not_called()
+
+    def test_focus_running_junie_in_ghostty_matches_the_terminal_device(self):
+        first = SimpleNamespace(tty=lambda: "/dev/ttys028")
+        second = SimpleNamespace(tty=lambda: "ttys029")
+        tab = SimpleNamespace(terminals=lambda: [first, second])
+        window = SimpleNamespace(tabs=lambda: [tab])
+        app = SimpleNamespace(isRunning=lambda: True, windows=lambda: [window])
+        terminal = sb.JunieTerminal("/dev/ttys029", sb.TERMINAL_APP_GHOSTTY)
+        with (
+            patch.object(sb, "ghostty_application", return_value=app),
+            patch.object(sb, "focus_ghostty_terminal") as focus,
+        ):
+            self.assertTrue(sb.focus_junie_terminal(terminal))
+
+        focus.assert_called_once_with(window, tab, second, app)
+
     def test_open_junie_session_in_exact_ide_app_uses_app_path(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")
         with (

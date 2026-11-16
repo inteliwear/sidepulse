@@ -139,6 +139,7 @@ from .lid_sleep import (
     sleep_helper_install_command,
     sleep_helper_installed,
 )
+from .junie_terminal import JunieTerminal, junie_session_terminal
 from .models import AgentMode, AgentStatus, MODE_LABELS, provider_label
 from .providers import (
     ProviderConfig,
@@ -2150,6 +2151,12 @@ class StatusBarController(NSObject):
         if not isinstance(status, AgentStatus):
             return
         provider = status.provider.lower()
+        if provider == "junie" and action in {None, SESSION_OPEN_TERMINAL}:
+            terminal = junie_session_terminal(status.session_id)
+            if terminal is not None:
+                if not focus_junie_terminal(terminal):
+                    self.set_settings_message("Junie is running, but its terminal tab could not be selected.")
+                return
         requested_action = action or self.settings.session_open_action(
             provider, status.origin
         )
@@ -6092,13 +6099,30 @@ def terminal_app_from_custom_path(path: str) -> str:
     return TERMINAL_APP_CUSTOM
 
 
-def focus_macos_terminal_session(terms: tuple[str, ...]) -> bool:
-    condition = applescript_contains_any(("tabTitle", "tabText"), terms)
-    script = "\n".join(
-        [
-            'tell application "Terminal"',
-            "  repeat with windowRef in windows",
-            "    repeat with tabRef in tabs of windowRef",
+def focus_junie_terminal(terminal: JunieTerminal) -> bool:
+    if terminal.app == TERMINAL_APP_TERMINAL:
+        return focus_macos_terminal_session(tty=terminal.tty)
+    if terminal.app == TERMINAL_APP_ITERM:
+        return focus_iterm_session(tty=terminal.tty)
+    if terminal.app == TERMINAL_APP_GHOSTTY:
+        app = ghostty_application()
+        return bool(
+            app is not None
+            and sb_bool(app, "isRunning")
+            and focus_matching_ghostty_terminal(
+                app, (), include_working_directory=False, require_unique=True, tty=terminal.tty
+            )
+        )
+    return False
+
+
+def focus_macos_terminal_session(terms: tuple[str, ...] = (), *, tty: str | None = None) -> bool:
+    match_lines = []
+    if tty:
+        condition = f"tty of tabRef is {applescript_quote(tty)}"
+    else:
+        condition = applescript_contains_any(("tabTitle", "tabText"), terms)
+        match_lines = [
             '      set tabTitle to ""',
             '      set tabText to ""',
             "      try",
@@ -6107,8 +6131,16 @@ def focus_macos_terminal_session(terms: tuple[str, ...]) -> bool:
             "      try",
             "        set tabText to contents of tabRef",
             "      end try",
+        ]
+    script = "\n".join(
+        [
+            'tell application "Terminal"',
+            "  repeat with windowRef in windows",
+            "    repeat with tabRef in tabs of windowRef",
+            *match_lines,
             f"      if {condition} then",
             "        set selected tab of windowRef to tabRef",
+            "        set miniaturized of windowRef to false",
             "        set index of windowRef to 1",
             "        activate",
             '        return "1"',
@@ -6122,14 +6154,13 @@ def focus_macos_terminal_session(terms: tuple[str, ...]) -> bool:
     return run_osascript_bool(script)
 
 
-def focus_iterm_session(terms: tuple[str, ...]) -> bool:
-    condition = applescript_contains_any(("sessionName", "sessionText"), terms)
-    script = "\n".join(
-        [
-            'tell application "iTerm"',
-            "  repeat with windowRef in windows",
-            "    repeat with tabRef in tabs of windowRef",
-            "      repeat with sessionRef in sessions of tabRef",
+def focus_iterm_session(terms: tuple[str, ...] = (), *, tty: str | None = None) -> bool:
+    match_lines = []
+    if tty:
+        condition = f"tty of sessionRef is {applescript_quote(tty)}"
+    else:
+        condition = applescript_contains_any(("sessionName", "sessionText"), terms)
+        match_lines = [
             '        set sessionName to ""',
             '        set sessionText to ""',
             "        try",
@@ -6138,9 +6169,18 @@ def focus_iterm_session(terms: tuple[str, ...]) -> bool:
             "        try",
             "          set sessionText to contents of sessionRef",
             "        end try",
+        ]
+    script = "\n".join(
+        [
+            'tell application "iTerm"',
+            "  repeat with windowRef in windows",
+            "    repeat with tabRef in tabs of windowRef",
+            "      repeat with sessionRef in sessions of tabRef",
+            *match_lines,
             f"        if {condition} then",
-            "          tell windowRef to select tabRef",
+            "          select tabRef",
             "          select sessionRef",
+            "          set miniaturized of windowRef to false",
             "          set index of windowRef to 1",
             "          activate",
             '          return "1"',
@@ -6203,16 +6243,22 @@ def focus_matching_ghostty_terminal(
     *,
     include_working_directory: bool,
     require_unique: bool = False,
+    tty: str | None = None,
 ) -> bool:
     normalized_terms = tuple(normalize_match_text(term) for term in terms if term)
-    if not normalized_terms:
+    if not normalized_terms and not tty:
         return False
+    tty_name = tty.removeprefix("/dev/") if tty else None
     matches: list[tuple[object, object, object]] = []
     for window in sb_elements(sb_call(app, "windows")):
         window_name = sb_text(window, "name")
         for tab in sb_elements(sb_call(window, "tabs")):
             tab_name = sb_text(tab, "name")
             for terminal in sb_elements(sb_call(tab, "terminals")):
+                if tty_name:
+                    if sb_text(terminal, "tty").removeprefix("/dev/") == tty_name:
+                        matches.append((window, tab, terminal))
+                    continue
                 values = [window_name, tab_name, sb_text(terminal, "name")]
                 if include_working_directory:
                     values.append(sb_text(terminal, "workingDirectory"))

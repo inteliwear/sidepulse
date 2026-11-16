@@ -245,6 +245,13 @@ def process_basename(info: ProcessInfo) -> str:
     return ""
 
 
+def is_junie_process(info: ProcessInfo) -> bool:
+    return process_basename(info) == "junie" or any(
+        marker in info.command.lower()
+        for marker in ("/junie.app/", "junie-release-", "matterhorn.ej.app.cli.standalone")
+    )
+
+
 def terminal_environment(env: Mapping[str, str]) -> bool:
     term_program = str(env.get("TERM_PROGRAM") or "").strip()
     return bool(term_program and term_program.lower() != "vscode" or env.get('WT_SESSION'))

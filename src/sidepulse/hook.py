@@ -146,20 +146,12 @@ def junie_process_id() -> int | None:
 
 def junie_process_context() -> tuple[int | None, dict[str, str] | None]:
     try:
-        from .origin import origin_from_processes, process_ancestry, process_basename
+        from .origin import is_junie_process, origin_from_processes, process_ancestry
 
         ancestry = process_ancestry(os.getppid())
         origin = origin_from_processes("junie", ancestry)
         for info in ancestry:
-            command = info.command.lower()
-            if process_basename(info) == "junie" or any(
-                marker in command
-                for marker in (
-                    "/junie.app/",
-                    "junie-release-",
-                    "matterhorn.ej.app.cli.standalone",
-                )
-            ):
+            if is_junie_process(info):
                 return info.pid, origin.to_payload() if origin is not None else None
     except Exception:
         pass
