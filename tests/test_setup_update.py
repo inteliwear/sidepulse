@@ -183,13 +183,13 @@ class SetupUpdateTests(unittest.TestCase):
         log_path = Path(result.stderr.rsplit('Full log: ', 1)[1].strip())
         self.assertIn('Component setup failed', log_path.read_text())
 
-    def run_piped_setup_in_terminal(self, *inputs, headless=False, install_keys=b''):
+    def run_piped_setup_in_terminal(self, *inputs, headless=False, install_keys=b'', platform='Darwin'):
         import pty
 
         stubs = self.root / 'stubs'
         stubs.mkdir()
         for name, body in (
-            ('uname', 'printf "Darwin\\n"'),
+            ('uname', f'printf "{platform}\\n"'),
             ('xcode-select', 'exit 0' if headless else 'exit 1'),
             ('xcrun', 'exit 0' if headless else 'exit 1'),
         ):
@@ -272,20 +272,36 @@ print(settings)
 
     def test_piped_setup_confirms_toggled_components_before_installing(self):
         status, output = self.run_piped_setup_in_terminal(
-            b'\x1b[B', b' ', b'\x1b[A', b' ', b'\x1bOB', b'\x1b[B', b' ', b'\r',
+            b'\x1b[A', b' ', b'\x1bOB', b' ',  # Status-bar indicator and SD eject prevention.
+            b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ',  # Claude Code and Grok.
+            b'\x1b[B', b' ', b' ', b'\x1b[B', b' ', b'\r',  # Recheck Cursor and skip Junie.
             install_keys=b'\x1b[C',
         )
         self.assertEqual(status, 0, output)
         self.assertNotIn('^[[C', output)
         self.assertNotIn('\x1b[C', output)
-        for component in ('SD card ejection prevention', 'Agent monitor', 'Status-bar indicator'):
+        for agent in ('Codex', 'Claude Code', 'Grok', 'Cursor', 'Junie'):
+            self.assertIn(f'[x] {agent} hooks', output)
+        for component in (
+            'SD card ejection prevention', 'Claude Code hooks', 'Grok hooks', 'Junie hooks', 'Status-bar indicator',
+        ):
             self.assertIn(f'[x] {component}', output)
             self.assertIn(f'> [ ] {component}', output)
         self.assertEqual(output.count('Select optional components'), 1)
         self.assertIn('important for deep sleep', output)
         self.assertEqual(self.calls()[0], [
-            'new', ['setup', '--no-agent-monitor', '--no-sd-eject-guard', '--no-status-bar'],
+            'new', ['setup', '--agent', 'codex', '--agent', 'cursor', '--no-sd-eject-guard', '--no-status-bar'],
         ])
+
+    def test_piped_linux_setup_can_skip_all_agents(self):
+        status, output = self.run_piped_setup_in_terminal(
+            b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\r',
+            platform='Linux',
+        )
+        self.assertEqual(status, 0, output)
+        self.assertNotIn('SD card ejection prevention', output)
+        self.assertNotIn('Status-bar indicator', output)
+        self.assertEqual(self.calls()[0], ['new', ['setup', '--no-agent-monitor']])
 
     def test_piped_setup_can_cancel_without_installing(self):
         status, output = self.run_piped_setup_in_terminal(b'q')

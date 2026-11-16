@@ -23,27 +23,45 @@ INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 PLATFORM=$(uname -s)
-AGENT_MONITOR=1
-SD_EJECT_GUARD=1
-STATUS_BAR=1
+AGENTS='codex claude grok cursor junie'
+components=$AGENTS
+if [ "$PLATFORM" = Darwin ]; then
+    components="sd-eject-guard $components status-bar"
+fi
+selected_components=" $components "
 terminal_settings=
 
-draw_component() {
-    pointer=' '
-    checked=' '
-    [ "$1" -ne "$focused_row" ] || pointer='>'
-    [ "$2" -ne 1 ] || checked=x
-    printf '%.*s\n' "$menu_width" "  $pointer [$checked] $3"
+component_selected() {
+    case "$selected_components" in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 draw_checklist() {
-    if [ "$PLATFORM" = Darwin ]; then
-        draw_component 1 "$SD_EJECT_GUARD" 'SD card ejection prevention (important for deep sleep)'
-        draw_component 2 "$AGENT_MONITOR" 'Agent monitor'
-        draw_component 3 "$STATUS_BAR" 'Status-bar indicator'
-    else
-        draw_component 1 "$AGENT_MONITOR" 'Agent monitor'
-    fi
+    row_count=0
+    for component in $components; do
+        row_count=$((row_count + 1))
+        pointer=' '
+        checked=' '
+        if [ "$row_count" -eq "$focused_row" ]; then
+            pointer='>'
+            focused_component=$component
+        fi
+        if component_selected "$component"; then
+            checked=x
+        fi
+        case "$component" in
+            sd-eject-guard) label='SD card ejection prevention (important for deep sleep)' ;;
+            codex) label='Codex hooks' ;;
+            claude) label='Claude Code hooks' ;;
+            grok) label='Grok hooks' ;;
+            cursor) label='Cursor hooks' ;;
+            junie) label='Junie hooks' ;;
+            status-bar) label='Status-bar indicator' ;;
+        esac
+        printf '%.*s\n' "$menu_width" "  $pointer [$checked] $label"
+    done
     printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter installs  q cancels'
 }
 
@@ -57,8 +75,6 @@ restore_menu_terminal() {
 
 select_components() {
     focused_row=1
-    row_count=1
-    [ "$PLATFORM" != Darwin ] || row_count=3
 
     # Keep each row on one line so the checklist can redraw in place.
     terminal_size=$(menu_stty size) || terminal_size='0 80'
@@ -94,11 +110,11 @@ select_components() {
                 esac
                 ;;
             ' .')
-                case "$PLATFORM:$focused_row" in
-                    Darwin:1) SD_EJECT_GUARD=$((1 - SD_EJECT_GUARD)) ;;
-                    Darwin:3) STATUS_BAR=$((1 - STATUS_BAR)) ;;
-                    Darwin:2|*:1) AGENT_MONITOR=$((1 - AGENT_MONITOR)) ;;
-                esac
+                if component_selected "$focused_component"; then
+                    selected_components="${selected_components%%" $focused_component "*} ${selected_components#*" $focused_component "}"
+                else
+                    selected_components="$selected_components$focused_component "
+                fi
                 ;;
             "$enter") result=0; break ;;
             q.|Q.|.) break ;;
@@ -210,7 +226,7 @@ if [ "$PLATFORM" = Darwin ]; then
             git+*) [ "$(command -v git || :)" != /usr/bin/git ] || need_apple_tools ;;
         esac
     fi
-    if [ "$SD_EJECT_GUARD" -eq 1 ]; then
+    if component_selected sd-eject-guard; then
         [ "$APPLE_TOOLS" -eq 1 ] && xcrun --find clang || need_apple_tools
     fi
 fi
@@ -324,17 +340,31 @@ done
 
 progress 5 'Configuring the background service and selected components'
 set -- setup
-if [ "$AGENT_MONITOR" -eq 0 ]; then
-    set -- "$@" --no-agent-monitor
-fi
-if [ "$SD_EJECT_GUARD" -eq 0 ]; then
-    set -- "$@" --no-sd-eject-guard
-fi
-if [ "$STATUS_BAR" -eq 0 ]; then
-    set -- "$@" --no-status-bar
+selected_agents=
+for agent in $AGENTS; do
+    if component_selected "$agent"; then
+        selected_agents="$selected_agents $agent"
+    fi
+done
+case "$selected_agents" in
+    '') set -- "$@" --no-agent-monitor ;;
+    " $AGENTS") ;;
+    *)
+        for agent in $selected_agents; do
+            set -- "$@" --agent "$agent"
+        done
+        ;;
+esac
+if [ "$PLATFORM" = Darwin ]; then
+    if ! component_selected sd-eject-guard; then
+        set -- "$@" --no-sd-eject-guard
+    fi
+    if ! component_selected status-bar; then
+        set -- "$@" --no-status-bar
+    fi
 fi
 "$VENV/bin/sidepulse" "$@"
-if [ "$STATUS_BAR" -eq 0 ] && [ "$STATUS_BAR_STOPPED" -eq 1 ]; then
+if [ "$STATUS_BAR_STOPPED" -eq 1 ] && ! component_selected status-bar; then
     resume_status_bar
 fi
 "$VENV/bin/sidepulse" --version

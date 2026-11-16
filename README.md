@@ -41,10 +41,11 @@ at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 
 All available components are selected in the terminal menu. Use the up and down
 arrow keys to move, Space to toggle, Enter to install, and `q` to cancel.
-macOS offers SD card ejection prevention (important for deep sleep), Agent
-monitor, and the status-bar indicator. Linux offers Agent
-monitor. Leaving a component unchecked skips its setup for this run. The core
-CLI and background service are included in every install.
+Codex, Claude Code, Grok, Cursor, and Junie hooks can each be toggled on macOS
+and Linux. macOS also offers SD card ejection prevention (important for deep
+sleep) and the status-bar indicator. Leaving an item unchecked skips its
+setup for this run. The core CLI and background service are included in every
+install.
 
 Setup shows progress as it checks requirements, prepares Python, builds and
 installs packages, and configures services and selected components.
@@ -642,6 +643,8 @@ Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
+For multiple providers, repeat `--agent`, for example
+`sidepulse setup --agent codex --agent cursor`.
 Use `--no-agent-monitor`, `--no-sd-eject-guard`, or `--no-status-bar` to skip
 individual components.
 

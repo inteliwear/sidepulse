@@ -3931,6 +3931,27 @@ class AgentMonitorTests(unittest.TestCase):
         configure_receiver.assert_not_called()
         link_command.assert_not_called()
 
+    def test_sidepulse_setup_installs_only_selected_agent_hooks(self) -> None:
+        args = cli_module.build_sidepulse_parser().parse_args(
+            ["setup", "--agent", "codex", "--agent", "cursor", "--agent", "codex"]
+        )
+        results = {"codex": object(), "cursor": object()}
+
+        with (
+            patch.object(cli_module, "install_codex_hooks", return_value=results["codex"]) as codex,
+            patch.object(cli_module, "install_cursor_hooks", return_value=results["cursor"]) as cursor,
+            patch.object(cli_module, "install_claude_hooks") as claude,
+            patch.object(cli_module, "install_grok_hooks") as grok,
+            patch.object(cli_module, "install_junie_hooks") as junie,
+        ):
+            self.assertEqual(cli_module.install_hook_results(args), list(results.values()))
+
+        codex.assert_called_once()
+        cursor.assert_called_once()
+        claude.assert_not_called()
+        grok.assert_not_called()
+        junie.assert_not_called()
+
     def test_sidepulse_setup_no_status_bar_still_installs_guard(self) -> None:
         parser = cli_module.build_sidepulse_parser()
         args = parser.parse_args(["setup", "--no-status-bar", "--sd-eject-guard-scope", "user"])
