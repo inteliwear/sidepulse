@@ -38,18 +38,37 @@ component_selected() {
     esac
 }
 
+draw_setup_title() {
+    menu_focus=
+    menu_checked=
+    menu_reset=
+    if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+        menu_focus=$(printf '\033[1;96m')
+        menu_checked=$(printf '\033[92m')
+        menu_reset=$(printf '\033[0m')
+        printf '\n\033[1mSide\033[91mP\033[93mu\033[92ml\033[96ms\033[95me\033[0m setup\n'
+    else
+        printf '\nSidePulse setup\n'
+    fi
+    printf '\nSelect optional components\n'
+}
+
 draw_checklist() {
     row_count=0
     for component in $components; do
         row_count=$((row_count + 1))
         pointer=' '
         checked=' '
+        row_color=
         if [ "$row_count" -eq "$focused_row" ]; then
             pointer='>'
             focused_component=$component
+            row_color=$menu_focus
         fi
+        checkbox_color=$row_color
         if component_selected "$component"; then
             checked=x
+            checkbox_color=${row_color:-$menu_checked}
         fi
         case "$component" in
             sd-eject-guard) label='SD card ejection prevention (important for deep sleep)' ;;
@@ -60,7 +79,12 @@ draw_checklist() {
             junie) label='Junie hooks' ;;
             status-bar) label='Status-bar indicator' ;;
         esac
-        printf '%.*s\n' "$menu_width" "  $pointer [$checked] $label"
+        prefix="  $pointer [$checked]"
+        printf '%s%.*s%s' "$checkbox_color" "$menu_width" "$prefix" "$menu_reset"
+        if [ "$menu_width" -gt "${#prefix}" ]; then
+            printf '%s%.*s%s' "$row_color" "$((menu_width - ${#prefix}))" " $label" "$menu_reset"
+        fi
+        printf '\n'
     done
     printf '\n%.*s\n' "$menu_width" 'Up/Down move  Space toggles  Enter installs  q cancels'
 }
@@ -92,7 +116,7 @@ select_components() {
     escape=$(printf '\033')
     enter=$(printf '\n.')
     result=1
-    printf '\nSidePulse setup\n\nSelect optional components\n'
+    draw_setup_title
     draw_checklist
     while :; do
         # The suffix preserves Enter and distinguishes it from terminal EOF.

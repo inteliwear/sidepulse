@@ -4,6 +4,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -183,7 +184,9 @@ class SetupUpdateTests(unittest.TestCase):
         log_path = Path(result.stderr.rsplit('Full log: ', 1)[1].strip())
         self.assertIn('Component setup failed', log_path.read_text())
 
-    def run_piped_setup_in_terminal(self, *inputs, headless=False, install_keys=b'', platform='Darwin'):
+    def run_piped_setup_in_terminal(
+        self, *inputs, headless=False, install_keys=b'', platform='Darwin', no_color=False,
+    ):
         import pty
 
         stubs = self.root / 'stubs'
@@ -200,6 +203,7 @@ class SetupUpdateTests(unittest.TestCase):
         env = {
             **self.env, 'PATH': f'{stubs}:{self.env["PATH"]}',
             'SIDEPULSE_INSTALL_SPEC': str(self.new), 'SIDEPULSE_SETUP_NONINTERACTIVE': '0',
+            'TERM': 'xterm-256color', 'NO_COLOR': '1' if no_color else '',
         }
         options = ['--headless'] if headless else []
         terminal_state = '''
@@ -280,6 +284,7 @@ print(settings)
         self.assertEqual(status, 0, output)
         self.assertNotIn('^[[C', output)
         self.assertNotIn('\x1b[C', output)
+        output = re.sub(r'\x1b\[[\d;]*m', '', output)
         for agent in ('Codex', 'Claude Code', 'Grok', 'Cursor', 'Junie'):
             self.assertIn(f'[x] {agent} hooks', output)
         for component in (
@@ -306,14 +311,24 @@ print(settings)
     def test_piped_setup_can_cancel_without_installing(self):
         status, output = self.run_piped_setup_in_terminal(b'q')
         self.assertEqual(status, 0, output)
+        self.assertIn('\x1b[1mSide\x1b[91mP\x1b[93mu\x1b[92ml\x1b[96ms\x1b[95me\x1b[0m setup', output)
+        self.assertIn('\x1b[1;96m  > [x]\x1b[0m', output)
+        self.assertIn('\x1b[92m    [x]\x1b[0m', output)
         self.assertIn('SidePulse setup cancelled.', output)
         self.assertFalse(self.install_root.exists())
         self.assertFalse((self.root / 'state').exists())
+
+    def test_piped_setup_respects_no_color(self):
+        status, output = self.run_piped_setup_in_terminal(b'q', no_color=True)
+        self.assertEqual(status, 0, output)
+        self.assertIn('SidePulse setup', output)
+        self.assertNotRegex(output, r'\x1b\[[\d;]*m')
 
     def test_piped_headless_setup_installs_defaults_without_terminal_input(self):
         status, output = self.run_piped_setup_in_terminal(headless=True)
         self.assertEqual(status, 0, output)
         self.assertNotIn('Select optional components', output)
+        self.assertNotRegex(output, r'\x1b\[[\d;]*m')
         self.assertIn('SidePulse is installed.', output)
         self.assertEqual(self.calls()[0], ['new', ['setup']])
 
