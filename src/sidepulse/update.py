@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -134,8 +135,10 @@ class DailyUpdateCheck:
             self.in_flight = False
 
 
-def update_installation(*, dry_run: bool = False) -> int:
-    print(f"Updating with: curl -fsSL {SETUP_URL} | bash", flush=True)
+def update_installation(*, dry_run: bool = False, headless: bool = False) -> int:
+    installer_env = os.environ | {"SIDEPULSE_SETUP_NONINTERACTIVE": "1"} if headless else None
+    runner = "env SIDEPULSE_SETUP_NONINTERACTIVE=1 bash" if headless else "bash"
+    print(f"Updating with: curl -fsSL {SETUP_URL} | {runner}", flush=True)
     if dry_run:
         print("Would run the same installer as one-command setup, using its install path and environment overrides.")
         return 0
@@ -148,7 +151,7 @@ def update_installation(*, dry_run: bool = False) -> int:
                 ["curl", "-fsSL", "-H", "Cache-Control: no-cache", SETUP_URL,
                  "-o", str(script)], check=True,
             )
-            subprocess.run(["bash", str(script)], check=True)
+            subprocess.run(["bash", str(script)], check=True, env=installer_env)
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"SidePulse update failed: {exc}", file=sys.stderr)
         return 1

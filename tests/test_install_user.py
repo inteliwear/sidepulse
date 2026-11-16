@@ -35,7 +35,8 @@ class UserInstallerTests(unittest.TestCase):
         self.assertIn('git+https://github.com/inteliwear/sidepulse.git', text)
         self.assertIn('SIDEPULSE_INSTALL_SPEC', text)
         self.assertIn("sys.version_info < (3, 10)", text)
-        self.assertIn('"$VENV/bin/sidepulse" setup', text)
+        self.assertIn('set -- setup', text)
+        self.assertIn('"$VENV/bin/sidepulse" "$@"', text)
         # Recovery instructions may mention sudo; the installer must never run it.
         executable_text = text
         if "cat >&2 <<'EOF'" in executable_text:

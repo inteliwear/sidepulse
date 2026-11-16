@@ -27,8 +27,10 @@ class SetupPythonTests(unittest.TestCase):
             "HOME": str(self.root),
             "PATH": f"{self.bin}:/usr/bin:/bin",
             "PYTHON_BIN": "python3",
+            "SIDEPULSE_SETUP_NONINTERACTIVE": "1",
             "SIDEPULSE_INSTALL_ROOT": str(self.install_root),
             "SIDEPULSE_TEST_LOG": str(self.log),
+            "XDG_STATE_HOME": str(self.root / "state"),
         }
         self.stub("uname", 'printf "Darwin\\n"')
         self.stub("xcode-select", "exit 0")

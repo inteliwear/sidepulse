@@ -3974,6 +3974,28 @@ class AgentMonitorTests(unittest.TestCase):
         guard.assert_called_once_with(scope="user", dry_run=False)
         launch.assert_not_called()
 
+    def test_sidepulse_setup_can_skip_all_optional_components(self) -> None:
+        args = cli_module.build_sidepulse_parser().parse_args(
+            ["setup", "--no-agent-monitor", "--no-sd-eject-guard", "--no-status-bar"]
+        )
+        service_result = SimpleNamespace(
+            path=Path("/tmp/io.sidepulse.service.plist"), started=True, detail=""
+        )
+
+        with (
+            patch.object(cli_module.sys, "platform", "darwin"),
+            patch.object(cli_module, "install_hook_results") as hooks,
+            patch("sidepulse.service_launch.install_service", return_value=service_result) as service,
+            patch("sidepulse.sd_eject_guard_launch.install_sd_eject_guard") as guard,
+            patch("sidepulse.status_bar_launch.install_launch_agent") as status_bar,
+        ):
+            self.assertEqual(cli_module.cmd_sidepulse_setup(args), 0)
+
+        service.assert_called_once_with(start=True, dry_run=False)
+        hooks.assert_not_called()
+        guard.assert_not_called()
+        status_bar.assert_not_called()
+
     def test_sidepulse_setup_is_cli_only_on_linux(self) -> None:
         parser = cli_module.build_sidepulse_parser()
         args = parser.parse_args(["setup"])

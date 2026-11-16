@@ -1,12 +1,16 @@
 """Run the actual curl installer against offline package fixtures."""
 from __future__ import annotations
 
+import errno
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -32,7 +36,9 @@ class SetupUpdateTests(unittest.TestCase):
             'PYTHON_BIN': sys.executable,
             'SIDEPULSE_INSTALL_ROOT': str(self.install_root),
             'SIDEPULSE_BIN_DIR': str(self.bin),
+            'SIDEPULSE_SETUP_NONINTERACTIVE': '1',
             'SIDEPULSE_TEST_LOG': str(self.log),
+            'XDG_STATE_HOME': str(self.root / 'state'),
             'PIP_NO_INDEX': '1',
             'PIP_DISABLE_PIP_VERSION_CHECK': '1',
         }
@@ -55,8 +61,11 @@ class SetupUpdateTests(unittest.TestCase):
                 args = sys.argv[1:]
                 with open(os.environ['SIDEPULSE_TEST_LOG'], 'a') as log:
                     log.write(json.dumps([MARKER, args]) + '\\n')
-                if args == ['setup'] and os.environ.get('SIDEPULSE_TEST_SETUP_FAIL'):
-                    return 1
+                if args[0] == 'setup':
+                    print('Configuring SidePulse components')
+                    if os.environ.get('SIDEPULSE_TEST_SETUP_FAIL'):
+                        print('Component setup failed', file=sys.stderr)
+                        return 1
                 if args == ['--version']:
                     print('sidepulse 1.0 ' + MARKER)
                 return 0
@@ -99,6 +108,12 @@ class SetupUpdateTests(unittest.TestCase):
     def test_fresh_install_then_same_version_update_loads_new_code_and_dependency(self):
         result = self.install(self.old)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('SidePulse is installed.', result.stdout)
+        self.assertNotIn('Configuring SidePulse components', result.stdout)
+        self.assertEqual(result.stderr, '')
+        setup_log, = (self.root / 'state/sidepulse/setup').iterdir()
+        self.assertIn('Configuring SidePulse components', setup_log.read_text())
+        self.assertNotIn(str(setup_log), result.stdout)
         config = self.home / 'settings.json'
         config.write_text('{"show_menu_bar_icon": false}')
         self.log.write_text('')
@@ -155,6 +170,92 @@ class SetupUpdateTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.calls()[-1], ['new', ['service', 'start']])
         self.assertNotIn('SidePulse is installed.', result.stdout)
+        self.assertIn('Component setup failed', result.stderr)
+        log_path = Path(result.stderr.rsplit('Full log: ', 1)[1].strip())
+        self.assertIn('Component setup failed', log_path.read_text())
+
+    def run_piped_setup_in_terminal(self, *inputs, headless=False):
+        import pty
+
+        stubs = self.root / 'stubs'
+        stubs.mkdir()
+        for name, body in (
+            ('uname', 'printf "Darwin\\n"'),
+            ('xcode-select', 'exit 0' if headless else 'exit 1'),
+            ('xcrun', 'exit 0' if headless else 'exit 1'),
+        ):
+            stub = stubs / name
+            stub.write_text(f'#!/bin/sh\n{body}\n')
+            stub.chmod(0o755)
+
+        env = {
+            **self.env, 'PATH': f'{stubs}:{self.env["PATH"]}',
+            'SIDEPULSE_INSTALL_SPEC': str(self.new), 'SIDEPULSE_SETUP_NONINTERACTIVE': '0',
+        }
+        options = ['--headless'] if headless else []
+        command = ['sh', '-c', 'script=$1; shift; cat "$script" | sh -s -- "$@"', 'sh', str(SCRIPT), *options]
+        pid, terminal = pty.fork()
+        if pid == 0:
+            try:
+                os.execve('/bin/sh', command, env)
+            finally:
+                os._exit(127)
+        output = bytearray()
+        deadline = time.monotonic() + 60
+        reaped = False
+        try:
+            for answer in inputs:
+                start = len(output)
+                while b'\n> ' not in output[start:]:
+                    self.assertTrue(select.select([terminal], [], [], max(0, deadline - time.monotonic()))[0], output)
+                    output.extend(os.read(terminal, 4096))
+                self.assertFalse(self.install_root.exists())
+                self.assertFalse((self.root / 'state').exists())
+                os.write(terminal, answer + b'\n')
+            while True:
+                self.assertTrue(select.select([terminal], [], [], max(0, deadline - time.monotonic()))[0], output)
+                try:
+                    chunk = os.read(terminal, 4096)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:  # Linux signals terminal EOF this way.
+                        raise
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+            _, status = os.waitpid(pid, 0)
+            reaped = True
+            return os.waitstatus_to_exitcode(status), output.decode()
+        finally:
+            os.close(terminal)
+            if not reaped:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+
+    def test_piped_setup_confirms_toggled_components_before_installing(self):
+        status, output = self.run_piped_setup_in_terminal(b'1', b'2', b'3', b'')
+        self.assertEqual(status, 0, output)
+        for component in ('SD card ejection prevention', 'Agent monitor', 'Status-bar indicator'):
+            self.assertIn(f'[x] {component}', output)
+            self.assertIn(f'[ ] {component}', output)
+        self.assertIn('important for deep sleep', output)
+        self.assertEqual(self.calls()[0], [
+            'new', ['setup', '--no-agent-monitor', '--no-sd-eject-guard', '--no-status-bar'],
+        ])
+
+    def test_piped_setup_can_cancel_without_installing(self):
+        status, output = self.run_piped_setup_in_terminal(b'q')
+        self.assertEqual(status, 0, output)
+        self.assertIn('SidePulse setup cancelled.', output)
+        self.assertFalse(self.install_root.exists())
+        self.assertFalse((self.root / 'state').exists())
+
+    def test_piped_headless_setup_installs_defaults_without_terminal_input(self):
+        status, output = self.run_piped_setup_in_terminal(headless=True)
+        self.assertEqual(status, 0, output)
+        self.assertNotIn('Select optional components', output)
+        self.assertIn('SidePulse is installed.', output)
+        self.assertEqual(self.calls()[0], ['new', ['setup']])
 
     def test_macos_menu_bar_is_stopped_before_replacement_and_resumed_on_failure(self):
         self.assertEqual(self.install(self.old).returncode, 0)

@@ -130,6 +130,10 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     version.set_defaults(func=cmd_version)
     update = subparsers.add_parser("update", help="Update using the one-command setup installer.")
     update.add_argument(
+        "--headless", action="store_true",
+        help="Update all available components without prompting.",
+    )
+    update.add_argument(
         "--dry-run", action="store_true",
         help="Show the setup command without downloading or changing anything.",
     )
@@ -173,10 +177,20 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     setup.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would change.")
     setup.add_argument(
+        "--no-agent-monitor",
+        action="store_true",
+        help="Skip installing agent monitor hooks.",
+    )
+    setup.add_argument(
         "--sd-eject-guard-scope",
         choices=("auto", "system", "user"),
         default="auto",
         help="Install the SD eject guard as a system service when possible, or as a user agent.",
+    )
+    setup.add_argument(
+        "--no-sd-eject-guard",
+        action="store_true",
+        help="Skip installing the SD card eject guard.",
     )
     setup.add_argument(
         "--no-status-bar",
@@ -939,8 +953,9 @@ def cmd_sidepulse_sdejectguard_logs(args: argparse.Namespace) -> int:
 def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     if getattr(args, "uninstall", False):
         return cmd_uninstall(args)
-    results = install_hook_results(args)
-    print_install_results(results, dry_run=args.dry_run)
+    if not args.no_agent_monitor:
+        results = install_hook_results(args)
+        print_install_results(results, dry_run=args.dry_run)
 
     from .service_launch import install_service
 
@@ -959,17 +974,22 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
         print("sidepulse: ready for linked phones and mounted SidePulse devices")
         return 0
 
-    from .sd_eject_guard_launch import SD_EJECT_GUARD_DISPLAY_NAME, SdEjectGuardInstallError, install_sd_eject_guard
-
-    try:
-        guard_result = install_sd_eject_guard(
-            scope=args.sd_eject_guard_scope,
-            dry_run=args.dry_run,
+    if not args.no_sd_eject_guard:
+        from .sd_eject_guard_launch import (
+            SD_EJECT_GUARD_DISPLAY_NAME,
+            SdEjectGuardInstallError,
+            install_sd_eject_guard,
         )
-    except (SdEjectGuardInstallError, OSError, subprocess.CalledProcessError) as exc:
-        print(f"{SD_EJECT_GUARD_DISPLAY_NAME}: {exc}", file=sys.stderr)
-        return 1
-    print_sd_eject_guard_result(guard_result)
+
+        try:
+            guard_result = install_sd_eject_guard(
+                scope=args.sd_eject_guard_scope,
+                dry_run=args.dry_run,
+            )
+        except (SdEjectGuardInstallError, OSError, subprocess.CalledProcessError) as exc:
+            print(f"{SD_EJECT_GUARD_DISPLAY_NAME}: {exc}", file=sys.stderr)
+            return 1
+        print_sd_eject_guard_result(guard_result)
 
     if args.no_status_bar:
         return 0
@@ -1109,7 +1129,7 @@ def _show_daemon_status(args: argparse.Namespace, *, live: bool) -> int:
 def cmd_sidepulse_update(args: argparse.Namespace) -> int:
     from .update import update_installation
 
-    return update_installation(dry_run=args.dry_run)
+    return update_installation(dry_run=args.dry_run, headless=args.headless)
 
 
 def cmd_sidepulse_settings(_args: argparse.Namespace) -> int:

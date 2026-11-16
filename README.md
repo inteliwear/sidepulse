@@ -37,10 +37,28 @@ downloads Python 3.13 using uv into `~/.local/share/sidepulse`, without requirin
 Homebrew or administrator access. On Linux, install Python 3.10 or newer first. The
 [setup script](scripts/setup.sh) creates an isolated environment under
 `~/.local/share/sidepulse/venv`, installs SidePulse from GitHub, links the CLI
-at `~/.local/bin/sidepulse`, and runs `sidepulse setup`. On macOS, setup also
-installs the menu-bar app and hardware helpers. On Linux, it automatically
-uses CLI-only mode for mounted SidePulse devices and iPhone/Android linking and push. Run
-`sidepulse update` to upgrade to the newest version from GitHub.
+at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
+
+All available components are selected in the terminal menu. Type a component's
+number and press Enter to toggle it. Press Enter on an empty line to confirm,
+or enter `q` to cancel. macOS offers SD card ejection prevention (important for
+deep sleep), Agent monitor, and the status-bar indicator. Linux offers Agent
+monitor. Leaving a component unchecked skips its setup for this run. The core
+CLI and background service are included in every install.
+
+Setup keeps detailed output in
+`${XDG_STATE_HOME:-$HOME/.local/state}/sidepulse/setup/`. On failure, it shows
+the last 30 lines and the full log path.
+
+Agents and automation can install all available components without prompting.
+This command also reports a failed download to the caller.
+
+```sh
+bash -o pipefail -c 'curl -fsSL https://sidepulse.io/setup.sh | env SIDEPULSE_SETUP_NONINTERACTIVE=1 sh'
+```
+
+From a checkout, run `sh scripts/setup.sh --headless`. For an existing install,
+run `sidepulse update --headless`.
 
 `sp` is a short alias for `sidepulse`; for example, `sp status` runs
 `sidepulse status`.
@@ -50,7 +68,7 @@ named **SidePulse Background Service** in macOS background activity settings,
 and a user systemd service on Linux. Setup restarts the service, so an
 upgrade takes effect right away instead of leaving the previous build running.
 If a Linux session has no systemd user manager, setup still installs the unit
-and prints that it could not start; `sidepulse service run` remains available as
+and records in the setup log that it could not start. `sidepulse service run` is
 a foreground fallback.
 
 For fresh Linux installation, official-main upgrade, service recovery, and
@@ -181,6 +199,7 @@ reported in the tooltip. Checking does not install updates or change the current
 
 ```sh
 sidepulse update
+sidepulse update --headless
 sidepulse update --dry-run
 ```
 
@@ -190,7 +209,7 @@ run a partial installer. The website script forwards to `scripts/setup.sh` on
 GitHub, keeping both entry points on one implementation.
 
 The installer updates `~/.local/share/sidepulse/venv` from GitHub, refreshes the
-CLI links, and runs `sidepulse setup` to configure hooks and restart services.
+CLI links, and runs `sidepulse setup` for the selected components.
 It replaces the installed code even when the package version has not changed.
 Settings and linked devices are retained. Downloads and builds finish before
 the background service and menu-bar app are paused; if installation fails,
@@ -621,8 +640,8 @@ Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
-To skip the status-bar app but still install hooks and SidePulse Pro Eject Prevention, use
-`sidepulse setup --no-status-bar`.
+Use `--no-agent-monitor`, `--no-sd-eject-guard`, or `--no-status-bar` to skip
+individual components.
 
 SidePulse Pro Eject Prevention keeps the built-in SD reader attached after
 macOS hibernate or lock-screen mount refusals. By default setup installs it
