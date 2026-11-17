@@ -143,3 +143,87 @@ def test_log_rotation_and_old_events(source):
     failed, = t3.state.statuses()
     assert failed.agent_id == row.agent_id
     assert failed.mode == AgentMode.BLOCKED_ERROR
+
+
+def native_line(at, provider, direction, payload):
+    date = datetime.fromtimestamp(at, timezone.utc).isoformat()
+    protocol = {"codex": "codex.app-server", "claudeAgent": "claude-agent-sdk.query"}[provider]
+    packet = {"provider": provider, "protocol": protocol, "kind": "protocol",
+              "providerSessionId": "t3-internal-session",
+              "event": {"stage": "decoded", "direction": direction, "payload": payload}}
+    return f"[{date}] NTIVE: {json.dumps(packet)}\n"
+
+
+def test_modern_codex_log_tracks_native_id_and_approval(source):
+    t3, log = source
+    now = time.time()
+    add(log, [
+        native_line(now - 8, "codex", "incoming", {
+            "method": "thread/started", "params": {"thread": {"id": "codex-native", "cwd": "/work/project"}},
+        }),
+        native_line(now - 7, "codex", "incoming", {
+            "method": "turn/started", "params": {"threadId": "codex-native"},
+        }),
+        native_line(now - 6, "codex", "incoming", {
+            "method": "item/started", "params": {
+                "threadId": "codex-native", "item": {"type": "commandExecution", "command": "private-command"},
+            },
+        }),
+    ])
+    t3.poll(now=now)
+    row, = t3.state.statuses()
+    assert (row.session_id, row.mode, row.tool_name) == ("codex-native", AgentMode.TOOL_RUNNING, "Shell command")
+    assert row.t3_link == "t3code://threads/environment/thread"
+    assert "private-command" not in json.dumps(t3.state.pending_events("test"))
+
+    add(log, [native_line(now - 5, "codex", "incoming", {
+        "method": "item/commandExecution/requestApproval", "id": 12, "params": {"threadId": "codex-native"},
+    })])
+    t3.poll(now=now)
+    assert t3.state.statuses()[0].mode == AgentMode.WAITING_FOR_INPUT
+
+    add(log, [native_line(now - 4, "codex", "outgoing", {"id": 98, "result": {}})])
+    t3.poll(now=now)
+    assert t3.state.statuses()[0].mode == AgentMode.WAITING_FOR_INPUT
+
+    add(log, [native_line(now - 3, "codex", "outgoing", {"id": 12, "result": {"decision": "accept"}})])
+    t3.poll(now=now)
+    assert t3.state.statuses()[0].mode == AgentMode.WORKING
+
+    add(log, [native_line(now - 2, "codex", "incoming", {
+        "method": "turn/completed", "params": {"threadId": "codex-native", "turn": {"status": "completed"}},
+    }), native_line(now - 1, "codex", "incoming", {
+        "method": "serverRequest/resolved", "params": {"threadId": "codex-native", "requestId": 12},
+    })])
+    t3.poll(now=now)
+    final, = t3.state.statuses()
+    assert final.agent_id == row.agent_id
+    assert final.mode == AgentMode.COMPLETED
+    assert final.cwd == "/work/project"
+
+
+def test_modern_claude_log_counts_one_live_hook_session(source):
+    t3, log = source
+    now = time.time()
+    hook = hook_report("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "claude-native"})
+    t3.state.submit(hook)
+    add(log, [
+        native_line(now - 8, "claudeAgent", "outgoing", {"type": "query.open", "options": {"cwd": "/project"}}),
+        native_line(now - 7, "claudeAgent", "outgoing", {"type": "prompt.offer", "message": "private-prompt"}),
+        native_line(now - 6, "claudeAgent", "incoming", {"type": "system", "subtype": "init",
+                                                       "session_id": "claude-native", "cwd": "/project"}),
+    ])
+    t3.poll(now=now)
+    row, = t3.state.statuses()
+    assert (row.session_id, row.t3_link) == ("claude-native", "t3code://threads/environment/thread")
+    assert row.mode == AgentMode.WORKING
+    assert "private-prompt" not in json.dumps(t3.state.pending_events("test"))
+
+    later = time.time() + 1
+    add(log, [native_line(later, "claudeAgent", "incoming", {
+        "type": "result", "subtype": "success", "session_id": "claude-native", "is_error": False,
+    })])
+    t3.poll(now=later + 1)
+    final, = t3.state.statuses()
+    assert final.agent_id == row.agent_id
+    assert final.mode == AgentMode.COMPLETED
