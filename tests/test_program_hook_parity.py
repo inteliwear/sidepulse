@@ -41,7 +41,7 @@ def emit(runtime, event, provider='claude', **fields):
     return monitor.snapshot(), legacy.snapshot()
 
 
-@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie'])
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie', 'antigravity'])
 def test_hook_sequences_match_existing_interpreter_and_preserve_metadata(runtime, provider):
     events = [
         ('UserPromptSubmit', {'prompt': 'Repair the widget', 'cwd': '/work/widget', 'agent_origin': 'VS Code'}),
@@ -292,7 +292,7 @@ def test_relay_forwards_explicit_state_independent_of_hook_visibility(runtime):
     assert store.statuses()  # Forward explicit state without desktop visibility heuristics.
 
 
-@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie'])
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie', 'antigravity'])
 def test_real_hook_socket_accounting_remote_ui_flow(tmp_path, provider):
     from sidepulse.hook import hook_log_main
     from sidepulse.program_transport import ProgramServer
@@ -357,7 +357,7 @@ def test_normalized_hook_finds_daemon_with_different_shell_state_directory(tmp_p
         store.close()
 
 
-@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie'])
+@pytest.mark.parametrize('provider', ['claude', 'codex', 'grok', 'cursor', 'junie', 'antigravity'])
 def test_hook_control_characters_in_prompt_do_not_reject_status(runtime, provider):
     from sidepulse.program_status import validate_context
     store, _, monitor = runtime

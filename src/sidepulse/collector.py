@@ -548,6 +548,7 @@ def default_sources(settings: AgentMonitorSettings | None = None) -> tuple[Sourc
         sources.append(SourceSpec(CLAUDE_TRANSCRIPT_PROVIDER, Path.home() / ".claude" / "projects"))
     sources.append(SourceSpec("grok", detect_log_path("grok")))
     sources.append(SourceSpec("junie", detect_log_path("junie")))
+    sources.append(SourceSpec("antigravity", detect_log_path("antigravity")))
     return unique_sources(sources)
 
 
@@ -1143,8 +1144,10 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.WORKING
     if event in {"PreToolUse"}:
-        if codex_question_tool(record) or (
-            record.provider == "junie" and record.tool_name == "AskUserQuestion"
+        if (
+            codex_question_tool(record)
+            or (record.provider == "junie" and record.tool_name == "AskUserQuestion")
+            or (record.provider == "antigravity" and record.tool_name == "ask_question")
         ):
             return AgentMode.WAITING_FOR_INPUT
         return AgentMode.TOOL_RUNNING
@@ -1162,7 +1165,14 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
             if isinstance(response, dict) and response.get("accepted") is True:
                 return AgentMode.WAITING_FOR_INPUT
         return AgentMode.WORKING
-    if event in {"UserPromptSubmit", "PreCompact", "PostCompact", "SubagentStart"}:
+    if event in {
+        "UserPromptSubmit",
+        "PreInvocation",
+        "PostInvocation",
+        "PreCompact",
+        "PostCompact",
+        "SubagentStart",
+    }:
         return AgentMode.WORKING
     if event in {"Stop", "SubagentStop"}:
         if record.provider == "codex" and event == "Stop" and not record.agent_id:

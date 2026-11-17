@@ -27,11 +27,13 @@ from .device_writer import (
 )
 from .hook import hook_log_main
 from .install import (
+    install_antigravity_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
     install_grok_hooks,
     install_junie_hooks,
+    uninstall_antigravity_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_cursor_hooks,
@@ -182,6 +184,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     setup.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     setup.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
     setup.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
+    setup.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would change.")
     setup.add_argument(
         "--no-agent-monitor",
@@ -286,7 +289,10 @@ def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
     hook_log = subparsers.add_parser("hook-log", help="Internal hook logging entry point.")
     hook_log.add_argument("--provider", choices=HOOK_PROVIDERS, required=True)
     hook_log.add_argument("--log", type=Path, required=True)
-    hook_log.add_argument("--event", help="Provider-native lifecycle event name (used by cursor).")
+    hook_log.add_argument(
+        "--event",
+        help="Provider-native lifecycle event name (used by cursor and antigravity).",
+    )
     hook_log.set_defaults(func=cmd_hook_log)
 
 
@@ -1207,6 +1213,8 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(install_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(install_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(install_junie_hooks(log_path=log_path, dry_run=args.dry_run))
     return results
@@ -1239,6 +1247,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
             results.append(uninstall_grok_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(uninstall_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
         else:
             results.append(uninstall_junie_hooks(log_path=log_path, dry_run=args.dry_run))
 

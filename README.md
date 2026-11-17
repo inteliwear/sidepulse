@@ -496,7 +496,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, and Junie through hooks, then
+SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, Junie, and Antigravity through hooks, then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -578,6 +578,9 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Cursor | `~/.cursor/hooks.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/cursor.jsonl` |
+| Junie | `~/.junie/config.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/junie.jsonl` |
+| Antigravity | `~/.gemini/config/hooks.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/antigravity.jsonl` |
 
 #### Local reply classifier (Apple Silicon)
 
@@ -716,6 +719,7 @@ sidepulse setup claude
 sidepulse setup grok
 sidepulse setup cursor
 sidepulse setup junie
+sidepulse setup antigravity
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -816,6 +820,7 @@ sidepulse setup claude --uninstall
 sidepulse setup grok --uninstall
 sidepulse setup cursor --uninstall
 sidepulse setup junie --uninstall
+sidepulse setup antigravity --uninstall
 ```
 
 Install and start the macOS status-bar app:
@@ -914,6 +919,16 @@ sessions when a matching installed IDE is available. Other Junie sessions resume
 in Terminal. You can also set either opener as the Junie preference. If SidePulse
 cannot find a matching installed IDE in JetBrains' recent projects, it falls back
 to Terminal.
+
+Antigravity support writes a `"sidepulse"` hook bundle into
+`~/.gemini/config/hooks.json` beside any existing bundles (such as Moshi's
+`"moshi-hook"`), covering `agy` CLI, Antigravity App, and Antigravity IDE.
+`PreToolUse` returns `{"decision": "ask"}` on stdout so Antigravity's normal
+permission prompts and cached allow rules remain unchanged. Sessions reopen in
+Terminal with `agy --conversation <id>`. Interactive CLI sessions can also be
+run under `sidepulse wrap agy` to capture `agy`'s native OSC 7501 status reports
+(including TUI permission prompts). See
+[`docs/antigravity-hooks.md`](docs/antigravity-hooks.md) for the wire contract.
 
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`

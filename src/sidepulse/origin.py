@@ -97,6 +97,17 @@ def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigi
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
         if provider == "junie" and "jetbrains" in bundle_id:
             return surface_origin(provider, "ide", "env:__CFBundleIdentifier")
+        if provider == "antigravity" and "antigravity" in bundle_id:
+            return surface_origin(provider, "app", "env:__CFBundleIdentifier")
+
+    if provider == "antigravity":
+        app_data = str(env.get("ANTIGRAVITY_APP_DATA_DIR") or "").replace("\\", "/").lower().rstrip("/")
+        if app_data.endswith("/antigravity-cli"):
+            return surface_origin(provider, "cli", "env:ANTIGRAVITY_APP_DATA_DIR")
+        if app_data.endswith("/antigravity-ide"):
+            return surface_origin(provider, "ide", "env:ANTIGRAVITY_APP_DATA_DIR")
+        if app_data.endswith("/antigravity"):
+            return surface_origin(provider, "app", "env:ANTIGRAVITY_APP_DATA_DIR")
 
     return None
 
@@ -122,6 +133,8 @@ def origin_from_processes(
         return surface_origin(provider, "app", "process:Claude.app")
     if provider == "grok" and "grok.app" in haystack:
         return surface_origin(provider, "app", "process:Grok.app")
+    if provider == "antigravity" and "antigravity.app" in haystack:
+        return surface_origin(provider, "app", "process:Antigravity.app")
     if provider == "junie" and any(
         token in haystack
         for token in (
@@ -148,6 +161,8 @@ def origin_from_processes(
             return surface_origin(provider, "cli", "process:grok")
         if provider == "junie" and basename == "junie":
             return surface_origin(provider, "cli", "process:junie")
+        if provider == "antigravity" and basename in {"agy", "antigravity"}:
+            return surface_origin(provider, "cli", "process:agy")
 
     return None
 
@@ -175,6 +190,13 @@ def surface_origin(provider: str, surface: str, source: str) -> AgentOrigin:
         ("junie", "cli"): "Junie CLI",
         ("junie", "ide"): "Junie in JetBrains IDE",
         ("junie", "transcript"): "Junie Transcript",
+        ("antigravity", "app"): "Antigravity App",
+        ("antigravity", "cli"): "Antigravity CLI",
+        ("antigravity", "ide"): "Antigravity IDE",
+        ("antigravity", "vscode"): "Antigravity in VS Code",
+        ("antigravity", "cursor"): "Antigravity in Cursor",
+        ("antigravity", "windsurf"): "Antigravity in Windsurf",
+        ("antigravity", "transcript"): "Antigravity Transcript",
     }
     label = labels.get((provider, surface), provider_label(provider))
     return AgentOrigin(
