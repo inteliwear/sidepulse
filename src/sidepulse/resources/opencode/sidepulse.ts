@@ -90,11 +90,17 @@ function statusTitle(title: string): string {
   return prefix + "…"
 }
 
-function createSidePulse(ctx: Context, submit: (report: object) => void) {
-  const tracked = new Map<string, Tracked>()
-  const sessions = new Map<string, Promise<SessionInfo | undefined>>()
-  const roots = new Map<string, string>()
+type SessionTracking = {
+  tracked: Map<string, Tracked>
+  sessions: Map<string, Promise<SessionInfo | undefined>>
+  roots: Map<string, string>
+}
 
+function createSidePulse(
+  ctx: Pick<Context, "session">,
+  submit: (report: object) => void,
+  { tracked, sessions, roots }: SessionTracking,
+) {
   const lookup = (sessionID: string) => {
     let info = sessions.get(sessionID)
     if (!info) {
@@ -369,6 +375,7 @@ type Shared = {
   contexts: Context[]
   handle: (event: Event) => Promise<void>
   reporter: Reporter
+  tracking: SessionTracking
   seen: Set<string>
   queue: Promise<void>
 }
@@ -378,14 +385,28 @@ const global = globalThis as { [SHARED]?: Shared }
 function sharedState(ctx: Context): Shared {
   const current = global[SHARED]
   if (current?.module === MODULE) return current
-  const contexts: Context[] = []
-  const reporter = new Reporter(sidepulseCommand(ctx.options?.command))
-  const lookup = { session: { get: (input: { sessionID: string }) => contexts[0].session.get(input) } }
+  // Keep the queue and pending prompts through a module reload. A fresh
+  // reporter could deliver a newer event before an older queued report.
+  const contexts: Context[] = current?.contexts ?? []
+  const reporter = current?.reporter ?? new Reporter(sidepulseCommand(ctx.options?.command))
+  const tracking: SessionTracking = current?.tracking ?? {
+    tracked: new Map(),
+    sessions: new Map(),
+    roots: new Map(),
+  }
+  const lookup = { session: { get: (input: { sessionID: string }) => contexts.at(-1)!.session.get(input) } }
+  const handle = createSidePulse(lookup, (report) => reporter.push(report), tracking)
+  if (current) {
+    current.module = MODULE
+    current.handle = handle
+    return current
+  }
   return (global[SHARED] = {
     module: MODULE,
     contexts,
-    handle: createSidePulse(lookup as Context, (report) => reporter.push(report)),
+    handle,
     reporter,
+    tracking,
     seen: new Set(),
     queue: Promise.resolve(),
   })
@@ -399,7 +420,7 @@ export default {
     const controller = new AbortController()
     void (async () => {
       for await (const event of ctx.event.subscribe({ types: EVENT_TYPES, signal: controller.signal })) {
-        if (global[SHARED] !== shared || shared.seen.has(event.id)) continue
+        if (shared.module !== MODULE || shared.seen.has(event.id)) continue
         shared.seen.add(event.id)
         if (shared.seen.size > MAX_SEEN_EVENTS) shared.seen.delete(shared.seen.values().next().value!)
         // One queue for all copies keeps events in the order they arrived.
@@ -408,7 +429,8 @@ export default {
     })().catch(() => {})
     return () => {
       controller.abort()
-      shared.contexts.splice(shared.contexts.indexOf(ctx), 1)
+      const index = shared.contexts.indexOf(ctx)
+      if (index >= 0) shared.contexts.splice(index, 1)
     }
   },
 }

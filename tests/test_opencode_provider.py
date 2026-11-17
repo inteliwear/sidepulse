@@ -36,7 +36,7 @@ def node_with_type_stripping() -> list[str] | None:
 
 def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code: int = 0,
                command: str | None = None, exit_early: bool = False, discard_first: bool = False,
-               reload: bool = False) -> tuple[list[dict], str]:
+               reload: bool = False, reload_after: int | None = None) -> tuple[list[dict], str]:
     """Run the plugin's real entry point; a fake `sidepulse` records each report."""
     node = node_with_type_stripping()
     assert node is not None
@@ -55,7 +55,7 @@ def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code
             [*node, str(HARNESS), str(PLUGIN), command or str(fake)],
             input=json.dumps({
                 "sessions": sessions, "events": events, "copies": copies,
-                "exitEarly": exit_early, "reload": reload,
+                "exitEarly": exit_early, "reload": reload, "reloadAfter": reload_after,
                 "firstStarted": str(first_started) if discard_first else None,
             }),
             capture_output=True,
@@ -333,6 +333,19 @@ class OpenCodePluginTests(unittest.TestCase):
         ], copies=2, reload=True)
         self.assertEqual([report["request_id"] for report in reports], ["opencode-e1", "opencode-e2"])
         self.assertNotIn("[sidepulse]", stderr)
+
+    def test_reload_preserves_pending_prompts_and_report_order(self) -> None:
+        reports, _ = run_plugin(self.sessions, [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+            event("e2", "permission.asked", sessionID="ses_a", id="per_1", action="edit"),
+            event("e3", "permission.replied", sessionID="ses_a", requestID="per_1"),
+            event("e4", "session.execution.succeeded", sessionID="ses_a"),
+        ], reload_after=2)
+        self.assertEqual(
+            [(report["request_id"], report["status"]["state"]) for report in reports],
+            [("opencode-e1", "working"), ("opencode-e2", "blocked"),
+             ("opencode-e3", "working"), ("opencode-e4", "done")],
+        )
 
     def test_a_failing_or_missing_sidepulse_is_reported_once_and_ignored(self) -> None:
         events = [

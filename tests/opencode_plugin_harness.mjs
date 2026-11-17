@@ -10,11 +10,11 @@ import { existsSync, readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
 const [pluginPath, command] = process.argv.slice(2)
-const { sessions, events, copies = 1, exitEarly = false, reload = false, firstStarted } = JSON.parse(readFileSync(0, "utf8"))
+const { sessions, events, copies = 1, exitEarly = false, reload = false, reloadAfter, firstStarted } = JSON.parse(readFileSync(0, "utf8"))
 const url = pathToFileURL(pluginPath).href
 
 let delivered = 0
-const context = () => ({
+const context = (input) => ({
   options: { command },
   session: {
     async get({ sessionID }) {
@@ -32,7 +32,7 @@ const context = () => ({
     async *subscribe({ types }) {
       await new Promise((resolve) => setTimeout(resolve, 10))
       try {
-        for (const event of events) if (types.includes(event.type)) yield event
+        for (const event of input) if (types.includes(event.type)) yield event
       } finally {
         delivered++
       }
@@ -40,14 +40,22 @@ const context = () => ({
   },
 })
 
-const modules = [await import(url + "?first")]
-if (reload) modules.push(await import(url + "?second"))
-const cleanups = modules.flatMap(({ default: plugin }) =>
-  Array.from({ length: copies }, () => plugin.setup(context())),
-)
-
-while (delivered < cleanups.length) await new Promise((resolve) => setTimeout(resolve, 5))
+const setup = ({ default: plugin }, input) => Array.from({ length: copies }, () => plugin.setup(context(input)))
+const cleanups = setup(await import(url + "?first"), events.slice(0, reloadAfter ?? events.length))
 const shared = globalThis[Symbol.for("sidepulse.opencode.state")]
+const waitForDelivery = async () => {
+  while (delivered < cleanups.length) await new Promise((resolve) => setTimeout(resolve, 5))
+}
+
+if (reloadAfter != null) {
+  await waitForDelivery()
+  await shared.queue
+}
+if (reload || reloadAfter != null) {
+  cleanups.push(...setup(await import(url + "?second"), events.slice(reloadAfter ?? 0)))
+}
+
+await waitForDelivery()
 await shared.queue
 // With exitEarly, exit while reports are still queued, like `opencode run`.
 if (exitEarly) {
