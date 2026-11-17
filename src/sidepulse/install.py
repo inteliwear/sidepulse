@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import threading
+from tempfile import NamedTemporaryFile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -54,7 +55,7 @@ class InstallResult:
             "changed": self.changed,
             "backup_path": str(self.backup_path) if self.backup_path else None,
             "dry_run": self.dry_run,
-            "note": self.note,
+            **({"note": self.note} if self.note else {}),
         }
 
 
@@ -363,21 +364,30 @@ def install_opencode_plugin(
     """OpenCode has no command hooks; a plugin reports through `sidepulse report`."""
     target = plugin_path or default_opencode_plugin_path()
     source = opencode_plugin_source()
-    if target.exists() and not opencode_plugin_is_managed(target):
-        return InstallResult("opencode", target, None, False, None, dry_run,
-                             note="skipped: this file was not installed by SidePulse")
+    legacy = target.with_suffix(".js")
+    if (target.exists() or target.is_symlink()) and not opencode_plugin_is_managed(target):
+        return InstallResult("opencode", target, None, False, dry_run=dry_run,
+                             note="skipped because an unmanaged sidepulse.ts already exists")
+    if legacy.exists() or legacy.is_symlink():
+        return InstallResult("opencode", legacy, None, False, dry_run=dry_run,
+                             note="skipped because sidepulse.js already exists")
     try:
         changed = target.read_text(encoding="utf-8") != source
     except (OSError, UnicodeDecodeError):
         changed = True
     if changed and not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        try:
-            temporary.write_text(source, encoding="utf-8")
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=target.parent,
+            prefix=f".{target.name}.", suffix=".tmp", delete=False,
+        ) as staging:
+            temporary = Path(staging.name)
+            try:
+                staging.write(source)
+                staging.close()
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
     return InstallResult("opencode", target, None, changed, None, dry_run)
 
 
@@ -389,7 +399,10 @@ def uninstall_opencode_plugin(
     changed = target.exists() and opencode_plugin_is_managed(target)
     if changed and not dry_run:
         target.unlink(missing_ok=True)
-    return InstallResult("opencode", target, None, changed, None, dry_run)
+    note = None
+    if not changed and (target.exists() or target.is_symlink()):
+        note = "skipped because sidepulse.ts is unmanaged"
+    return InstallResult("opencode", target, None, changed, dry_run=dry_run, note=note)
 
 
 def install_cursor_hooks(

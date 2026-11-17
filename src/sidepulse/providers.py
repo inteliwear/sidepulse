@@ -92,10 +92,9 @@ JUNIE_MONITOR_EVENTS = tuple(
     event for event in JUNIE_EVENTS if event != "PermissionRequest"
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie", "opencode")
-# OpenCode reports through a plugin and `sidepulse report`, not hook logs.
 LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
-OPENCODE_PLUGIN_MARKER = "Managed by SidePulse: `sidepulse setup` replaces this file"
+HOOK_PROVIDERS = (*LOG_HOOK_PROVIDERS, "opencode")
+OPENCODE_PLUGIN_MARKER = "// Managed by SidePulse: `sidepulse setup` replaces this file and"
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
 )
@@ -397,19 +396,25 @@ def default_opencode_plugin_path(home: Path | None = None) -> Path:
 
 
 def opencode_plugin_is_managed(path: Path) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
     try:
-        return OPENCODE_PLUGIN_MARKER in path.read_text(encoding="utf-8")
+        with path.open(encoding="utf-8") as plugin:
+            return plugin.readline().startswith("// SidePulse status for OpenCode.") and (
+                plugin.readline().rstrip("\r\n") == OPENCODE_PLUGIN_MARKER
+            )
     except (OSError, UnicodeDecodeError):
         return False
 
 
 def detect_opencode_config(home: Path | None = None) -> ProviderConfig:
     plugin_path = default_opencode_plugin_path(home)
-    opencode_config_dir = plugin_path.parent.parent
+    legacy_path = plugin_path.with_suffix(".js")
+    existing_path = plugin_path if plugin_path.exists() or plugin_path.is_symlink() else legacy_path
     return ProviderConfig(
         "opencode",
-        plugin_path,
-        opencode_config_dir.exists(),
+        existing_path if existing_path.exists() or existing_path.is_symlink() else plugin_path,
+        existing_path.exists() or existing_path.is_symlink(),
         opencode_plugin_is_managed(plugin_path),
         (),
         (),

@@ -1223,12 +1223,11 @@ def print_install_results(results, *, dry_run: bool) -> None:
         action = "would update" if dry_run and result.changed else "updated"
         if not result.changed:
             action = "already configured"
-        print(f"{result.provider}: {action}")
+        note = getattr(result, "note", None)
+        print(f"{result.provider}: {note or action}")
         print(f"  config: {result.config_path}")
         if result.log_path:
             print(f"  log: {result.log_path}")
-        if getattr(result, "note", None):
-            print(f"  {result.note}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
         if result.provider == "codex" and result.changed and not dry_run:
@@ -1258,12 +1257,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         action = "would remove" if args.dry_run and result.changed else "removed"
         if not result.changed:
             action = "already uninstalled"
-        print(f"{result.provider}: {action}")
+        note = getattr(result, "note", None)
+        print(f"{result.provider}: {note or action}")
         print(f"  config: {result.config_path}")
         if result.log_path:
             print(f"  log: {result.log_path}")
-        if getattr(result, "note", None):
-            print(f"  {result.note}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
     return 0

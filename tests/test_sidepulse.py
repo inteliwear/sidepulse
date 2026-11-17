@@ -3872,6 +3872,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        opencode_result = SimpleNamespace(
+            provider="opencode",
+            config_path=Path("/tmp/sidepulse.ts"),
+            log_path=None,
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3908,6 +3915,11 @@ class AgentMonitorTests(unittest.TestCase):
             ) as cursor,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
             patch.object(cli_module, "install_junie_hooks", return_value=junie_result) as junie,
+            patch.object(
+                cli_module,
+                "install_opencode_plugin",
+                return_value=opencode_result,
+            ) as opencode,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3925,6 +3937,7 @@ class AgentMonitorTests(unittest.TestCase):
         cursor.assert_called_once()
         grok.assert_called_once()
         junie.assert_called_once()
+        opencode.assert_called_once_with(dry_run=False)
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
         service.assert_called_once_with(start=True, dry_run=False)

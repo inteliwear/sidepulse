@@ -35,7 +35,7 @@ def node_with_type_stripping() -> list[str] | None:
 
 
 def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code: int = 0,
-               command: str | None = None, exit_early: bool = False,
+               command: str | None = None, exit_early: bool = False, discard_first: bool = False,
                reload: bool = False) -> tuple[list[dict], str]:
     """Run the plugin's real entry point; a fake `sidepulse` records each report."""
     node = node_with_type_stripping()
@@ -43,16 +43,21 @@ def run_plugin(sessions: dict, events: list[dict], *, copies: int = 1, exit_code
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp) / "reports.jsonl"
         fake = Path(tmp) / "sidepulse"
+        first_started = Path(tmp) / "first-started"
         fake.write_text(
             "#!/bin/sh\n"
             f'[ "$1 $2" = "report --json" ] || exit 64\n'
-            f'body=$(cat); sleep 0.2\nprintf "%s\\n" "$body" >> "{output}"\nexit {exit_code}\n'
+            + (f'if mkdir "{first_started}" 2>/dev/null; then sleep 2; exit 0; fi\n' if discard_first else '')
+            + f'body=$(cat); sleep 0.2\nprintf "%s\\n" "$body" >> "{output}"\nexit {exit_code}\n'
         )
         fake.chmod(0o755)
         result = subprocess.run(
             [*node, str(HARNESS), str(PLUGIN), command or str(fake)],
-            input=json.dumps({"sessions": sessions, "events": events, "copies": copies, "exitEarly": exit_early,
-                              "reload": reload}),
+            input=json.dumps({
+                "sessions": sessions, "events": events, "copies": copies,
+                "exitEarly": exit_early, "reload": reload,
+                "firstStarted": str(first_started) if discard_first else None,
+            }),
             capture_output=True,
             text=True,
             timeout=30,
@@ -94,9 +99,29 @@ class OpenCodeInstallTests(unittest.TestCase):
             removed = uninstall_opencode_plugin(plugin_path=target)
 
             self.assertFalse(installed.changed)
-            self.assertIn("not installed by SidePulse", installed.note)
+            self.assertIn("unmanaged sidepulse.ts", installed.note)
             self.assertFalse(removed.changed)
             self.assertEqual(target.read_text(encoding="utf-8"), "export default {}\n")
+
+    def test_setup_refuses_legacy_js(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = default_opencode_plugin_path(Path(tmp))
+            target.parent.mkdir(parents=True)
+            legacy = target.with_suffix(".js")
+            legacy.write_text("export default {}", encoding="utf-8")
+            self.assertFalse(install_opencode_plugin(plugin_path=target).changed)
+            self.assertFalse(target.exists())
+            self.assertTrue(legacy.is_file())
+
+    @unittest.skipIf(os.name == "nt", "Creating symlinks on Windows requires privileges")
+    def test_setup_protects_dangling_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = default_opencode_plugin_path(Path(tmp))
+            target.parent.mkdir(parents=True)
+            target.symlink_to(Path(tmp) / "missing.ts")
+            self.assertFalse(install_opencode_plugin(plugin_path=target).changed)
+            self.assertFalse(uninstall_opencode_plugin(plugin_path=target).changed)
+            self.assertTrue(target.is_symlink())
 
     def test_uninstall_removes_the_managed_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,22 +243,36 @@ class OpenCodePluginTests(unittest.TestCase):
             event("e9", "session.execution.succeeded", sessionID="ses_a"),
         ]), [
             ("working", None, None),
-            ("blocked", "permission", "shell: rm -rf build"),
+            ("blocked", "permission", "shell"),
             ("blocked", "question", "Which database?"),
             ("blocked", "question", "Which database?"),
             ("working", None, None),
             ("done", None, None),
         ])
 
-    def test_permission_message_prefers_opencode_text_and_is_bounded(self) -> None:
+    def test_permission_reports_exclude_tool_inputs(self) -> None:
         reports, _ = run_plugin(self.sessions, [
             event("e1", "permission.asked", id="per_1", sessionID="ses_a", action="edit",
-                  resources=["a.py"], message="Edit\n\x07a.py " + "x" * 400),
+                  resources=["private-file.py"], message="private operation"),
         ])
-        message = reports[0]["status"]["msg"]
-        self.assertTrue(message.startswith("Edit a.py x"))
-        self.assertEqual(len(message), 240)
-        self.assertTrue(message.endswith("…"))
+        self.assertEqual(reports[0]["status"]["msg"], "edit")
+        self.assertNotIn("private", json.dumps(reports))
+
+    def test_unicode_title_fits_the_daemon_byte_limit(self) -> None:
+        reports, _ = run_plugin({"ses_a": {"title": "🟣" * 200}}, [
+            event("e1", "session.execution.started", sessionID="ses_a"),
+        ])
+        status, context = reports[0]["status"], reports[0]["context"]
+        self.assertEqual(status["title"], "🟣" * 47 + "…")
+        self.assertEqual(context["title"], status["title"])
+        validate_status(status)
+        validate_context(context)
+
+    def test_resends_the_only_in_flight_report_at_exit(self) -> None:
+        reports, _ = run_plugin(self.sessions, [
+            event("e1", "session.execution.succeeded", sessionID="ses_a"),
+        ], exit_early=True, discard_first=True)
+        self.assertEqual([report["request_id"] for report in reports], ["opencode-e1"])
 
     def test_rename_updates_the_title(self) -> None:
         reports, _ = run_plugin(self.sessions, [

@@ -114,11 +114,13 @@ from .install import (
     install_cursor_hooks,
     install_grok_hooks,
     install_junie_hooks,
+    install_opencode_plugin,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
     uninstall_cursor_hooks,
     uninstall_grok_hooks,
     uninstall_junie_hooks,
+    uninstall_opencode_plugin,
 )
 from .led_status import (
     led_count_for_target,
@@ -150,6 +152,7 @@ from .providers import (
     detect_cursor_config,
     detect_grok_config,
     detect_junie_config,
+    detect_opencode_config,
     default_state_dir,
 )
 from .sd_eject_guard_launch import (
@@ -167,8 +170,10 @@ from .session_actions import (
     available_session_open_targets,
     default_session_open_action,
     default_session_open_target,
+    is_t3_origin,
     preferred_session_open_actions,
     session_open_action_label,
+    session_open_origin,
     session_open_target,
 )
 from .settings import (
@@ -943,6 +948,14 @@ class StatusBarController(NSObject):
         self.update_hooks("junie", install=False)
 
     @objc.IBAction
+    def installOpenCodePlugin_(self, _sender):
+        self.update_hooks("opencode", install=True)
+
+    @objc.IBAction
+    def uninstallOpenCodePlugin_(self, _sender):
+        self.update_hooks("opencode", install=False)
+
+    @objc.IBAction
     def toggleCodexTranscripts_(self, sender):
         self.set_transcript_monitoring("codex", sender.state() == NSOnState)
 
@@ -1532,6 +1545,7 @@ class StatusBarController(NSObject):
         grok = detect_grok_config()
         cursor = detect_cursor_config()
         junie = detect_junie_config()
+        opencode = detect_opencode_config()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1551,6 +1565,10 @@ class StatusBarController(NSObject):
         set_field_value(
             self.settings_fields.get("junie_hook_status"),
             hook_status_text(junie),
+        )
+        set_field_value(
+            self.settings_fields.get("opencode_hook_status"),
+            hook_status_text(opencode),
         )
         set_field_value(
             self.settings_fields.get("settings_path"),
@@ -1766,6 +1784,8 @@ class StatusBarController(NSObject):
                 result = install_junie_hooks()
             elif provider == "junie":
                 result = uninstall_junie_hooks()
+            elif provider == "opencode":
+                result = install_opencode_plugin() if install else uninstall_opencode_plugin()
             else:
                 raise ValueError(f"Unsupported hook provider: {provider}")
         except Exception as exc:
@@ -1776,7 +1796,12 @@ class StatusBarController(NSObject):
         action = "installed" if install else "removed"
         if not result.changed:
             action = "already installed" if install else "already removed"
-        message = f"{provider.title()} hooks {action}."
+        if provider == "opencode":
+            message = f"OpenCode plugin {result.note or action}."
+            if result.changed:
+                message += " Restart OpenCode to apply the change."
+        else:
+            message = f"{provider.title()} hooks {action}."
         if provider == "codex" and install and result.changed:
             message += " Restart Codex to activate them in new sessions."
         self.set_settings_message(message)
@@ -2154,7 +2179,13 @@ class StatusBarController(NSObject):
             return
         provider = status.provider.lower()
         terminal_lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
-        if terminal_lookup and action in {None, SESSION_OPEN_TERMINAL}:
+        open_origin = session_open_origin(status)
+        t3_session = is_t3_origin(open_origin)
+        should_focus_terminal = (
+            action == SESSION_OPEN_TERMINAL if t3_session
+            else action in {None, SESSION_OPEN_TERMINAL}
+        )
+        if terminal_lookup and should_focus_terminal:
             terminal = terminal_lookup(status.session_id)
             if terminal is not None:
                 if not focus_agent_terminal(terminal, provider=provider, session_id=status.session_id):
@@ -2162,16 +2193,13 @@ class StatusBarController(NSObject):
                         f"{provider_label(provider)} is running, but its terminal tab could not be selected."
                     )
                 return
-        requested_action = action or self.settings.session_open_action(
-            provider, status.origin
-        )
-        target = (
-            session_open_target(status, requested_action) if requested_action else None
-        )
+        requested_action = action or self.settings.session_open_action(provider, open_origin)
+        target = session_open_target(status, requested_action) if requested_action else None
         if target is None:
             default = default_session_open_target(status, skip_action=requested_action)
             if default is not None:
                 requested_action, target = default
+
         if target is None:
             self.set_settings_message(f"No open action available for {status.display_name}.")
             return
@@ -2200,7 +2228,7 @@ class StatusBarController(NSObject):
                 self.settings = self.settings.with_session_open_action(
                     provider,
                     requested_action,
-                    status.origin,
+                    open_origin,
                 )
                 save_settings(self.settings)
             except Exception as exc:
@@ -4072,7 +4100,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     secondary_action_x = 500
     value_width = primary_action_x - value_x - 5
 
-    add_label(agents_tab, "Agent Hooks", section_x, 398, 200, 24)
+    add_label(agents_tab, "Agent Hooks", section_x, 424, 200, 24)
 
     def add_hook_row(
         title: str,
@@ -4105,19 +4133,23 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         return status
 
     codex_status = add_hook_row(
-        "Codex", 364, "installCodexHooks:", "uninstallCodexHooks:"
+        "Codex", 390, "installCodexHooks:", "uninstallCodexHooks:"
     )
     claude_status = add_hook_row(
-        "Claude", 338, "installClaudeHooks:", "uninstallClaudeHooks:"
+        "Claude", 364, "installClaudeHooks:", "uninstallClaudeHooks:"
     )
     grok_status = add_hook_row(
-        "Grok", 312, "installGrokHooks:", "uninstallGrokHooks:"
+        "Grok", 338, "installGrokHooks:", "uninstallGrokHooks:"
     )
     cursor_status = add_hook_row(
-        "Cursor", 286, "installCursorHooks:", "uninstallCursorHooks:"
+        "Cursor", 312, "installCursorHooks:", "uninstallCursorHooks:"
     )
     junie_status = add_hook_row(
-        "Junie", 260, "installJunieHooks:", "uninstallJunieHooks:"
+        "Junie", 286, "installJunieHooks:", "uninstallJunieHooks:"
+    )
+
+    opencode_status = add_hook_row(
+        "OpenCode", 260, "installOpenCodePlugin:", "uninstallOpenCodePlugin:"
     )
 
     add_separator(agents_tab, section_x, 246, tab_width - 48)
@@ -4391,6 +4423,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "grok_hook_status": grok_status,
         "cursor_hook_status": cursor_status,
         "junie_hook_status": junie_status,
+        "opencode_hook_status": opencode_status,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,
@@ -5174,6 +5207,10 @@ def program_for_lid_animation(
 
 
 def hook_status_text(config: ProviderConfig) -> str:
+    if config.provider == "opencode":
+        if config.hooks_enabled:
+            return "Plugin installed"
+        return "Existing plugin is unmanaged" if config.exists else "Plugin not installed"
     if not config.exists:
         return "Not installed — config created on install"
     if config.hook_events:
@@ -5348,7 +5385,7 @@ def build_session_options_menu(
     menu.addItem_(NSMenuItem.separatorItem())
 
     if getattr(target, "settings", None) is not None:
-        selected = target.settings.session_open_action(status.provider, status.origin)
+        selected = target.settings.session_open_action(status.provider, session_open_origin(status))
     else:
         selected = None
     open_targets = available_session_open_targets(status)
@@ -5524,7 +5561,9 @@ def host_icon_for_origin(origin: str | None):
     if normalized in _origin_icon_cache:
         return _origin_icon_cache[normalized]
     image = None
-    if "vs code" in normalized or "vscode" in normalized or "visual studio code" in normalized:
+    if is_t3_origin(origin):
+        image = provider_app_icon("T3 Code") or image_for_symbol("macwindow", "T3 Code")
+    elif "vs code" in normalized or "vscode" in normalized or "visual studio code" in normalized:
         image = first_app_icon(
             (
                 "/Applications/Visual Studio Code.app",

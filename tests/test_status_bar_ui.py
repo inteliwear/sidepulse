@@ -22,6 +22,7 @@ import re
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -778,6 +779,7 @@ class WindowBuildTests(StatusBarTestCase):
             "grok_hook_status",
             "cursor_hook_status",
             "junie_hook_status",
+            "opencode_hook_status",
             "codex_session_opener",
             "claude_session_opener",
             "grok_session_opener",
@@ -915,6 +917,22 @@ class WindowBuildTests(StatusBarTestCase):
                     focus.assert_called_once_with(window, tab, pane, app)
                 else:
                     focus.assert_not_called()
+
+    def test_open_t3_hosted_claude_prefers_thread_over_running_terminal(self):
+        link = "t3code://threads/environment-id/thread-id"
+        self.controller.settings = self.controller.settings.with_provider_session_open_action(
+            "claude", sb.SESSION_OPEN_APP
+        )
+        for origin in ("Claude in T3 Code", "Custom label"):
+            with (
+                self.subTest(origin=origin),
+                patch.object(sb, "claude_session_terminal") as terminal_lookup,
+                patch.object(sb, "open_url") as open_url,
+            ):
+                status = replace(make_status(provider="claude", origin=origin), t3_link=link)
+                self.controller.open_session(status, None, remember=False)
+                terminal_lookup.assert_not_called()
+                open_url.assert_called_once_with(link)
 
     def test_open_running_claude_in_ghostty_1_3_requires_a_unique_pane_in_its_project(self):
         status = make_status(provider="claude", origin="Claude Code CLI")

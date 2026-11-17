@@ -6,11 +6,11 @@
 // as during a hot reload. Reports reach the `sidepulse` command given as the
 // second argument. With `exitEarly`, the process exits as soon as events are
 // delivered. Used by tests/test_opencode_provider.py.
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
 const [pluginPath, command] = process.argv.slice(2)
-const { sessions, events, copies = 1, exitEarly = false, reload = false } = JSON.parse(readFileSync(0, "utf8"))
+const { sessions, events, copies = 1, exitEarly = false, reload = false, firstStarted } = JSON.parse(readFileSync(0, "utf8"))
 const url = pathToFileURL(pluginPath).href
 
 let delivered = 0
@@ -50,6 +50,12 @@ while (delivered < cleanups.length) await new Promise((resolve) => setTimeout(re
 const shared = globalThis[Symbol.for("sidepulse.opencode.state")]
 await shared.queue
 // With exitEarly, exit while reports are still queued, like `opencode run`.
-if (exitEarly) process.exit(0)
+if (exitEarly) {
+  // Let the initial child start while leaving its report undelivered.
+  while (firstStarted && !existsSync(firstStarted)) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  process.exit(0)
+}
 await shared.reporter.idle()
 cleanups.forEach((cleanup) => cleanup())

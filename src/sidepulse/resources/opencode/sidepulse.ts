@@ -32,6 +32,7 @@ const EVENT_TYPES = [
 ]
 
 const MAX_MESSAGE_CHARS = 240
+const MAX_STATUS_TITLE_BYTES = 192
 const REPORT_TIMEOUT_MS = 5000
 
 type State = "idle" | "working" | "blocked" | "done" | "error" | "clear"
@@ -72,15 +73,21 @@ function sidepulseCommand(option: unknown): string {
 }
 
 function clip(text: string | undefined): string | undefined {
-  const value = text?.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim()
+  const value = text?.toWellFormed().replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim()
   if (!value) return undefined
-  return value.length > MAX_MESSAGE_CHARS ? value.slice(0, MAX_MESSAGE_CHARS - 1) + "…" : value
+  return value.length > MAX_MESSAGE_CHARS ? value.slice(0, MAX_MESSAGE_CHARS - 1).toWellFormed() + "…" : value
 }
 
-function permissionMessage(data: any): string | undefined {
-  if (typeof data.message === "string" && data.message.trim()) return clip(data.message)
-  const resources = Array.isArray(data.resources) ? data.resources.filter((r: unknown) => typeof r === "string") : []
-  return clip([data.action, resources.join(", ")].filter(Boolean).join(": "))
+function statusTitle(title: string): string {
+  if (Buffer.byteLength(title) <= MAX_STATUS_TITLE_BYTES) return title
+  let prefix = ""
+  let bytes = Buffer.byteLength("…")
+  for (const character of title) {
+    bytes += Buffer.byteLength(character)
+    if (bytes > MAX_STATUS_TITLE_BYTES) break
+    prefix += character
+  }
+  return prefix + "…"
 }
 
 function createSidePulse(ctx: Context, submit: (report: object) => void) {
@@ -138,11 +145,11 @@ function createSidePulse(ctx: Context, submit: (report: object) => void) {
       status.kind = waiting.kind
       if (waiting.msg) status.msg = waiting.msg
     }
-    if (entry.title && entry.state !== "clear") status.title = entry.title
+    if (entry.title && entry.state !== "clear") status.title = statusTitle(entry.title)
     const context: Record<string, string> = { provider: "opencode", session_id: rootID, event_name: event.type }
     if (entry.cwd) context.cwd = entry.cwd
     if (entry.title) {
-      context.title = entry.title
+      context.title = statusTitle(entry.title)
       // OpenCode titles belong to the session, so SidePulse shows renames.
       context.title_source = "session"
     }
@@ -237,7 +244,7 @@ function createSidePulse(ctx: Context, submit: (report: object) => void) {
         break
       }
       case "permission.asked":
-        entry.waiting.set(data.id, { kind: "permission", sessionID, msg: permissionMessage(data) })
+        entry.waiting.set(data.id, { kind: "permission", sessionID, msg: typeof data.action === "string" ? clip(data.action) : undefined })
         entry.state = "blocked"
         break
       case "form.created":
@@ -322,16 +329,20 @@ class Reporter {
   }
 
   private flushSync() {
-    if (!this.pending.length) return
-    // The report already on its way is sent again first, so the queued ones
+    if (!this.runningBody && !this.pending.length) return
+    // The in-flight child may exit before receiving stdin, even if it is the
+    // only outstanding report. Replay it first, so the queued ones
     // cannot overtake it. The daemon ignores a repeated request_id, so the
     // detached copy changes nothing if it lands later.
     const bodies = [...(this.runningBody ? [this.runningBody] : []), ...this.pending.splice(0)]
+    const deadline = Date.now() + REPORT_TIMEOUT_MS
     for (const body of bodies) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
       const result = spawnSync(this.command, ["report", "--json"], {
         input: body,
         stdio: ["pipe", "ignore", "ignore"],
-        timeout: REPORT_TIMEOUT_MS,
+        timeout: remaining,
         windowsHide: true,
       })
       this.fail(result.error?.message ?? (result.status === 0 ? undefined : `exit ${result.status}`))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +8,7 @@ from urllib.parse import quote, urlencode
 
 from .jetbrains import jetbrains_launch_for_project
 from .junie_index import junie_session_project_dir
-from .models import AgentStatus
+from .models import AgentStatus, provider_label
 
 SESSION_OPEN_APP = "app"
 SESSION_OPEN_TERMINAL = "terminal"
@@ -139,8 +140,15 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 
 
+def session_open_origin(status: AgentStatus) -> str | None:
+    if not is_t3_origin(status.origin) and session_open_target(status, SESSION_OPEN_T3):
+        return f"{provider_label(status.provider)} in T3 Code"
+    return status.origin
+
+
 def is_t3_origin(origin: str | None) -> bool:
-    return "t3 code" in normalized_origin(origin)
+    label = normalized_origin(origin).split(" · ", 1)[0]
+    return label == "t3 code" or label.endswith(" in t3 code")
 
 
 def normalized_origin(origin: str | None) -> str:
@@ -152,7 +160,11 @@ def session_open_target(
     action: str,
 ) -> SessionOpenTarget | None:
     if action == SESSION_OPEN_T3:
-        return ("url", status.t3_link) if status.t3_link else None
+        link = status.t3_link
+        segment = r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+"
+        if link and re.fullmatch(rf"t3code://threads/{segment}/{segment}", link):
+            return ("url", link)
+        return None
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
         return ("url", url) if url else None

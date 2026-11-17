@@ -496,7 +496,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor AI agents such as Codex, Claude, Grok, Cursor, Junie, and OpenCode through hooks, then
+SidePulse can monitor Codex, Claude, Grok, Cursor, and Junie through hooks, and OpenCode through a plugin. It can then
 translate the current agent state into a small, glanceable LED status.
 
 Agent status modes:
@@ -646,8 +646,8 @@ Set up this Mac explicitly after package install:
 sidepulse setup
 ```
 
-`sidepulse setup` installs or refreshes all supported agent hooks, including
-Junie CLI, installs SidePulse Pro Eject Prevention, writes the status-bar
+`sidepulse setup` installs or refreshes all supported agent integrations, including
+Junie CLI and the OpenCode plugin. On macOS it installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
@@ -864,12 +864,12 @@ row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
 provider app, Terminal resume, or Claude Code in VS Code.
 
-Sessions that T3 Code started open in their T3 Code thread by default. T3 Code
-exports `T3CODE_THREAD_ID` to the agents it runs, and the hook combines it with
-the environment ID in `$T3CODE_HOME/userdata/environment-id` (default
-`~/.t3`) to build a `t3code://threads/...` link. A provider-wide opener does
-not override this; choose another opener from a T3 session's Open Options row
-to remember it for T3 Code sessions only.
+Sessions reported by an agent hook that carries T3 Code's thread ID open in the
+owning T3 thread by default. The hook reads `T3CODE_THREAD_ID` and combines it
+with the environment ID from `$T3CODE_HOME/userdata/environment-id` (default
+`~/.t3`). Choose another opener from a T3 session's **Open Options** to save a
+preference for T3 sessions. If the thread link is unavailable, SidePulse tries
+to resume in Terminal.
 
 Open a connected device under **Devices** to see its firmware version. The app
 checks published releases for that model in the background and offers
@@ -903,7 +903,7 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can install or uninstall Codex, Claude, Grok, Cursor, and Junie hooks.
+window can manage Codex, Claude, Grok, Cursor, and Junie hooks and the OpenCode plugin.
 The transcript checkboxes apply only to explicit file-based diagnostics. The status-bar app reads
 accounted OSC-style JSON through the daemon socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.
@@ -930,10 +930,11 @@ loads it automatically. The plugin follows OpenCode's session events and submits
 each state change with `sidepulse report --json`: Working while a session runs,
 Waiting for Input for a permission prompt or a question, then Done, Error, or
 Idle when it stops. Subagent sessions report through their parent session. The
-plugin sends the session title, its directory, and a short permission or
-question summary; it writes no log and never sends prompts or tool output.
-Setup never overwrites or removes a `sidepulse.ts` it did not install. The
-plugin requires OpenCode 2.
+plugin reports the session title, working directory, permission action, and
+question title. Setup preserves existing unmanaged plugins at `sidepulse.ts`
+and `sidepulse.js`. Restart OpenCode after installation. The bundled plugin
+requires OpenCode 2. The status-bar menu can resume a tracked OpenCode session
+in Terminal.
 
 Settings can export the hook decision log as CSV or HTML. This log lives at
 `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/event-status.jsonl`

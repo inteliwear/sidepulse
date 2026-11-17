@@ -521,7 +521,8 @@ class AgentMonitorSettings:
         preferences = {
             key: value
             for key, value in self.session_open_preferences.items()
-            if key != provider_key and not key.startswith(prefix)
+            if key != provider_key
+            and (not key.startswith(prefix) or is_t3_origin(key[len(prefix):].replace("_", " ")))
         }
         if provider_key == "grok":
             return replace(

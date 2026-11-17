@@ -155,3 +155,10 @@ def test_provider_wide_preference_does_not_override_t3() -> None:
 
     chosen = settings.with_session_open_action("claude", SESSION_OPEN_TERMINAL, "Claude in T3 Code")
     assert chosen.session_open_action("claude", "Claude in T3 Code") == SESSION_OPEN_TERMINAL
+    updated = chosen.with_provider_session_open_action("claude", SESSION_OPEN_APP)
+    assert updated.session_open_action("claude", "Claude in T3 Code") == SESSION_OPEN_TERMINAL
+
+
+def test_t3_action_rejects_other_url_schemes_and_routes() -> None:
+    for link in ("file:///tmp/app", "t3code://settings/one/two", "t3code://threads/one/two?extra=1"):
+        assert session_open_target(status(t3_link=link), SESSION_OPEN_T3) is None
