@@ -22,7 +22,8 @@ MAX_BYTES = 65536
 MAX_SESSIONS = 64
 CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
                   'cwd': 4096, 'origin': 512, 'display_name': 512, 'tool_name': 512,
-                  'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16}
+                  'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16,
+                  't3_link': 1024}
 # Leave room for push-provider framing, sender keys, and JSON string escaping.
 MAX_PHONE_STATUS_BYTES = 1800
 MAX_BRIDGE_MESSAGE_BYTES = 2048
@@ -87,10 +88,19 @@ def validate_status(value: object) -> dict:
     return result
 
 
+def hook_scope(provider: str, identity: str) -> str:
+    return provider + '-' + hashlib.sha256(identity.encode()).hexdigest()[:32]
+
+
 def validate_context(value: object) -> dict:
     if not isinstance(value, dict):
         raise StatusError('Invalid presentation context')
-    return {key: text(value[key], limit, key) for key, limit in CONTEXT_LIMITS.items() if key in value}
+    result = {key: text(value[key], limit, key) for key, limit in CONTEXT_LIMITS.items() if key in value}
+    if 't3_link' in result:
+        from .origin import valid_t3_link
+        if not valid_t3_link(result['t3_link']):
+            raise StatusError('Invalid T3 Code thread link')
+    return result
 
 
 def encoded(value: object) -> str:
@@ -195,7 +205,7 @@ class ProgramState:
         self._cursors = {}
         self._event_serial = time.time_ns() // 1000
 
-    def submit(self, report: dict) -> dict:
+    def submit(self, report: dict, *, observed_at: int | None = None) -> dict:
         if not isinstance(report, dict):
             raise StatusError('Report must be an object')
         if report.get('type') != 'program_status':
@@ -216,11 +226,28 @@ class ProgramState:
             now = int(datetime.now(timezone.utc).timestamp() * 1000)
             scope = identifier(report.get('scope'))
             key = ('local', self.publisher, scope)
+            if key not in self._sessions and 'context' in report:
+                incoming_context = validate_context(report['context'])
+                # A log may identify the thread before it knows the native session ID.
+                scope = self._scope_for_thread(scope, incoming_context)
+                key = ('local', self.publisher, scope)
             suppressed = report.get('_hook_suppressed') is True or scope in self._suppressed
-            update = validate_update({**report, 'publisher': self.publisher,
-                'seq': self._sequences.get(key, 0) + 1, 'updated_at': now,
+            update = validate_update({**report, 'publisher': self.publisher, 'scope': scope,
+                'seq': self._sequences.get(key, 0) + 1, 'updated_at': now if observed_at is None else observed_at,
                 **({'status': {'state': 'clear'}} if suppressed else {})})
             previous = self._sessions.get(key)
+            if observed_at is not None and previous and observed_at < previous['updated_at']:
+                if update['status']['state'] == 'clear':
+                    return {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
+                # Delayed log events may identify a live session but cannot rewind it.
+                context = dict(previous.get('context', {}))
+                for field in ('origin', 't3_link'):
+                    if field in update.get('context', {}):
+                        context[field] = update['context'][field]
+                if context != previous.get('context', {}):
+                    self._apply_update('local', {**previous, 'seq': update['seq'], 'context': context})
+                    self._revision += 1
+                return {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
             ignored = (report.get('unless_state') == 'done' and previous is not None
                        and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
             ignored = ignored or (previous is not None
@@ -244,6 +271,26 @@ class ProgramState:
                     self._receipts.popitem(last=False)
             return copy.deepcopy(ack)
 
+    def _scope_for_thread(self, scope, context):
+        provider = context.get('provider')
+        link = context.get('t3_link')
+        session_id = context.get('session_id')
+        is_hook_scope = (isinstance(provider, str) and isinstance(session_id, str)
+                         and scope == hook_scope(provider, session_id))
+        if not link and not is_hook_scope:
+            return scope
+        for (sender, publisher, existing_scope), row in self._sessions.items():
+            if (sender, publisher) != ('local', self.publisher):
+                continue
+            existing = row.get('context', {})
+            if existing.get('provider') != provider or not existing.get('t3_link'):
+                continue
+            if existing['t3_link'] == link or (
+                not link and is_hook_scope and existing.get('session_id') == session_id
+            ):
+                return existing_scope
+        return scope
+
     def _apply_update(self, sender, update):
         key = (sender, update['publisher'], update['scope'])
         previous = self._sessions.get(key)
@@ -252,9 +299,14 @@ class ProgramState:
         if update['status']['state'] != 'clear' and 'context' in update:
             context = dict(update['context'])
             previous_context = previous.get('context', {}) if previous else {}
+            if previous_context.get('t3_link'):
+                if previous_context.get('origin') and 't3_link' not in context:
+                    context['origin'] = previous_context['origin']
+                if previous_context.get('session_id'):
+                    context.setdefault('session_id', previous_context['session_id'])
             if previous_context.get('title') and context.get('title_source') != 'session':
                 context['title'] = previous_context['title']
-            for field in ('cwd', 'origin', 'title'):
+            for field in ('cwd', 'origin', 'title', 't3_link'):
                 if field not in context and field in previous_context:
                     context[field] = previous_context[field]
             if context.get('title') or context.get('cwd'):
@@ -368,13 +420,18 @@ class ProgramState:
             if sender != 'local' and context.get('source_name'):
                 origin = f"{origin} · {context['source_name']}" if origin else context['source_name']
             identity = self._session_identity((sender, publisher, scope))
+            session_id = context.get('session_id')
+            t3_link = context.get('t3_link') if sender == 'local' else None
+            if session_id is None and not t3_link:
+                session_id = identity
             result.append(AgentStatus(provider=context.get('provider') or app or 'program', agent_id=identity,
                 display_name=context.get('display_name') or status.get('title') or app or scope, mode=mode,
                 updated_at=datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc),
-                event_name=context.get('event_name') or 'ProgramStatus', session_id=context.get('session_id') or identity,
+                event_name=context.get('event_name') or 'ProgramStatus', session_id=session_id,
                 cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
                 seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(
-                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote)))
+                    {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote),
+                t3_link=t3_link))
         return tuple(result)
 
     def close(self):

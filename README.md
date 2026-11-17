@@ -862,6 +862,18 @@ row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
 provider app, Terminal resume, or Claude Code in VS Code.
 
+SidePulse reads recent T3 Code provider events for activity even when the
+underlying agent has no SidePulse hooks installed. Provider hooks and T3 events
+share a session when SidePulse can match the provider's native session ID or
+the T3 thread link. For a custom T3 data directory, set `T3CODE_HOME` in the
+SidePulse service environment.
+
+T3 Code sessions default to **Open in T3 Code** when SidePulse has the thread
+link. A compatible T3 Code desktop app handles the link. When the thread link
+is unavailable, SidePulse offers the underlying provider's available openers.
+Use the session's Open Options row to remember an opener for that provider in
+T3 Code.
+
 Open a connected device under **Devices** to see its firmware version. The app
 checks published releases for that model in the background and offers
 **Upgrade to VERSION…** when newer firmware is available. The update is

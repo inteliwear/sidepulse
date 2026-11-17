@@ -8,12 +8,15 @@ from urllib.parse import quote, urlencode
 from .jetbrains import jetbrains_launch_for_project
 from .junie_index import junie_session_project_dir
 from .models import AgentStatus
+from .origin import valid_t3_link
 
 SESSION_OPEN_APP = "app"
 SESSION_OPEN_TERMINAL = "terminal"
 SESSION_OPEN_VSCODE = "vscode"
 SESSION_OPEN_JETBRAINS = "jetbrains"
+SESSION_OPEN_T3 = "t3code"
 SESSION_OPEN_CHOICES = (
+    SESSION_OPEN_T3,
     SESSION_OPEN_APP,
     SESSION_OPEN_TERMINAL,
     SESSION_OPEN_VSCODE,
@@ -116,6 +119,8 @@ def default_session_open_target(
 
 def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     origin = normalized_origin(status.origin)
+    if status.t3_link or is_t3_origin(status.origin):
+        return (SESSION_OPEN_T3, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP, SESSION_OPEN_VSCODE)
     if origin:
         if status.provider.lower() == "junie" and "jetbrains" in origin:
             return (SESSION_OPEN_JETBRAINS, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP)
@@ -133,6 +138,10 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 
 
+def is_t3_origin(origin: str | None) -> bool:
+    return "t3 code" in normalized_origin(origin)
+
+
 def normalized_origin(origin: str | None) -> str:
     return " ".join(str(origin or "").strip().lower().replace("-", " ").split())
 
@@ -141,6 +150,9 @@ def session_open_target(
     status: AgentStatus,
     action: str,
 ) -> SessionOpenTarget | None:
+    if action == SESSION_OPEN_T3:
+        link = valid_t3_link(status.t3_link)
+        return ("url", link) if link else None
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
         return ("url", url) if url else None
@@ -173,6 +185,8 @@ def session_open_action_label(
     status: AgentStatus, action: str, target: SessionOpenTarget | None = None
 ) -> str:
     provider = status.provider.lower()
+    if action == SESSION_OPEN_T3:
+        return "Open in T3 Code"
     if action == SESSION_OPEN_APP:
         if provider == "codex":
             return "Open in Codex"

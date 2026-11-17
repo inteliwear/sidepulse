@@ -167,6 +167,7 @@ from .session_actions import (
     available_session_open_targets,
     default_session_open_action,
     default_session_open_target,
+    is_t3_origin,
     preferred_session_open_actions,
     session_open_action_label,
     session_open_target,
@@ -2154,7 +2155,10 @@ class StatusBarController(NSObject):
             return
         provider = status.provider.lower()
         terminal_lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
-        if terminal_lookup and action in {None, SESSION_OPEN_TERMINAL}:
+        if terminal_lookup and (
+            action == SESSION_OPEN_TERMINAL
+            or (action is None and not (status.t3_link or is_t3_origin(status.origin)))
+        ):
             terminal = terminal_lookup(status.session_id)
             if terminal is not None:
                 if not focus_agent_terminal(terminal, provider=provider, session_id=status.session_id):
@@ -2163,7 +2167,7 @@ class StatusBarController(NSObject):
                     )
                 return
         requested_action = action or self.settings.session_open_action(
-            provider, status.origin
+            provider, status.origin, t3_hosted=bool(status.t3_link)
         )
         target = (
             session_open_target(status, requested_action) if requested_action else None
@@ -5348,7 +5352,9 @@ def build_session_options_menu(
     menu.addItem_(NSMenuItem.separatorItem())
 
     if getattr(target, "settings", None) is not None:
-        selected = target.settings.session_open_action(status.provider, status.origin)
+        selected = target.settings.session_open_action(
+            status.provider, status.origin, t3_hosted=bool(status.t3_link)
+        )
     else:
         selected = None
     open_targets = available_session_open_targets(status)

@@ -54,6 +54,7 @@ class HookEvent:
     tool_name: str | None = None
     message: str | None = None
     origin: str | None = None
+    t3_link: str | None = None
 
     @property
     def status_key(self) -> str:
@@ -80,6 +81,7 @@ class AgentStatus:
     stale: bool = False
     seq: int | None = None
     session_link: str | None = None
+    t3_link: str | None = None
 
     @property
     def priority(self) -> int:
@@ -112,6 +114,7 @@ class AgentStatus:
             "stale": self.stale,
             **({"seq": self.seq} if self.seq is not None else {}),
             **({"session_link": self.session_link} if self.session_link else {}),
+            **({"t3_link": self.t3_link} if self.t3_link else {}),
         }
 
 

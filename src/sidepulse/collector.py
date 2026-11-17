@@ -1102,6 +1102,7 @@ def status_from_event(record: HookEvent, metadata: StatusMetadata | None = None)
         tool_name=record.tool_name,
         message=record.message,
         origin=record.origin or metadata.origin or origin_label_from_payload(record.provider, record.raw),
+        t3_link=record.t3_link,
     )
 
 
@@ -1443,6 +1444,7 @@ def agent_status_from_dict(data: object) -> AgentStatus | None:
             message=_string_or_none(data.get("message")),
             origin=_string_or_none(data.get("origin")),
             stale=bool(data.get("stale", False)),
+            t3_link=_string_or_none(data.get("t3_link")),
         )
     except Exception:
         return None
@@ -1578,6 +1580,7 @@ def _replace_stale(status: AgentStatus, stale: bool) -> AgentStatus:
         message=status.message,
         origin=status.origin,
         stale=stale,
+        t3_link=status.t3_link,
     )
 
 
@@ -1597,6 +1600,7 @@ def _replace_mode(status: AgentStatus, mode: AgentMode) -> AgentStatus:
         message=status.message,
         origin=status.origin,
         stale=status.stale,
+        t3_link=status.t3_link,
     )
 
 

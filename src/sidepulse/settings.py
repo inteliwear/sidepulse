@@ -9,7 +9,7 @@ from typing import Any
 
 from .battery import DEFAULT_POWER_CHANGE_PREVIEW_SECONDS
 from .models import AgentMode
-from .session_actions import SESSION_OPEN_CHOICES, SESSION_OPEN_TERMINAL
+from .session_actions import SESSION_OPEN_CHOICES, SESSION_OPEN_TERMINAL, is_t3_origin
 
 
 TERMINAL_APP_TERMINAL = "terminal"
@@ -467,7 +467,9 @@ class AgentMonitorSettings:
             return self
         return replace(self, devices=devices)
 
-    def session_open_action(self, provider: str, origin: str | None = None) -> str | None:
+    def session_open_action(
+        self, provider: str, origin: str | None = None, *, t3_hosted: bool = False,
+    ) -> str | None:
         provider_key = provider.lower()
         if origin:
             action = self.session_open_preferences.get(
@@ -480,6 +482,8 @@ class AgentMonitorSettings:
             )
             if action in SESSION_OPEN_CHOICES:
                 return action
+        if t3_hosted or is_t3_origin(origin):
+            return None
 
         if provider_key == "grok":
             action = self.grok_session_open_action

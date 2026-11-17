@@ -838,6 +838,24 @@ class WindowBuildTests(StatusBarTestCase):
         resolve.assert_called_once()
         open_terminal.assert_called_once()
 
+    def test_open_t3_claude_session_uses_thread_link_even_with_a_running_terminal(self):
+        from dataclasses import replace
+
+        url = "t3code://threads/environment/thread"
+        status = replace(make_status(origin="Custom Claude origin"), t3_link=url)
+        settings = AgentMonitorSettings().with_provider_session_open_action("claude", "terminal")
+        with (
+            patch.object(self.controller, "settings", settings),
+            patch.object(sb, "claude_session_terminal") as lookup,
+            patch.object(sb, "open_url") as open_url,
+        ):
+            menu = sb.build_session_options_menu(status, datetime.now(timezone.utc), self.controller)
+            self.assertEqual(menu.itemWithTitle_("Open in T3 Code").state(), 1)
+            self.controller.open_session(status, None, remember=False)
+
+        lookup.assert_not_called()
+        open_url.assert_called_once_with(url)
+
     def test_open_running_junie_session_uses_its_terminal_tab(self):
         status = make_status(provider="junie")
         terminal = sb.AgentTerminal("/dev/ttys028", sb.TERMINAL_APP_TERMINAL)
