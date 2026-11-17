@@ -183,6 +183,7 @@ def latest_junie_hook_context(
 
 
 def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> int:
+    antigravity_payload: dict[str, Any] = {}
     try:
         payload_text = sys.stdin.read()
         if provider == "cursor" and event:
@@ -195,6 +196,24 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
             payload = raw if isinstance(raw, dict) else {}
             normalized = normalize_payload(event, payload)
             payload_text = json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
+        elif provider == "antigravity":
+            from .antigravity_hook import normalize_payload as normalize_antigravity
+
+            stripped = payload_text.strip()
+            try:
+                raw = json.loads(stripped or "{}")
+            except json.JSONDecodeError:
+                raw = None
+            if isinstance(raw, dict):
+                antigravity_payload = raw
+                fallback_cwd: str | None = None
+                if "PLUGIN_ROOT" not in os.environ:
+                    try:
+                        fallback_cwd = os.getcwd()
+                    except OSError:
+                        fallback_cwd = None
+                normalized = normalize_antigravity(event, raw, fallback_cwd=fallback_cwd)
+                payload_text = json.dumps(normalized, separators=(",", ":"), ensure_ascii=False)
         elif provider == "junie":
             try:
                 raw = json.loads(payload_text or "{}")
@@ -227,5 +246,19 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
         except Exception:
             pass
     except Exception:
+        if provider == "antigravity":
+            _write_antigravity_stdout(event, antigravity_payload)
         return 0
+    if provider == "antigravity":
+        _write_antigravity_stdout(event, antigravity_payload)
     return 0
+
+
+def _write_antigravity_stdout(event: str | None, payload: dict[str, Any]) -> None:
+    try:
+        from .antigravity_hook import hook_stdout
+
+        sys.stdout.write(hook_stdout(event, payload))
+        sys.stdout.flush()
+    except Exception:
+        pass

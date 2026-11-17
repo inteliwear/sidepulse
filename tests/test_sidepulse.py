@@ -3872,6 +3872,13 @@ class AgentMonitorTests(unittest.TestCase):
             changed=True,
             backup_path=None,
         )
+        antigravity_result = SimpleNamespace(
+            provider="antigravity",
+            config_path=Path("/tmp/antigravity-hooks.json"),
+            log_path=Path("/tmp/antigravity.jsonl"),
+            changed=True,
+            backup_path=None,
+        )
         launch_result = SimpleNamespace(
             plist_path=Path("/tmp/io.sidepulse.agentstatus.plist"),
             changed=True,
@@ -3908,6 +3915,11 @@ class AgentMonitorTests(unittest.TestCase):
             ) as cursor,
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
             patch.object(cli_module, "install_junie_hooks", return_value=junie_result) as junie,
+            patch.object(
+                cli_module,
+                "install_antigravity_hooks",
+                return_value=antigravity_result,
+            ) as antigravity,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3925,6 +3937,7 @@ class AgentMonitorTests(unittest.TestCase):
         cursor.assert_called_once()
         grok.assert_called_once()
         junie.assert_called_once()
+        antigravity.assert_called_once()
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
         service.assert_called_once_with(start=True, dry_run=False)
@@ -3943,6 +3956,7 @@ class AgentMonitorTests(unittest.TestCase):
             patch.object(cli_module, "install_claude_hooks") as claude,
             patch.object(cli_module, "install_grok_hooks") as grok,
             patch.object(cli_module, "install_junie_hooks") as junie,
+            patch.object(cli_module, "install_antigravity_hooks") as antigravity,
         ):
             self.assertEqual(cli_module.install_hook_results(args), list(results.values()))
 
@@ -3951,6 +3965,7 @@ class AgentMonitorTests(unittest.TestCase):
         claude.assert_not_called()
         grok.assert_not_called()
         junie.assert_not_called()
+        antigravity.assert_not_called()
 
     def test_sidepulse_setup_no_status_bar_still_installs_guard(self) -> None:
         parser = cli_module.build_sidepulse_parser()

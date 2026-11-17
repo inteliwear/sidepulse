@@ -18,12 +18,16 @@ from typing import Any
 from .hook_commands import observer_script, WINDOWS_MARKER
 
 from .providers import (
+    ANTIGRAVITY_EVENTS,
+    ANTIGRAVITY_GROUPED_EVENTS,
+    ANTIGRAVITY_MONITOR_EVENTS,
     CLAUDE_EVENTS,
     CODEX_EVENTS,
     CURSOR_EVENTS,
     GROK_EVENTS,
     JUNIE_EVENTS,
     JUNIE_MONITOR_EVENTS,
+    default_antigravity_hook_config_path,
     default_cursor_hook_config_path,
     default_grok_hook_config_path,
     default_junie_hook_config_path,
@@ -32,6 +36,7 @@ from .providers import (
 
 MANAGED_START = "# >>> agent-monitor hooks >>>"
 MANAGED_END = "# <<< agent-monitor hooks <<<"
+ANTIGRAVITY_HOOK_GROUP = "sidepulse"
 
 
 @dataclass(frozen=True)
@@ -484,6 +489,223 @@ def remove_cursor_hook_entries(entries: list[Any]) -> list[Any]:
     ]
 
 
+def read_antigravity_hook_config(config: Path) -> dict[str, Any]:
+    if not config.exists():
+        return {}
+    data = json.loads(config.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object in {config}")
+    return data
+
+
+def _is_sidepulse_hook_command(command: Any, log_path: Path | None = None) -> bool:
+    if not isinstance(command, str):
+        return False
+    if log_path is not None and str(log_path) in command:
+        return True
+    return (
+        "sidepulse hook-log" in command
+        or "agent-monitor hook-log" in command
+        or "hook_entry.py" in observer_script(command)
+    )
+
+
+def remove_antigravity_flat_hooks(
+    entries: list[Any],
+    log_path: Path | None = None,
+) -> list[Any]:
+    return [
+        entry
+        for entry in entries
+        if not (
+            isinstance(entry, dict)
+            and _is_sidepulse_hook_command(entry.get("command"), log_path)
+        )
+    ]
+
+
+def _bundle_has_sidepulse_hook(spec: dict[str, Any], log_path: Path | None) -> bool:
+    for event_name, entries in spec.items():
+        if event_name not in ANTIGRAVITY_EVENTS or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if _is_sidepulse_hook_command(entry.get("command"), log_path):
+                return True
+            hooks = entry.get("hooks")
+            if isinstance(hooks, list) and any(
+                isinstance(hook, dict)
+                and _is_sidepulse_hook_command(hook.get("command"), log_path)
+                for hook in hooks
+            ):
+                return True
+    return False
+
+
+def _clean_antigravity_bundle(
+    spec: dict[str, Any],
+    target_log: Path,
+) -> dict[str, Any]:
+    cleaned_spec = dict(spec)
+    for event_name in list(cleaned_spec):
+        entries = cleaned_spec.get(event_name)
+        if event_name not in ANTIGRAVITY_EVENTS or not isinstance(entries, list):
+            continue
+        if event_name in ANTIGRAVITY_GROUPED_EVENTS:
+            cleaned = remove_json_command_hooks_for_log(entries, target_log)
+        else:
+            cleaned = remove_antigravity_flat_hooks(entries, target_log)
+        if cleaned:
+            cleaned_spec[event_name] = cleaned
+        else:
+            cleaned_spec.pop(event_name, None)
+    return cleaned_spec
+
+
+def antigravity_hook_entry(event_name: str, command: str) -> dict[str, Any]:
+    handler = {"type": "command", "command": command}
+    if event_name in ANTIGRAVITY_GROUPED_EVENTS:
+        return {"matcher": "*", "hooks": [handler]}
+    return handler
+
+
+def antigravity_hook_command(
+    event_name: str,
+    log_path: Path,
+    python_executable: str | None = None,
+) -> str:
+    executable = python_executable or sys.executable or "python3"
+    fallback = '{"decision":"ask"}' if event_name == "PreToolUse" else "{}"
+    if os.name == "nt":
+        return windows_hook_command(
+            executable,
+            "antigravity",
+            log_path,
+            event=event_name,
+            frozen=getattr(sys, "frozen", False) and python_executable is None,
+            fallback_stdout=fallback,
+        )
+    if getattr(sys, "frozen", False) and python_executable is None:
+        command = " ".join(
+            [
+                shlex.quote(executable),
+                "hook-log",
+                "--provider",
+                "antigravity",
+                "--event",
+                shlex.quote(event_name),
+                "--log",
+                shlex.quote(str(log_path.expanduser())),
+            ]
+        )
+    else:
+        entry_point = Path(__file__).with_name("hook_entry.py")
+        command = " ".join(
+            [
+                shlex.quote(executable),
+                shlex.quote(str(entry_point)),
+                "--provider",
+                "antigravity",
+                "--event",
+                shlex.quote(event_name),
+                "--log",
+                shlex.quote(str(log_path.expanduser())),
+            ]
+        )
+    return fail_open_command(f"{command} || printf '%s\\n' {shlex.quote(fallback)}")
+
+
+def install_antigravity_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    python_executable: str | None = None,
+) -> InstallResult:
+    config = config_path or default_antigravity_hook_config_path()
+    target_log = (log_path or detect_log_path("antigravity")).expanduser()
+    data = read_antigravity_hook_config(config)
+    original = json.dumps(data, sort_keys=True)
+
+    # Clean stale SidePulse entries from other bundles without touching unrelated
+    # bundles such as Moshi's "moshi-hook".
+    for bundle_name in list(data):
+        if bundle_name == ANTIGRAVITY_HOOK_GROUP:
+            continue
+        spec = data.get(bundle_name)
+        if not isinstance(spec, dict) or not _bundle_has_sidepulse_hook(spec, target_log):
+            continue
+        cleaned_spec = _clean_antigravity_bundle(spec, target_log)
+        if any(key != "enabled" for key in cleaned_spec):
+            data[bundle_name] = cleaned_spec
+        else:
+            data.pop(bundle_name, None)
+
+    existing_group = data.get(ANTIGRAVITY_HOOK_GROUP)
+    group = (
+        _clean_antigravity_bundle(existing_group, target_log)
+        if isinstance(existing_group, dict)
+        else {}
+    )
+    group["enabled"] = True
+    for event_name in ANTIGRAVITY_MONITOR_EVENTS:
+        entries = group.get(event_name, [])
+        if not isinstance(entries, list):
+            entries = []
+        command = antigravity_hook_command(event_name, target_log, python_executable)
+        entries = list(entries)
+        entries.append(antigravity_hook_entry(event_name, command))
+        group[event_name] = entries
+    data[ANTIGRAVITY_HOOK_GROUP] = group
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        target_log.touch(exist_ok=True)
+
+    return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
+
+
+def uninstall_antigravity_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+) -> InstallResult:
+    config = config_path or default_antigravity_hook_config_path()
+    target_log = (log_path or detect_log_path("antigravity")).expanduser()
+    data = read_antigravity_hook_config(config)
+    original = json.dumps(data, sort_keys=True)
+
+    for bundle_name in list(data):
+        spec = data.get(bundle_name)
+        if not isinstance(spec, dict) or not _bundle_has_sidepulse_hook(spec, target_log):
+            continue
+        cleaned_spec = _clean_antigravity_bundle(spec, target_log)
+        if any(key != "enabled" for key in cleaned_spec):
+            data[bundle_name] = cleaned_spec
+        else:
+            data.pop(bundle_name, None)
+
+    changed = json.dumps(data, sort_keys=True) != original
+    backup = None
+    if changed and not dry_run:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_file(config)
+        if data:
+            config.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        else:
+            try:
+                config.unlink()
+            except FileNotFoundError:
+                pass
+
+    return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
+
+
 def hook_command(
     provider: str,
     log_path: Path,
@@ -523,7 +745,7 @@ def fail_open_command(command: str) -> str:
     return f"{command} ; true"
 
 
-def windows_hook_command(executable, provider, log_path, *, event=None, frozen=False):
+def windows_hook_command(executable, provider, log_path, *, event=None, frozen=False, fallback_stdout=None):
     """A shell-independent invocation, including paths with quotes/metacharacters.
 
     Encoding the PowerShell argument avoids a second cmd/Bash/PowerShell parse
@@ -535,7 +757,18 @@ def windows_hook_command(executable, provider, log_path, *, event=None, frozen=F
     if event is not None:
         args += ['--event', event]
     quoted = ' '.join("'" + str(arg).replace("'", "''") + "'" for arg in args)
-    script = WINDOWS_MARKER + "$ErrorActionPreference='Stop'; try { & " + quoted + " } catch { }; exit 0"
+    if fallback_stdout is not None:
+        escaped_out = str(fallback_stdout).replace("'", "''")
+        script = (
+            WINDOWS_MARKER
+            + "$ErrorActionPreference='Stop'; try { & "
+            + quoted
+            + "; if ($LASTEXITCODE -ne 0) { throw 'failed' } } catch { [Console]::Out.WriteLine('"
+            + escaped_out
+            + "') }; exit 0"
+        )
+    else:
+        script = WINDOWS_MARKER + "$ErrorActionPreference='Stop'; try { & " + quoted + " } catch { }; exit 0"
     return 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + base64.b64encode(script.encode('utf-16le')).decode('ascii')
 
 

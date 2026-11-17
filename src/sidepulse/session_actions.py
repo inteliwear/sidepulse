@@ -92,6 +92,8 @@ def session_resume_command(status: AgentStatus) -> str | None:
         return f"cd {cwd} && grok --resume {session_id}"
     if provider == "junie":
         return f"cd {cwd} && junie --session-id={session_id} --resume"
+    if provider == "antigravity":
+        return f"cd {cwd} && agy --conversation {session_id}"
     return None
 
 

@@ -92,9 +92,24 @@ JUNIE_MONITOR_EVENTS = tuple(
     event for event in JUNIE_EVENTS if event != "PermissionRequest"
 )
 
-HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
+ANTIGRAVITY_EVENTS = (
+    "SessionStart",
+    "PreInvocation",
+    "PostInvocation",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+)
+ANTIGRAVITY_MONITOR_EVENTS = tuple(
+    event for event in ANTIGRAVITY_EVENTS if event != "PostInvocation"
+)
+ANTIGRAVITY_GROUPED_EVENTS = ("PreToolUse", "PostToolUse")
+
+HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie", "antigravity")
 KNOWN_EVENTS = tuple(
-    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
+    dict.fromkeys(
+        CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS + ANTIGRAVITY_EVENTS
+    )
 )
 
 
@@ -155,6 +170,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_grok_config(home),
         detect_cursor_config(home),
         detect_junie_config(home),
+        detect_antigravity_config(home),
     ]
 
 
@@ -384,6 +400,73 @@ def detect_junie_config(home: Path | None = None) -> ProviderConfig:
     )
 
 
+def default_antigravity_hook_config_path(home: Path | None = None) -> Path:
+    base = home or Path.home()
+    return base / ".gemini" / "config" / "hooks.json"
+
+
+def _command_has_sidepulse_hook(command: Any) -> bool:
+    if not isinstance(command, str):
+        return False
+    return (
+        "sidepulse hook-log" in command
+        or "agent-monitor hook-log" in command
+        or "hook_entry.py" in observer_script(command)
+    )
+
+
+def detect_antigravity_config(home: Path | None = None) -> ProviderConfig:
+    config_path = default_antigravity_hook_config_path(home)
+    if not config_path.exists():
+        return ProviderConfig("antigravity", config_path, False, False, (), ())
+
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ProviderConfig("antigravity", config_path, True, False, (), ())
+
+    if not isinstance(data, dict):
+        return ProviderConfig("antigravity", config_path, True, False, (), ())
+
+    hook_events: list[str] = []
+    paths: list[Path] = []
+    for spec in data.values():
+        if not isinstance(spec, dict) or spec.get("enabled") is False:
+            continue
+        for event_name, entries in spec.items():
+            if event_name not in ANTIGRAVITY_EVENTS or not isinstance(entries, list):
+                continue
+            if event_name in ANTIGRAVITY_GROUPED_EVENTS:
+                managed_entries = [
+                    entry for entry in entries if _entry_has_sidepulse_hook(entry)
+                ]
+                if managed_entries:
+                    hook_events.append(event_name)
+                    paths.extend(_paths_from_hook_entries(managed_entries))
+            else:
+                managed_flat = [
+                    entry
+                    for entry in entries
+                    if isinstance(entry, dict)
+                    and (
+                        _command_has_sidepulse_hook(entry.get("command"))
+                        or _entry_has_sidepulse_hook(entry)
+                    )
+                ]
+                if managed_flat:
+                    hook_events.append(event_name)
+                    paths.extend(_paths_from_cursor_entries(managed_flat))
+
+    return ProviderConfig(
+        "antigravity",
+        config_path,
+        True,
+        bool(hook_events),
+        tuple(sorted(set(hook_events))),
+        _dedupe_paths(paths),
+    )
+
+
 def _entry_has_sidepulse_hook(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -391,12 +474,7 @@ def _entry_has_sidepulse_hook(entry: Any) -> bool:
     if not isinstance(hooks, list):
         return False
     return any(
-        isinstance(hook, dict)
-        and (
-            "sidepulse hook-log" in str(hook.get("command") or "")
-            or "agent-monitor hook-log" in str(hook.get("command") or "")
-            or "hook_entry.py" in observer_script(str(hook.get("command") or ""))
-        )
+        isinstance(hook, dict) and _command_has_sidepulse_hook(hook.get("command"))
         for hook in hooks
     )
 
@@ -425,6 +503,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_cursor_config(home)
     elif provider == "junie":
         config = detect_junie_config(home)
+    elif provider == "antigravity":
+        config = detect_antigravity_config(home)
     else:
         config = ProviderConfig(provider, default_log_path(provider, home), False, False, (), ())
     if config.log_paths:
@@ -452,6 +532,10 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
         raw = obj
         logged_at = raw.get("logged_at") or raw.get("timestamp")
     provider = infer_provider_from_payload(provider, raw)
+    if provider == "antigravity":
+        from .antigravity_hook import normalize_payload as normalize_antigravity_payload
+
+        raw = normalize_antigravity_payload(None, raw)
 
     event_name = canonical_event_name(
         raw.get("hook_event_name")
