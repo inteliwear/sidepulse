@@ -27,6 +27,9 @@ CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
 MAX_PHONE_STATUS_BYTES = 1800
 MAX_BRIDGE_MESSAGE_BYTES = 2048
 MAX_OUTBOUND_MESSAGE_BYTES = 1024
+HERDR_EVENT = 'HerdrStatus'
+TERMINAL_EVENT = 'TerminalOSC'
+HERDR_SCOPE = re.compile(r'herdr-[0-9a-f]{32}-[0-9a-f]{32}\Z')
 MODES = {'idle': AgentMode.IDLE_READY, 'working': AgentMode.WORKING,
          'blocked': AgentMode.WAITING_FOR_INPUT, 'done': AgentMode.COMPLETED,
          'error': AgentMode.BLOCKED_ERROR}
@@ -153,6 +156,43 @@ def phone_update(update: dict) -> dict:
     return result
 
 
+def session_link_identity(row: dict) -> tuple[str, str] | None:
+    link = urllib.parse.urlsplit(row.get('session_link') or '')
+    if link.scheme != 'sidepulse' or link.netloc != 'sessions':
+        return None
+    query = urllib.parse.parse_qs(link.query)
+    if len(query.get('publisher', [])) != 1 or len(query.get('scope', [])) != 1:
+        return None
+    return query['publisher'][0], query['scope'][0]
+
+
+def _same_pane_agent(previous: dict, update: dict) -> bool:
+    def agent(report):
+        context = report.get('context', {})
+        provider = context.get('provider') or report['status'].get('app')
+        return 'claude' if provider == 'claude-code' else provider, context.get('session_id')
+
+    return all(not left or not right or left == right
+               for left, right in zip(agent(previous), agent(update)))
+
+
+def _ignore_pane_update(previous: dict, update: dict) -> bool:
+    old_context = previous.get('context', {})
+    new_context = update.get('context', {})
+    source = new_context.get('event_name')
+    old_source = old_context.get('event_name')
+    if source == HERDR_EVENT:
+        if old_source != HERDR_EVENT:
+            return True
+        # Snapshot reconciliation may repeat events from other panes. Repeating
+        # the same report would renew Done and re-trigger phone LEDs.
+        return (previous['status'] == update['status']
+                and old_context.get('session_id') == new_context.get('session_id')
+                and all(old_context.get(field) == new_context[field]
+                        for field in ('provider', 'cwd', 'title') if field in new_context))
+    return source == TERMINAL_EVENT and old_source not in {HERDR_EVENT, TERMINAL_EVENT}
+
+
 def installation_publisher(path=None) -> str:
     """An installation identity survives hostname and network-interface changes."""
     from .settings import default_config_dir
@@ -221,12 +261,21 @@ class ProgramState:
                 'seq': self._sequences.get(key, 0) + 1, 'updated_at': now,
                 **({'status': {'state': 'clear'}} if suppressed else {})})
             previous = self._sessions.get(key)
+            herdr_pane = HERDR_SCOPE.fullmatch(scope)
+            if herdr_pane and previous and not _same_pane_agent(previous, update):
+                previous = None
             ignored = (report.get('unless_state') == 'done' and previous is not None
                        and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
             ignored = ignored or (previous is not None
                 and guard_kind is not None
                 and previous['status']['state'] == 'blocked'
                 and previous['status'].get('kind') == guard_kind)
+            if herdr_pane:
+                hook_scope = report.get('_hook_scope')
+                if isinstance(hook_scope, str) and hook_scope in self._suppressed:
+                    ignored = True
+                if previous and not (previous['status']['state'] == 'done' and now - previous['updated_at'] > 1200000):
+                    ignored = ignored or _ignore_pane_update(previous, update)
             if ignored:
                 self._expire_done(now)
             else:
@@ -237,7 +286,7 @@ class ProgramState:
                 if suppressed:
                     self._suppressed.add(scope)
                 self._revision += 1
-            ack = {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
+            ack = {'ok': True, 'seq': self._sequences.get(key, 0), 'revision': self._revision}
             if receipt:
                 self._receipts[receipt] = (request, ack)
                 while len(self._receipts) > MAX_SESSIONS:
@@ -249,12 +298,18 @@ class ProgramState:
         previous = self._sessions.get(key)
         if sender == 'local' and previous and previous['status']['state'] == 'done' and update['updated_at'] - previous['updated_at'] > 1200000:
             previous = None
+        herdr_pane = sender == 'local' and HERDR_SCOPE.fullmatch(update['scope'])
+        if herdr_pane and previous and not _same_pane_agent(previous, update):
+            previous = None
         if update['status']['state'] != 'clear' and 'context' in update:
             context = dict(update['context'])
             previous_context = previous.get('context', {}) if previous else {}
             if previous_context.get('title') and context.get('title_source') != 'session':
                 context['title'] = previous_context['title']
-            for field in ('cwd', 'origin', 'title'):
+            inherited = ('cwd', 'origin', 'title')
+            if herdr_pane and context.get('event_name') == TERMINAL_EVENT:
+                inherited += ('provider', 'session_id')
+            for field in inherited:
                 if field not in context and field in previous_context:
                     context[field] = previous_context[field]
             if context.get('title') or context.get('cwd'):

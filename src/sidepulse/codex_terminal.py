@@ -5,18 +5,9 @@ from datetime import datetime
 import os
 from pathlib import Path
 import time
-import urllib.parse
 import uuid
 
-
-def identity(row):
-    link = urllib.parse.urlsplit(row.get('session_link', ''))
-    if link.scheme != 'sidepulse' or link.netloc != 'sessions':
-        return None
-    query = urllib.parse.parse_qs(link.query)
-    if len(query.get('publisher', [])) != 1 or len(query.get('scope', [])) != 1:
-        return None
-    return query['publisher'][0], query['scope'][0]
+from .program_status import HERDR_EVENT, HERDR_SCOPE, TERMINAL_EVENT, session_link_identity
 
 
 class CodexTerminal:
@@ -38,16 +29,18 @@ class CodexTerminal:
             else:
                 query = self.query
             rows = query({'type': 'get_state'}, timeout=.2)['snapshot']['statuses']
-            # Our unguessable per-invocation OSC scope identifies this daemon's
+            # Our local OSC scope identifies this daemon's
             # local publisher. Never rewrite a status forwarded by another host.
-            publishers = {key[0] for row in rows if (key := identity(row)) and key[1] == self.scope}
+            publishers = {key[0] for row in rows if (key := session_link_identity(row)) and key[1] == self.scope}
             if len(publishers) != 1:
                 return
             roots = []
             for row in rows:
-                key = identity(row)
+                key = session_link_identity(row)
                 if (key is None or key[0] not in publishers or row.get('provider') != 'codex'
-                        or row.get('event_name') == 'ProgramStatus' or not row.get('cwd')
+                        or row.get('event_name') in {'ProgramStatus', HERDR_EVENT, TERMINAL_EVENT}
+                        or (HERDR_SCOPE.fullmatch(self.scope) and key[1] != self.scope)
+                        or not row.get('cwd')
                         or os.path.normcase(os.path.abspath(row['cwd'])) != self.cwd):
                     continue
                 updated = datetime.fromisoformat(row['updated_at']).timestamp()

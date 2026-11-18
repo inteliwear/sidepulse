@@ -106,6 +106,7 @@ class StatusForwarder:
     """One pending value per invocation; daemon I/O never runs in the PTY loop."""
     def __init__(self, scope: str, *, submit=None, command=None, query=None):
         self.scope = scope
+        self.pane_scope = None
         self.submit = submit or submit_status
         self.condition = threading.Condition()
         self.pending = None
@@ -145,6 +146,13 @@ class StatusForwarder:
                     return
             try:
                 plan_closed = report.pop('_plan_closed', False)
+                from .herdr import current_pane_scope
+                from .program_status import TERMINAL_EVENT
+                if self.pane_scope is None:
+                    self.pane_scope = current_pane_scope() or ''
+                if self.pane_scope:
+                    report.update(scope=self.pane_scope, context={'event_name': TERMINAL_EVENT})
+                    self.codex.scope = self.pane_scope
                 self.submit(report, timeout=0.2)
                 if plan_closed:
                     self.codex.dismiss_plan(self.submit)

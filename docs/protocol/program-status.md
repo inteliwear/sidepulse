@@ -80,22 +80,39 @@ from the outer terminal. Candidates are bounded to 4096 bytes and decoded with
 the same validation as `report --osc`. Other OSCs and DCS/APC/PM/SOS strings are
 opaque; tmux passthrough is not decoded.
 
-Each invocation generates a unique `wrap-...` scope, with the latest report
-replacing that scope's state. As with other SidePulse input, `id` is metadata,
+Outside Herdr, each invocation generates a unique `wrap-...` scope and the
+latest report replaces that scope's state. As with other SidePulse input, `id` is metadata,
 and any clear removes that invocation's current state; child record trees are
 not maintained. Exit clears `working`, `blocked`, or `idle`; explicit `done` and
 `error` remain under the normal daemon retention rules. No completion state is
 inferred from silence or a successful process exit. Programs that emit no valid
-reports create no wrapper session. Installed provider hooks remain independent
-and can create a separate session for the same agent.
+reports create no wrapper session. Outside Herdr, installed provider hooks and
+terminal capture can report separate sessions for the same agent.
 
 One background worker submits JSON to the existing local daemon, retaining
 only the latest pending update. A slow or unavailable daemon never blocks
 terminal output; failures warn once, and shutdown waits at most one second for
 the worker. Delivery remains best-effort. Run the daemon with
 `sidepulse service start` before wrapping a command to receive status updates.
-For Herdr or another multiplexer, wrap each agent inside its pane: the outer
-interface may consume OSCs and cannot supply individual pane identities.
+For other multiplexers, run the wrapper inside each pane to capture its OSC reports.
+
+### Herdr plugin
+
+The [bundled plugin](../../README.md#herdr) translates Herdr agent status into
+OSC 7501-compatible JSON and submits it through the same local daemon socket.
+It maps Working, Blocked, Idle, and Done directly. It uses the Herdr server and
+stable terminal ID as the scope, so moving a pane keeps its session and named
+Herdr servers have independent scopes. Hook reports and OSC captured by
+`sidepulse wrap` inside the pane resolve the same identity. Direct hooks retain
+their richer provider status when available, followed by captured OSC and then
+Herdr's observations. The plugin clears sessions when it observes a pane close
+or a detected agent leave its pane. Explicit CLI reports keep their supplied
+`--scope`.
+
+Herdr plugin hooks run on server startup and agent or pane lifecycle events.
+`sidepulse setup herdr` requests an initial sync if the current Herdr server is
+already running. The `sidepulse.status.sync` Herdr action can also refresh that
+server's sessions on demand after a SidePulse restart.
 
 ## Responsibilities and flow
 

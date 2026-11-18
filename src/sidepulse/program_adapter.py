@@ -71,6 +71,9 @@ def hook_report(provider: str, line: dict) -> dict | None:
         if field in context:
             context[field] = clean_text(context[field], CONTEXT_LIMITS[field])
     result = {**base, 'status': validate_status(status), 'context': context}
+    from .herdr import current_pane_scope
+    if pane_scope := current_pane_scope():
+        result.update(scope=pane_scope, _hook_scope=scope)
     if record.event_name == 'Notification':
         result['unless_state'] = 'done'
     if (provider == 'codex' and not codex_question_tool(record)

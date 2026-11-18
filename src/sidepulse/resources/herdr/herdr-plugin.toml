@@ -1,0 +1,38 @@
+id = "sidepulse.status"
+name = "SidePulse"
+description = "Send Herdr agent activity to the SidePulse service"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["sh", "sync.sh"]
+
+[[actions]]
+id = "sync"
+title = "Sync SidePulse agent status"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "pane.exited"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "pane.closed"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "tab.closed"
+command = ["sh", "sync.sh"]
+
+[[events]]
+on = "workspace.closed"
+command = ["sh", "sync.sh"]
