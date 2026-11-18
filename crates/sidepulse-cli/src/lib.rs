@@ -7,6 +7,7 @@ mod hook_impl;
 mod leds;
 mod lifecycle;
 mod relay_link;
+mod report;
 mod setup_control;
 mod status;
 pub use setup_control::run as run_setup_control;
@@ -16,6 +17,7 @@ pub use doctor::run_doctor;
 pub use hook_config::run_hook_config;
 pub use hook_impl::run_hook;
 pub use relay_link::run_link;
+pub use report::run_report;
 pub use status::run_status;
 pub use status::run_watch;
 
@@ -28,7 +30,8 @@ pub use lifecycle::{run_lifecycle, run_setup, run_upgrade};
 
 pub fn preview_endpoint() -> Option<String> {
     std::env::var("SIDEPULSE_NEXT_ENDPOINT").ok().or_else(|| {
-        let executable = std::env::current_exe().ok()?;
+        // Resolve symlinks such as ~/.local/bin/sidepulse to the staged binary.
+        let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
         sidepulse_installer::endpoint_from_executable(&executable)
             .ok()
             .flatten()
