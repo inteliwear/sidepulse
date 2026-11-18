@@ -202,6 +202,59 @@ class StatusBarTestCase(unittest.TestCase):
             raise unittest.SkipTest("StatusBarController could not be created")
 
 
+class NotchPrimaryMonitorTests(StatusBarTestCase):
+    def test_menu_toggle_persists_and_restores_preference(self):
+        from sidepulse.settings import load_settings, save_settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            with patch.object(sb, "load_settings", side_effect=lambda: load_settings(path)), patch.object(
+                sb, "save_settings", side_effect=lambda settings: save_settings(settings, path)
+            ), patch.object(sb.StatusBarController, "refresh_"):
+                controller = sb.StatusBarController.alloc().init()
+                device = make_device(device_id=sb.VIRTUAL_DEVICE_ID)
+                self.assertFalse(load_settings(path).virtual_status_device_primary_screen)
+                for expected in (True, False, True):
+                    menu = sb.build_device_menu_item(device, controller).submenu()
+                    item = next(item for item in walk_menu(menu) if item.title() == "Stick to Main Monitor")
+                    self.assertEqual(item.state(), int(not expected))
+                    self.assertTrue(self.app.sendAction_to_from_(item.action(), item.target(), item))
+                    self.assertEqual(load_settings(path).virtual_status_device_primary_screen, expected)
+                    self.assertEqual(controller.virtual_status_device.primary_screen, expected)
+                restored = sb.StatusBarController.alloc().init()
+                self.assertTrue(restored.virtual_status_device.primary_screen)
+                menu = sb.build_device_menu_item(device, restored).submenu()
+                item = next(item for item in walk_menu(menu) if item.title() == "Stick to Main Monitor")
+                self.assertEqual(item.state(), 1)
+
+    def test_notch_tracks_active_or_primary_display_and_primary_changes(self):
+        def screen(x, width, height):
+            return SimpleNamespace(
+                frame=lambda: SimpleNamespace(origin=SimpleNamespace(x=x, y=0),
+                    size=SimpleNamespace(width=width, height=height)),
+                safeAreaInsets=lambda: SimpleNamespace(top=0),
+            )
+
+        primary = screen(0, 1600, 900)
+        active = screen(1600, 1200, 800)
+        screens = SimpleNamespace(screens=lambda: [primary, active], mainScreen=lambda: active)
+        device = vd.VirtualStatusDevice.alloc().init()
+        device._build_window()
+        self.addCleanup(device.window.close)
+        with patch.object(vd, "NSScreen", screens):
+            device.reposition()
+            self.assertEqual(device.window.frame(), vd.virtual_window_frame_for_screen(active))
+            device.primary_screen = True
+            device.reposition()
+            self.assertEqual(device.window.frame(), vd.virtual_window_frame_for_screen(primary))
+            screens.screens = lambda: [active, primary]
+            device.reposition()
+            self.assertEqual(device.window.frame(), vd.virtual_window_frame_for_screen(active))
+            screens.screens = lambda: []
+            device.reposition()
+            self.assertEqual(device.window.frame(), vd.virtual_window_frame_for_screen(active))
+
+
 class MenuBarVisibilityTests(StatusBarTestCase):
     def test_status_updates_keep_only_icon_with_accessible_state(self):
         controller = sb.StatusBarController.alloc().init()
