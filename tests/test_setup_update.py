@@ -61,6 +61,7 @@ class SetupUpdateTests(unittest.TestCase):
             **os.environ,
             'HOME': str(self.home),
             'PATH': f'{self.tools}:{os.environ["PATH"]}',
+            'HERDR_BIN_PATH': str(self.tools / 'herdr'),
             'PYTHON_BIN': sys.executable,
             'SIDEPULSE_INSTALL_ROOT': str(self.install_root),
             'SIDEPULSE_BIN_DIR': str(self.bin),

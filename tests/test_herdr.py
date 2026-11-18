@@ -1,6 +1,8 @@
 import os
 import sys
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -186,31 +188,9 @@ def test_native_codex_idle_releases_only_its_own_pane_plan(integration, monkeypa
     }
 
 
-@pytest.mark.parametrize('running', [False, True])
-def test_setup_registers_plugin_and_syncs_only_a_running_server(running, monkeypatch, capsys):
-    from sidepulse.cli import sidepulse_main
-
-    monkeypatch.setenv('HERDR_BIN_PATH', '/path/to/herdr')
-    calls = []
-
-    def cli(executable, *args):
-        assert executable == '/path/to/herdr'
-        calls.append(args)
-        return '{"running": true}' if running else '{"running": false}'
-
-    monkeypatch.setattr(herdr, '_cli', cli)
-    assert sidepulse_main(['setup', 'herdr']) == 0
-    assert calls[:2] == [('plugin', 'link', str(herdr.PLUGIN_DIR)), ('status', 'server', '--json')]
-    assert calls[2:] == ([('plugin', 'action', 'invoke', 'sidepulse.status.sync')] if running else [])
-    assert ('Initial sync requested' if running else 'sync when Herdr starts') in capsys.readouterr().out
-
-
-def test_setup_agent_herdr_starts_service_before_sync(monkeypatch):
-    from pathlib import Path
-    from types import SimpleNamespace
-
+@pytest.fixture
+def setup_service(monkeypatch):
     from sidepulse import service_launch
-    from sidepulse.cli import sidepulse_main
 
     calls = []
 
@@ -218,12 +198,50 @@ def test_setup_agent_herdr_starts_service_before_sync(monkeypatch):
         calls.append('service')
         return SimpleNamespace(path=Path('/test/service'), started=True, detail='')
 
-    def configure_plugin(**kwargs):
-        calls.append('plugin')
-        return 'Plugin installed'
-
     monkeypatch.setattr(service_launch, 'install_service', start_service)
+    return calls
+
+
+@pytest.mark.parametrize('selection', [['herdr'], ['--agent', 'herdr']])
+@pytest.mark.parametrize('running', [False, True])
+def test_setup_registers_plugin_and_syncs_only_a_running_server(selection, running, setup_service, monkeypatch, capsys):
+    from sidepulse.cli import sidepulse_main
+
+    monkeypatch.setenv('HERDR_BIN_PATH', '/path/to/herdr')
+
+    def cli(executable, *args):
+        assert executable == '/path/to/herdr'
+        setup_service.append(args)
+        return '{"running": true}' if running else '{"running": false}'
+
+    monkeypatch.setattr(herdr, '_cli', cli)
+    assert sidepulse_main(['setup', *selection, '--no-sd-eject-guard', '--no-status-bar']) == 0
+    assert setup_service[:3] == ['service', ('plugin', 'link', str(herdr.PLUGIN_DIR)), ('status', 'server', '--json')]
+    assert setup_service[3:] == ([('plugin', 'action', 'invoke', 'sidepulse.status.sync')] if running else [])
+    assert ('Initial sync requested' if running else 'sync when Herdr starts') in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('selection', [[], ['--agent', 'codex', '--agent', 'herdr']])
+def test_setup_returns_failure_when_herdr_registration_fails(selection, setup_service, monkeypatch, capsys):
+    from sidepulse import cli
+
+    def fail(**kwargs):
+        setup_service.append('plugin')
+        raise herdr.StatusError('registration rejected')
+
+    monkeypatch.setattr(cli, 'install_hook_results', lambda args: [])
     monkeypatch.setattr(herdr, 'executable_path', lambda: '/test/herdr')
-    monkeypatch.setattr(herdr, 'configure_plugin', configure_plugin)
-    assert sidepulse_main(['setup', '--agent', 'herdr', '--no-sd-eject-guard', '--no-status-bar']) == 0
-    assert calls == ['service', 'plugin']
+    monkeypatch.setattr(herdr, 'configure_plugin', fail)
+    assert cli.sidepulse_main(['setup', *selection, '--no-sd-eject-guard', '--no-status-bar']) == 1
+    assert setup_service == ['service', 'plugin']
+    assert 'registration rejected' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(('selection', 'exit_code'), [([], 0), (['herdr'], 1), (['--agent', 'herdr'], 1)])
+def test_setup_skips_missing_herdr_only_when_it_is_not_explicitly_selected(selection, exit_code, setup_service, monkeypatch):
+    from sidepulse import cli
+
+    monkeypatch.setattr(cli, 'install_hook_results', lambda args: [])
+    monkeypatch.setattr(herdr, 'executable_path', lambda: None)
+    assert cli.sidepulse_main(['setup', *selection, '--no-sd-eject-guard', '--no-status-bar']) == exit_code
+    assert setup_service == ['service']

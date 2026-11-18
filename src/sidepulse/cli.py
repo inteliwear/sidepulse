@@ -966,11 +966,9 @@ def cmd_sidepulse_sdejectguard_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
-    providers = selected_hook_providers(args)
-    if args.provider == "herdr" and not args.no_agent_monitor:
-        return configure_herdr(args)
     if getattr(args, "uninstall", False):
         return cmd_uninstall(args)
+    providers = selected_hook_providers(args)
     if not args.no_agent_monitor:
         results = install_hook_results(args)
         print_install_results(results, dry_run=args.dry_run)
@@ -987,13 +985,15 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     if str(service_result.path):
         print(f"  config: {service_result.path}")
 
+    herdr_result = 0
     if not args.no_agent_monitor and "herdr" in providers:
-        configure_herdr(args, optional=True)
+        herdr_result = configure_herdr(args)
 
     if sys.platform != "darwin":
         print("macOS integrations: skipped (CLI-only setup on this platform)")
-        print("sidepulse: ready for linked phones and mounted SidePulse devices")
-        return 0
+        if not herdr_result:
+            print("sidepulse: ready for linked phones and mounted SidePulse devices")
+        return herdr_result
 
     if not args.no_sd_eject_guard:
         from .sd_eject_guard_launch import (
@@ -1013,11 +1013,11 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
         print_sd_eject_guard_result(guard_result)
 
     if args.no_status_bar:
-        return 0
+        return herdr_result
 
     if args.dry_run:
         print("status-bar: would install and start")
-        return 0
+        return herdr_result
 
     from .status_bar_launch import install_launch_agent
 
@@ -1027,7 +1027,7 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
         action += " and started"
     print(f"status-bar: {action}")
     print(f"  plist: {result.plist_path}")
-    return 0
+    return herdr_result
 
 
 def cmd_sidepulse_service(args: argparse.Namespace) -> int:
@@ -1202,9 +1202,9 @@ def cmd_status_bar(args: argparse.Namespace) -> int:
     return 0
 
 
-def configure_herdr(args: argparse.Namespace, *, optional: bool = False) -> int:
+def configure_herdr(args: argparse.Namespace) -> int:
     from . import herdr
-    if optional and not herdr.executable_path():
+    if args.provider == "all" and not args.agent and not herdr.executable_path():
         return 0
     try:
         print(herdr.configure_plugin(uninstall=args.uninstall, dry_run=args.dry_run))
@@ -1291,7 +1291,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             print(f"  log: {result.log_path}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
-    return configure_herdr(args, optional=True) if "herdr" in providers else 0
+    return configure_herdr(args) if "herdr" in providers else 0
 
 
 def cmd_hook_log(args: argparse.Namespace) -> int:

@@ -26,9 +26,14 @@ INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 PLATFORM=$(uname -s)
-AGENTS='codex claude grok cursor junie opencode herdr'
+default_agents='codex claude grok cursor junie opencode'
+AGENTS="$default_agents herdr"
 MAC_COMPONENTS='sd-eject-guard status-bar'
-selected_components=" $AGENTS "
+if [ -n "${HERDR_BIN_PATH:-}" ] || command -v herdr >/dev/null 2>&1 ||
+    [ -x "$HOME/.local/bin/herdr" ] || [ -x /opt/homebrew/bin/herdr ] || [ -x /usr/local/bin/herdr ]; then
+    default_agents=$AGENTS
+fi
+selected_components=" $default_agents "
 if [ "$PLATFORM" = Darwin ]; then
     selected_components="${selected_components}status-bar "
     if [ "$SELECT_EJECT_GUARD" -eq 1 ]; then
@@ -446,7 +451,7 @@ for agent in $AGENTS; do
 done
 case "$selected_agents" in
     '') set -- "$@" --no-agent-monitor ;;
-    " $AGENTS") ;;
+    " $default_agents") ;;
     *)
         for agent in $selected_agents; do
             set -- "$@" --agent "$agent"
