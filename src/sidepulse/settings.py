@@ -178,8 +178,7 @@ DEFAULT_LID_OPEN_ANIMATION_PROGRAM = "\n".join(
 )
 DEFAULT_LID_CLOSED_ANIMATION_SECONDS = 1.3
 DEFAULT_LID_OPEN_ANIMATION_SECONDS = 1.0
-DEFAULT_RECENT_SESSION_RETENTION_SECONDS = 48 * 60 * 60
-DEFAULT_IDLE_TIMEOUT_SECONDS = 60 * 60
+DEFAULT_SESSION_TIMEOUT_SECONDS = 60 * 60
 DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT = 20.0
 HISTORY_TIMEFRAME_1H_SECONDS = 60 * 60
 HISTORY_TIMEFRAME_6H_SECONDS = 6 * 60 * 60
@@ -326,8 +325,7 @@ class AgentMonitorSettings:
     grok_session_open_action: str = SESSION_OPEN_TERMINAL
     session_terminal_app: str = TERMINAL_APP_TERMINAL
     custom_terminal_path: str = ""
-    recent_session_retention_seconds: float = DEFAULT_RECENT_SESSION_RETENTION_SECONDS
-    idle_timeout_seconds: float = DEFAULT_IDLE_TIMEOUT_SECONDS
+    session_timeout_seconds: float = DEFAULT_SESSION_TIMEOUT_SECONDS
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
@@ -787,23 +785,8 @@ class AgentMonitorSettings:
     def with_virtual_status_device(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, virtual_status_device_enabled=bool(enabled))
 
-    def with_agent_list_timing(
-        self,
-        *,
-        recent_session_retention_seconds: float | None = None,
-        idle_timeout_seconds: float | None = None,
-    ) -> "AgentMonitorSettings":
-        retention = self.recent_session_retention_seconds
-        idle_timeout = self.idle_timeout_seconds
-        if recent_session_retention_seconds is not None:
-            retention = normalize_seconds_setting(recent_session_retention_seconds)
-        if idle_timeout_seconds is not None:
-            idle_timeout = normalize_seconds_setting(idle_timeout_seconds)
-        return replace(
-            self,
-            recent_session_retention_seconds=retention,
-            idle_timeout_seconds=idle_timeout,
-        )
+    def with_session_timeout(self, seconds: float) -> "AgentMonitorSettings":
+        return replace(self, session_timeout_seconds=normalize_seconds_setting(seconds))
 
     def with_sleep_prevention_battery_safeguard(self, percent: float) -> "AgentMonitorSettings":
         return replace(
@@ -841,8 +824,7 @@ class AgentMonitorSettings:
                 "custom_path": self.custom_terminal_path,
             },
             "agent_list": {
-                "recent_session_retention_seconds": self.recent_session_retention_seconds,
-                "idle_timeout_seconds": self.idle_timeout_seconds,
+                "session_timeout_seconds": self.session_timeout_seconds,
             },
             "sleep_prevention": {
                 "min_battery_percent": self.sleep_prevention_min_battery_percent,
@@ -917,6 +899,13 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
     agent_list = data.get("agent_list")
     if not isinstance(agent_list, dict):
         agent_list = {}
+
+    session_timeout = DEFAULT_SESSION_TIMEOUT_SECONDS
+    # If both legacy fields exist, carry over the cutoff that governed active sessions.
+    for key in ("recent_session_retention_seconds", "idle_timeout_seconds", "session_timeout_seconds"):
+        session_timeout = _nonnegative_float_setting(
+            agent_list.get(key, data.get(key)), session_timeout,
+        )
 
     sleep_prevention = data.get("sleep_prevention")
     if not isinstance(sleep_prevention, dict):
@@ -1009,17 +998,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         grok_session_open_action=grok_session_open_action,
         session_terminal_app=normalize_terminal_app(terminal.get("app")),
         custom_terminal_path=_string_setting(terminal.get("custom_path")),
-        recent_session_retention_seconds=_nonnegative_float_setting(
-            agent_list.get(
-                "recent_session_retention_seconds",
-                data.get("recent_session_retention_seconds"),
-            ),
-            DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
-        ),
-        idle_timeout_seconds=_nonnegative_float_setting(
-            agent_list.get("idle_timeout_seconds", data.get("idle_timeout_seconds")),
-            DEFAULT_IDLE_TIMEOUT_SECONDS,
-        ),
+        session_timeout_seconds=session_timeout,
         sleep_prevention_min_battery_percent=normalize_percent_setting(
             sleep_prevention.get(
                 "min_battery_percent",

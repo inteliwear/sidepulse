@@ -219,7 +219,7 @@ with codex.open('a') as stream:
 settings = home / '.config/sidepulse/settings.json'
 settings.parent.mkdir(parents=True, exist_ok=True)
 data = json.loads(settings.read_text()) if settings.exists() else {}
-data['idle_timeout_seconds'] = 321
+data.setdefault('agent_list', {})['session_timeout_seconds'] = 321
 settings.write_text(json.dumps(data, indent=2) + '\\n')
 print('Seeded user settings and an unrelated hook for each provider')
 ''')
@@ -241,7 +241,7 @@ codex = tomllib.loads((home / '.codex/config.toml').read_text())
 for provider, config in [('claude', claude), ('codex', codex)]:
     commands = [hook['command'] for entry in config['hooks']['Stop'] for hook in entry.get('hooks', [])]
     assert commands.count('echo unrelated-windows-hook') == 1, (provider, commands)
-assert json.loads((home / '.config/sidepulse/settings.json').read_text())['idle_timeout_seconds'] == 321
+assert json.loads((home / '.config/sidepulse/settings.json').read_text())['agent_list']['session_timeout_seconds'] == 321
 print('Preserved interpreter, user settings, and unrelated hooks exactly once')
 ''')
 

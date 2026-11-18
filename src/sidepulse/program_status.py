@@ -95,6 +95,18 @@ def hook_scope(provider: str, identity: str) -> str:
     return provider + '-' + hashlib.sha256(identity.encode()).hexdigest()[:32]
 
 
+def is_integrated_session(scope: str, context: dict) -> bool:
+    if HERDR_SCOPE.fullmatch(scope) or context.get('t3_link'):
+        return True
+    provider = context.get('provider')
+    session_id = context.get('session_id')
+    if not provider or not session_id:
+        return False
+    return scope == hook_scope(provider, session_id) or (
+        provider == 'opencode' and scope == f'opencode-{session_id}'
+    )
+
+
 def validate_context(value: object) -> dict:
     if not isinstance(value, dict):
         raise StatusError('Invalid presentation context')
@@ -303,9 +315,7 @@ class ProgramState:
                     ignored = True
                 if previous and not (previous['status']['state'] == 'done' and now - previous['updated_at'] > 1200000):
                     ignored = ignored or _ignore_pane_update(previous, update)
-            if ignored:
-                self._expire_done(now)
-            else:
+            if not ignored:
                 sequence = report.get('seq', update['seq'])
                 if type(sequence) is not int or sequence != update['seq']:
                     raise StatusError('Sequence gap or duplicate; submit without seq locally')
@@ -371,8 +381,6 @@ class ProgramState:
             update = {**update, 'context': validate_context(context)}
         # Prepare and validate the complete forwarded value before changing state.
         self._append_event(sender, update)
-        if sender == 'local':
-            self._expire_done(update['updated_at'])
         self._sequences.pop(key, None)
         self._sequences[key] = update['seq']
         self._sessions.pop(key, None)
@@ -385,11 +393,6 @@ class ProgramState:
             self._sessions.pop(oldest, None)
             if oldest[0] == 'local':
                 self._suppressed.discard(oldest[2])
-
-    def _expire_done(self, now):
-        for key, update in list(self._sessions.items()):
-            if key[:2] == ('local', self.publisher) and update['status']['state'] == 'done' and now - update['updated_at'] > 1200000:
-                del self._sessions[key]
 
     def _append_event(self, sender, update):
         outgoing = dict(update)
@@ -459,7 +462,7 @@ class ProgramState:
     def _session_identity(key):
         return 'program:' + hashlib.sha256(json.dumps(list(key)).encode()).hexdigest()
 
-    def statuses(self) -> tuple[AgentStatus, ...]:
+    def statuses(self, *, inactive_before_ms: float | None = None) -> tuple[AgentStatus, ...]:
         with self.lock:
             rows = copy.deepcopy(self._sessions)
         result = []
@@ -467,6 +470,11 @@ class ProgramState:
             status = update['status']
             app = status.get('app')
             context = update.get('context', {})
+            if (inactive_before_ms is not None and update['updated_at'] < inactive_before_ms
+                    and sender == 'local' and status['state'] != 'done'
+                    and is_integrated_session(scope, context)):
+                continue
+            updated_at = datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc)
             mode = MODES[status['state']]
             detail_mode = context.get('mode')
             if mode == AgentMode.WORKING and detail_mode in {'tool_running', 'long_task_progress'}:
@@ -481,7 +489,7 @@ class ProgramState:
                 session_id = identity
             result.append(AgentStatus(provider=context.get('provider') or app or 'program', agent_id=identity,
                 display_name=context.get('display_name') or status.get('title') or app or scope, mode=mode,
-                updated_at=datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc),
+                updated_at=updated_at,
                 event_name=context.get('event_name') or 'ProgramStatus', session_id=session_id,
                 cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
                 seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(

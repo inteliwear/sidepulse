@@ -274,8 +274,7 @@ class AdvancedAutosaveTests(StatusBarTestCase):
         )
         self.tabs.selectTabViewItemWithIdentifier_("behavior")
         for key, value in (
-            ("recent_session_retention_hours", "48"),
-            ("idle_timeout_minutes", "60"),
+            ("session_timeout_minutes", "60"),
             ("sleep_prevention_min_battery_percent", "20"),
         ):
             self.target.settings_fields[key].setStringValue_(value)
@@ -298,29 +297,28 @@ class AdvancedAutosaveTests(StatusBarTestCase):
 
     def test_leaving_each_numeric_field_saves_without_a_button(self):
         for key, value, attribute, expected in (
-            ("recent_session_retention_hours", "24", "recent_session_retention_seconds", 86400),
-            ("idle_timeout_minutes", "15", "idle_timeout_seconds", 900),
+            ("session_timeout_minutes", "15", "session_timeout_seconds", 900),
             ("sleep_prevention_min_battery_percent", "30", "sleep_prevention_min_battery_percent", 30),
         ):
             self.edit(key, value)
             self.window.makeFirstResponder_(None)
             self.assertEqual(getattr(self.saved[-1], attribute), expected)
-        self.assertEqual(len(self.saved), 3)
+        self.assertEqual(len(self.saved), 2)
 
     def test_switching_tabs_commits_the_active_field(self):
-        self.edit("idle_timeout_minutes", "10")
+        self.edit("session_timeout_minutes", "10")
         self.tabs.selectTabViewItemWithIdentifier_("agents")
-        self.assertEqual(self.saved[-1].idle_timeout_seconds, 600)
+        self.assertEqual(self.saved[-1].session_timeout_seconds, 600)
 
     def test_closing_window_commits_the_active_field(self):
-        self.edit("idle_timeout_minutes", "5")
+        self.edit("session_timeout_minutes", "5")
         self.assertTrue(self.target.windowShouldClose_(self.window))
-        self.assertEqual(self.saved[-1].idle_timeout_seconds, 300)
+        self.assertEqual(self.saved[-1].session_timeout_seconds, 300)
 
     def test_invalid_input_keeps_last_saved_setting(self):
         original = self.target.settings
         for value in ("oops", "nan", "inf"):
-            self.edit("idle_timeout_minutes", value)
+            self.edit("session_timeout_minutes", value)
             self.window.makeFirstResponder_(None)
             self.assertEqual(self.target.settings, original)
         self.assertEqual(self.saved, [])

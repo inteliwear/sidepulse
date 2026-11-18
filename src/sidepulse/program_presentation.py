@@ -9,18 +9,30 @@ class ProgramMonitor:
     def snapshot(self, include_stale=False):
         from dataclasses import replace
         from datetime import datetime, timezone
-        from .collector import MonitorSnapshot, aggregate_status, status_counts_active
+        from .collector import COMPLETED_VISIBLE_SECONDS, MonitorSnapshot, aggregate_status, status_counts_active
+        from .models import AgentMode
+        from .settings import load_settings
+
         now = datetime.now(timezone.utc)
-        statuses = [status for status in self.store.statuses()
-                    if status.mode.value != 'completed' or status.age_seconds(now) <= 1200]
+        timeout = load_settings().session_timeout_seconds
+        rows = self.store.statuses(inactive_before_ms=(now.timestamp() - timeout) * 1000)
+        statuses = []
         stale = []
-        if any(status_counts_active(s) for s in statuses):
-            stale = [replace(s, stale=True) for s in statuses if s.mode.value == 'completed']
-            statuses = [s for s in statuses if s.mode.value != 'completed']
-        statuses = tuple(sorted(statuses, key=lambda s: (s.priority, -s.updated_at.timestamp(), s.agent_id)))
-        aggregate = aggregate_status(statuses, tuple(stale))
-        active = sum(status_counts_active(s) for s in statuses)
-        return MonitorSnapshot(replace(aggregate, active_count=active), statuses, tuple(stale), (), now)
+        has_active = any(status_counts_active(row) for row in rows)
+        for row in rows:
+            if row.mode != AgentMode.COMPLETED:
+                statuses.append(row)
+                continue
+            age = row.age_seconds(now)
+            if not has_active and age <= COMPLETED_VISIBLE_SECONDS:
+                statuses.append(row)
+            elif age <= timeout:
+                stale.append(replace(row, stale=True))
+
+        statuses.sort(key=lambda row: (row.priority, -row.updated_at.timestamp(), row.agent_id))
+        visible = tuple(statuses)
+        recent = tuple(stale)
+        return MonitorSnapshot(aggregate_status(visible, recent), visible, recent, (), now)
 
 
 class DaemonMonitor:

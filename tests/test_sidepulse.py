@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -167,9 +168,8 @@ from sidepulse.settings import (
     CLOSED_LID_AWAKE_AGENTS,
     CLOSED_LID_AWAKE_ALWAYS,
     CLOSED_LID_AWAKE_NEVER,
-    DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_HISTORY_TIMEFRAME_SECONDS,
-    DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
     HISTORY_TIMEFRAME_24H_SECONDS,
     HISTORY_TIMEFRAME_48H_SECONDS,
     LID_ANIMATION_CLOSED,
@@ -1477,7 +1477,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         statuses = status_bar.recent_statuses(
             snapshot,
-            AgentMonitorSettings(recent_session_retention_seconds=48 * 60 * 60),
+            AgentMonitorSettings(session_timeout_seconds=48 * 60 * 60),
         )
 
         self.assertEqual(len(statuses), 10)
@@ -1487,9 +1487,16 @@ class AgentMonitorTests(unittest.TestCase):
 
         shorter = status_bar.recent_statuses(
             snapshot,
-            AgentMonitorSettings(recent_session_retention_seconds=2.5 * 60 * 60),
+            AgentMonitorSettings(session_timeout_seconds=2.5 * 60 * 60),
         )
         self.assertEqual([status.session_id for status in shorter], ["done-1", "done-2"])
+
+        # A Done row can still affect LEDs within its 20-minute window.
+        recent_done = replace(stale_done[0], updated_at=now - timedelta(minutes=15), stale=False)
+        recent_snapshot = replace(snapshot, statuses=(recent_done,), stale_statuses=())
+        self.assertEqual(status_bar.recent_statuses(
+            recent_snapshot, AgentMonitorSettings(session_timeout_seconds=10 * 60),
+        ), [])
 
     def test_codex_session_options_are_codex_specific(self) -> None:
         try:
@@ -2161,8 +2168,9 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertIn("status_history_chart", target.settings_fields)
         self.assertIn("session_terminal", target.settings_fields)
         self.assertIn("custom_terminal_path", target.settings_fields)
-        self.assertIn("recent_session_retention_hours", target.settings_fields)
-        self.assertIn("idle_timeout_minutes", target.settings_fields)
+        self.assertIn("session_timeout_minutes", target.settings_fields)
+        self.assertNotIn("recent_session_retention_hours", target.settings_fields)
+        self.assertNotIn("idle_timeout_minutes", target.settings_fields)
         self.assertIn("sleep_prevention_min_battery_percent", target.settings_fields)
         self.assertIn("status_history_timeframe", target.settings_fields)
         self.assertIn("agent_animation_lid_closed", target.settings_fields)
@@ -2441,14 +2449,14 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(status_bar.nice_history_max([31]), 45.0)
         self.assertEqual(status_bar.nice_history_max([96]), 100.0)
 
-    def test_status_bar_monitor_uses_idle_timeout_setting(self) -> None:
+    def test_status_bar_uses_daemon_monitor(self) -> None:
         try:
             from sidepulse import status_bar
         except SystemExit as exc:
             self.skipTest(str(exc))
 
         from sidepulse.program_presentation import DaemonMonitor
-        fake = SimpleNamespace(settings=AgentMonitorSettings(idle_timeout_seconds=1234))
+        fake = SimpleNamespace(settings=AgentMonitorSettings(session_timeout_seconds=1234))
         monitor = status_bar.StatusBarController.build_monitor(fake)
         self.assertIsInstance(monitor, DaemonMonitor)
         self.assertFalse(hasattr(fake, 'program_state'))
@@ -5596,27 +5604,31 @@ class AgentMonitorTests(unittest.TestCase):
                 self.assertEqual(save_settings(saved), settings_path)
                 self.assertEqual(load_settings(), saved)
 
-    def test_settings_round_trip_agent_list_timing(self) -> None:
+    def test_settings_round_trip_session_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
-            settings = AgentMonitorSettings().with_agent_list_timing(
-                recent_session_retention_seconds=36 * 60 * 60,
-                idle_timeout_seconds=15 * 60,
-            )
+            settings = AgentMonitorSettings().with_session_timeout(15 * 60)
 
             save_settings(settings, settings_path)
-            loaded = load_settings(settings_path)
 
-            self.assertEqual(
-                AgentMonitorSettings().recent_session_retention_seconds,
-                DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
-            )
-            self.assertEqual(
-                AgentMonitorSettings().idle_timeout_seconds,
-                DEFAULT_IDLE_TIMEOUT_SECONDS,
-            )
-            self.assertEqual(loaded.recent_session_retention_seconds, 36 * 60 * 60)
-            self.assertEqual(loaded.idle_timeout_seconds, 15 * 60)
+            self.assertEqual(load_settings(settings_path).session_timeout_seconds, 15 * 60)
+            self.assertEqual(json.loads(settings_path.read_text())["agent_list"],
+                             {"session_timeout_seconds": 15 * 60})
+
+    def test_settings_migrate_legacy_session_timeouts(self) -> None:
+        cases = (
+            ({"agent_list": {"recent_session_retention_seconds": 7200}}, 7200),
+            ({"idle_timeout_seconds": 1800}, 1800),
+            ({"agent_list": {"recent_session_retention_seconds": 7200,
+                             "idle_timeout_seconds": 1800}}, 1800),
+            ({"agent_list": {"idle_timeout_seconds": 1800, "session_timeout_seconds": 0}}, 0),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            for settings, expected in cases:
+                with self.subTest(settings=settings):
+                    settings_path.write_text(json.dumps(settings))
+                    self.assertEqual(load_settings(settings_path).session_timeout_seconds, expected)
 
     def test_settings_round_trip_agent_animations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5928,10 +5940,9 @@ class AgentMonitorTests(unittest.TestCase):
             loaded = load_settings(settings_path)
 
             self.assertEqual(
-                loaded.recent_session_retention_seconds,
-                DEFAULT_RECENT_SESSION_RETENTION_SECONDS,
+                loaded.session_timeout_seconds,
+                DEFAULT_SESSION_TIMEOUT_SECONDS,
             )
-            self.assertEqual(loaded.idle_timeout_seconds, DEFAULT_IDLE_TIMEOUT_SECONDS)
 
     def test_default_sources_respect_transcript_settings(self) -> None:
         settings = AgentMonitorSettings(

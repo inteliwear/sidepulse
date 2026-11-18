@@ -280,7 +280,7 @@ def test_relay_forwards_explicit_state_independent_of_hook_visibility(runtime):
     assert monitor.snapshot().aggregate.mode == AgentMode.WORKING
     config = SimpleNamespace(server='https://example.com', receiver_channel=None, outbound_channel=None)
     phone = SimpleNamespace(status_protocol=2, link_id='phone', platform='android', server=config.server, token='test')
-    with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings(idle_timeout_seconds=10)), patch('sidepulse.links.load_phone_links', return_value=[phone]), patch('sidepulse.program_transport.publish_update') as send:
+    with patch('sidepulse.relay.load_relay_config', return_value=config), patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings(session_timeout_seconds=10)), patch('sidepulse.links.load_phone_links', return_value=[phone]), patch('sidepulse.program_transport.publish_update') as send:
         relay = ProgramRelay(store)
         relay.sync()
         assert send.call_count == 0 # Enabling forwarding never replays the earlier hook.
