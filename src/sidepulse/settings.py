@@ -307,6 +307,7 @@ class AgentMonitorSettings:
     devices: tuple[DeviceDisplaySetting, ...] = ()
     sleep_prevention_policy: str = SLEEP_PREVENTION_AGENTS
     virtual_status_device_enabled: bool = False
+    virtual_status_device_primary_screen: bool = False
     closed_lid_system_override_enabled: bool = False
     lid_closed_animation: LedAnimationSetting = field(
         default_factory=lambda: default_lid_animation(LID_ANIMATION_CLOSED)
@@ -817,6 +818,7 @@ class AgentMonitorSettings:
             "devices": [device.to_dict() for device in self.devices],
             "sleep_prevention_policy": self.sleep_prevention_policy,
             "virtual_status_device_enabled": self.virtual_status_device_enabled,
+            "virtual_status_device_primary_screen": self.virtual_status_device_primary_screen,
             "closed_lid_system_override_enabled": self.closed_lid_system_override_enabled,
             "lid_closed_animation": self.lid_closed_animation.to_dict(),
             "lid_open_animation": self.lid_open_animation.to_dict(),
@@ -973,6 +975,9 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         sleep_prevention_policy=_sleep_prevention_policy_from_settings(data),
         virtual_status_device_enabled=_bool_setting(
             data.get("virtual_status_device_enabled"), False
+        ),
+        virtual_status_device_primary_screen=_bool_setting(
+            data.get("virtual_status_device_primary_screen"), False
         ),
         closed_lid_system_override_enabled=_bool_setting(
             data.get("closed_lid_system_override_enabled"),
