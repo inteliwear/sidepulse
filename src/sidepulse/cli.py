@@ -985,6 +985,7 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     if str(service_result.path):
         print(f"  config: {service_result.path}")
 
+    print("T3 Code: provider logs are monitored automatically by the background service")
     herdr_result = 0
     if not args.no_agent_monitor and "herdr" in providers:
         herdr_result = configure_herdr(args)
@@ -1093,8 +1094,17 @@ def add_status_args(parser: argparse.ArgumentParser) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from .program_transport import daemon_command
+    from .t3code import monitoring_status, monitoring_status_label
+
     configs = detect_provider_configs()
-    payload = {"providers": [config.to_dict() for config in configs]}
+    try:
+        t3_status = daemon_command({"type": "get_state"}).get("runtime", {}).get("t3code")
+    except (OSError, ValueError):
+        t3_status = None
+    if t3_status is None:
+        t3_status = monitoring_status()
+    payload = {"providers": [config.to_dict() for config in configs], "t3code": t3_status}
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -1105,6 +1115,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  hooks enabled: {config.hooks_enabled}")
         print(f"  events: {', '.join(config.hook_events) if config.hook_events else '-'}")
         print(f"  logs: {', '.join(str(path) for path in config.log_paths) if config.log_paths else '-'}")
+    print(f"T3 Code: {monitoring_status_label(t3_status)}")
+    print(f"  logs: {t3_status['log_directory']} ({'found' if t3_status['log_directory_exists'] else 'missing'})")
+    print(f"  thread links: {'available' if t3_status['thread_links_available'] else 'waiting for environment ID'}")
     return 0
 
 

@@ -333,6 +333,7 @@ print(settings)
             '[x] Junie',
             '[x] OpenCode',
             '[x] Herdr',
+            'T3 Code (automatic)',
             '> Install',
         ])
         for component in (

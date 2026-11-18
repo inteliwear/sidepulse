@@ -169,6 +169,7 @@ from .sd_eject_guard_launch import (
 from .session_actions import (
     SESSION_OPEN_APP,
     SESSION_OPEN_JETBRAINS,
+    SESSION_OPEN_T3,
     SESSION_OPEN_TERMINAL,
     SESSION_OPEN_VSCODE,
     SessionOpenTarget,
@@ -391,7 +392,7 @@ SIDEPULSE_NOTCH_FEATURE_ENABLED = True
 STATUS_BAR_MAX_LINES_PER_SOURCE = 500
 SETTINGS_WINDOW_WIDTH = 680
 SETTINGS_WINDOW_HEIGHT = 560
-SETTINGS_AGENTS_WINDOW_HEIGHT = SETTINGS_WINDOW_HEIGHT + 26
+SETTINGS_AGENTS_WINDOW_HEIGHT = SETTINGS_WINDOW_HEIGHT + 80
 SETTINGS_ANIMATIONS_WINDOW_WIDTH = 720
 SETTINGS_ANIMATIONS_WINDOW_HEIGHT = 500
 SETTINGS_TAB_Y = 44
@@ -612,6 +613,7 @@ class StatusBarController(NSObject):
         except Exception as exc:
             log_status_bar(f"refresh error: {exc}")
             self.set_status(STATE_ASK)
+            self.refresh_t3_monitoring({})
             battery_snapshot = self.read_battery_snapshot()
             self.sync_leds(AgentMode.BLOCKED_ERROR, battery_snapshot, LED_DISPLAY_AGENT)
             self.status_item.setMenu_(build_error_menu(exc, self))
@@ -626,6 +628,7 @@ class StatusBarController(NSObject):
 
         self.daemon_unavailable_since = time.monotonic()
         self.last_snapshot = snapshot
+        self.refresh_t3_monitoring()
         battery_snapshot = self.read_battery_snapshot()
         state = state_for_mode(snapshot.aggregate.mode)
         self.observe_connected_devices()
@@ -801,18 +804,19 @@ class StatusBarController(NSObject):
         action = payload.get("action")
         if not isinstance(provider, str) or not isinstance(action, str):
             return
+        label = "T3 Code" if provider == "t3code" else provider.title()
         try:
             self.settings = self.settings.with_provider_session_open_action(
                 provider, None if action == "automatic" else action
             )
             save_settings(self.settings)
         except Exception as exc:
-            self.set_settings_message(f"Could not save {provider.title()} opener: {exc}")
+            self.set_settings_message(f"Could not save {label} opener: {exc}")
             self.settings = load_settings()
             self.refresh_settings_window()
             return
         self.set_settings_message(
-            f"{provider.title()} sessions: "
+            f"{label} sessions: "
             f"{provider_open_action_label(provider, action, self.settings)}."
         )
 
@@ -1465,6 +1469,32 @@ class StatusBarController(NSObject):
         eject_uninstall = self.setup_buttons.get("eject_guard_uninstall")
         if eject_uninstall is not None:
             eject_uninstall.setEnabled_(eject_installed)
+        self.refresh_t3_monitoring()
+
+    def refresh_t3_monitoring(self, runtime=None) -> None:
+        setup_status = self.setup_fields.get("t3code_status")
+        agents_status = self.settings_fields.get("t3code_status")
+        detail_status = self.settings_fields.get("t3code_diagnostics_status")
+        if all(field is None for field in (setup_status, agents_status, detail_status)):
+            return
+
+        from .t3code import monitoring_status, monitoring_status_label
+
+        runtime = getattr(self.monitor, "runtime", {}) if runtime is None else runtime
+        status = runtime.get("t3code")
+        if status is None:
+            status = monitoring_status()
+        label = monitoring_status_label(status)
+        set_field_value(setup_status, label)
+        set_field_value(agents_status, label)
+        set_field_value(detail_status, label)
+        log_path = self.settings_fields.get("t3code_log_directory")
+        if log_path is not None:
+            directory = status["log_directory"]
+            set_field_value(log_path, f"Provider logs: {directory}")
+            log_path.setToolTip_(directory)
+        links = "available" if status["thread_links_available"] else "waiting for environment ID"
+        set_field_value(self.settings_fields.get("t3code_links"), f"Thread links: {links}")
 
     def set_setup_checkbox(self, key: str, checked: bool, *, enabled: bool) -> None:
         button = self.setup_buttons.get(key)
@@ -1576,6 +1606,7 @@ class StatusBarController(NSObject):
         cursor = detect_cursor_config()
         junie = detect_junie_config()
         opencode = detect_opencode_config()
+        self.refresh_t3_monitoring()
         set_field_value(
             self.settings_fields.get("codex_hook_status"),
             hook_status_text(codex),
@@ -1653,7 +1684,7 @@ class StatusBarController(NSObject):
                 and self.selected_agent_animation_profile_id
                 not in AGENT_ANIMATION_BUILT_IN_PROFILE_IDS
             )
-        for provider in ("codex", "claude", "grok", "junie"):
+        for provider in ("codex", "claude", "grok", "junie", "t3code"):
             popup = self.settings_fields.get(f"{provider}_session_opener")
             if popup is not None:
                 refresh_provider_opener_popup(
@@ -2201,9 +2232,10 @@ class StatusBarController(NSObject):
         provider = status.provider.lower()
         terminal_lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
         open_origin = session_open_origin(status)
+        requested_action = action or self.settings.session_open_action(provider, open_origin)
         t3_session = is_t3_origin(open_origin)
         should_focus_terminal = (
-            action == SESSION_OPEN_TERMINAL if t3_session
+            requested_action == SESSION_OPEN_TERMINAL if t3_session
             else action in {None, SESSION_OPEN_TERMINAL}
         )
         if terminal_lookup and should_focus_terminal:
@@ -2214,7 +2246,6 @@ class StatusBarController(NSObject):
                         f"{provider_label(provider)} is running, but its terminal tab could not be selected."
                     )
                 return
-        requested_action = action or self.settings.session_open_action(provider, open_origin)
         target = session_open_target(status, requested_action) if requested_action else None
         if target is None:
             default = default_session_open_target(status, skip_action=requested_action)
@@ -3264,7 +3295,7 @@ def build_brightness_slider_item(
 
 def build_setup_window(target: StatusBarController) -> NSWindow:
     width = 620
-    height = 382
+    height = 412
     style = (
         NSWindowStyleMaskTitled
         | NSWindowStyleMaskClosable
@@ -3281,53 +3312,55 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
     window.center()
     content = window.contentView()
 
-    add_label(content, "SidePulse", 24, 334, 180, 28)
-    add_label(content, "Finish setup for this Mac.", 24, 306, 340, 22)
+    add_label(content, "SidePulse", 24, 364, 180, 28)
+    add_label(content, "Finish setup for this Mac.", 24, 336, 340, 22)
 
     launch = add_checkbox(
         content,
         "Run at Login",
         32,
-        258,
+        288,
         190,
         24,
         target,
         "",
     )
-    add_label(content, "Start the menu-bar app automatically.", 56, 236, 300, 20)
-    launch_status = add_label(content, "", 380, 258, 140, 22)
+    add_label(content, "Start the menu-bar app automatically.", 56, 266, 300, 20)
+    launch_status = add_label(content, "", 380, 288, 140, 22)
 
     eject_guard = add_checkbox(
         content,
         SD_EJECT_GUARD_DISPLAY_NAME,
         32,
-        198,
+        228,
         300,
         24,
         target,
         "",
     )
-    add_label(content, "Keep SidePulse Pro/SidePulse Dot available after sleep.", 56, 176, 390, 20)
-    eject_status = add_label(content, "", 398, 198, 88, 22)
-    eject_uninstall = add_button(content, "Uninstall", 498, 194, 92, 28, target, "uninstallSdEjectGuard:")
+    add_label(content, "Keep SidePulse Pro/SidePulse Dot available after sleep.", 56, 206, 390, 20)
+    eject_status = add_label(content, "", 398, 228, 88, 22)
+    eject_uninstall = add_button(content, "Uninstall", 498, 224, 92, 28, target, "uninstallSdEjectGuard:")
 
     sleep_helper = add_checkbox(
         content,
         "Closed-Lid Sleep Prevention",
         32,
-        138,
+        168,
         260,
         24,
         target,
         "",
     )
-    add_label(content, "Open a one-time administrator setup in Terminal.", 56, 116, 360, 20)
-    sleep_status = add_label(content, "", 398, 138, 190, 22)
+    add_label(content, "Open a one-time administrator setup in Terminal.", 56, 146, 360, 20)
+    sleep_status = add_label(content, "", 398, 168, 190, 22)
 
-    herdr = add_checkbox(content, "Herdr", 32, 82, 260, 24, target, "")
-    add_label(content, "Show Herdr agent activity in SidePulse.", 56, 60, 320, 20)
-    herdr_status = add_label(content, "", 398, 82, 190, 22)
+    herdr = add_checkbox(content, "Herdr", 32, 112, 260, 24, target, "")
+    add_label(content, "Show Herdr agent activity in SidePulse.", 56, 90, 320, 20)
+    herdr_status = add_label(content, "", 398, 112, 190, 22)
 
+    add_label(content, "T3 Code", 32, 58, 110, 22)
+    t3code_status = add_label(content, "", 211, 58, 379, 22)
     message = add_label(content, "", 24, 36, width - 48, 20)
 
     add_button(content, "Skip", 392, 8, 84, 28, target, "skipFirstLaunchSetup:")
@@ -3338,6 +3371,7 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "eject_status": eject_status,
         "sleep_status": sleep_status,
         "herdr_status": herdr_status,
+        "t3code_status": t3code_status,
         "message": message,
     }
     target.setup_buttons = {
@@ -4127,7 +4161,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     secondary_action_x = 500
     value_width = primary_action_x - value_x - 5
 
-    add_label(agents_tab, "Agent Hooks", section_x, 450, 200, 24)
+    add_label(agents_tab, "Agent Integrations", section_x, 504, 240, 24)
 
     def add_hook_row(
         title: str,
@@ -4160,61 +4194,69 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         return status
 
     codex_status = add_hook_row(
-        "Codex", 416, "installCodexHooks:", "uninstallCodexHooks:"
+        "Codex", 470, "installCodexHooks:", "uninstallCodexHooks:"
     )
     claude_status = add_hook_row(
-        "Claude", 390, "installClaudeHooks:", "uninstallClaudeHooks:"
+        "Claude", 444, "installClaudeHooks:", "uninstallClaudeHooks:"
     )
     grok_status = add_hook_row(
-        "Grok", 364, "installGrokHooks:", "uninstallGrokHooks:"
+        "Grok", 418, "installGrokHooks:", "uninstallGrokHooks:"
     )
     cursor_status = add_hook_row(
-        "Cursor", 338, "installCursorHooks:", "uninstallCursorHooks:"
+        "Cursor", 392, "installCursorHooks:", "uninstallCursorHooks:"
     )
     junie_status = add_hook_row(
-        "Junie", 312, "installJunieHooks:", "uninstallJunieHooks:"
+        "Junie", 366, "installJunieHooks:", "uninstallJunieHooks:"
     )
 
     opencode_status = add_hook_row(
-        "OpenCode", 286, "installOpenCodePlugin:", "uninstallOpenCodePlugin:"
+        "OpenCode", 340, "installOpenCodePlugin:", "uninstallOpenCodePlugin:"
     )
 
     herdr_status = add_hook_row(
-        "Herdr", 260, "installHerdrPlugin:", "uninstallHerdrPlugin:"
+        "Herdr", 314, "installHerdrPlugin:", "uninstallHerdrPlugin:"
     )
 
-    add_separator(agents_tab, section_x, 246, tab_width - 48)
-    add_label(agents_tab, "Session Opening", section_x, 220, 240, 24)
-    add_label(agents_tab, "Terminal App", primary_action_x, 220, 200, 24)
+    add_label(agents_tab, "T3 Code", label_x, 288, 90, 22)
+    t3code_status = add_label(agents_tab, "", value_x, 288, tab_width - value_x - 24, 22)
 
-    add_label(agents_tab, "Codex", label_x, 184, 90, 22)
+    add_separator(agents_tab, section_x, 274, tab_width - 48)
+    add_label(agents_tab, "Session Opening", section_x, 248, 240, 24)
+    add_label(agents_tab, "Terminal App", primary_action_x, 248, 200, 24)
+
+    add_label(agents_tab, "Codex", label_x, 212, 90, 22)
     codex_opener = add_provider_opener_popup(
-        agents_tab, "codex", value_x, 182, target, width=value_width
+        agents_tab, "codex", value_x, 210, target, width=value_width
     )
-    add_label(agents_tab, "Claude", label_x, 156, 90, 22)
+    add_label(agents_tab, "Claude", label_x, 184, 90, 22)
     claude_opener = add_provider_opener_popup(
-        agents_tab, "claude", value_x, 154, target, width=value_width
+        agents_tab, "claude", value_x, 182, target, width=value_width
     )
-    add_label(agents_tab, "Grok", label_x, 128, 90, 22)
+    add_label(agents_tab, "Grok", label_x, 156, 90, 22)
     grok_opener = add_provider_opener_popup(
-        agents_tab, "grok", value_x, 126, target, width=value_width
+        agents_tab, "grok", value_x, 154, target, width=value_width
     )
-    add_label(agents_tab, "Junie", label_x, 100, 90, 22)
+    add_label(agents_tab, "Junie", label_x, 128, 90, 22)
     junie_opener = add_provider_opener_popup(
-        agents_tab, "junie", value_x, 98, target, width=value_width
+        agents_tab, "junie", value_x, 126, target, width=value_width
+    )
+
+    add_label(agents_tab, "T3 Code", label_x, 100, 90, 22)
+    t3code_opener = add_provider_opener_popup(
+        agents_tab, "t3code", value_x, 98, target, width=value_width
     )
 
     terminal_popup = add_terminal_popup(
-        agents_tab, primary_action_x, 182, target, width=200
+        agents_tab, primary_action_x, 210, target, width=200
     )
     custom_terminal_path = add_label(
-        agents_tab, "", primary_action_x, 150, 200, 22
+        agents_tab, "", primary_action_x, 178, 200, 22
     )
     add_button(
         agents_tab,
         "Choose...",
         secondary_action_x,
-        114,
+        142,
         100,
         28,
         target,
@@ -4443,6 +4485,11 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_separator(diagnostics_tab, 24, 280, tab_width - 48)
     add_label(diagnostics_tab, "Settings File", 24, 246, 240, 24)
     settings_path = add_label(diagnostics_tab, "", 32, 208, 588, 22)
+    add_separator(diagnostics_tab, 24, 190, tab_width - 48)
+    add_label(diagnostics_tab, "T3 Code", 24, 156, 240, 24)
+    t3code_diagnostics_status = add_label(diagnostics_tab, "", 32, 124, 588, 22)
+    t3code_log_directory = add_label(diagnostics_tab, "", 32, 96, 588, 22)
+    t3code_links = add_label(diagnostics_tab, "", 32, 68, 588, 22)
 
     message = add_label(content, "", 24, 12, width - 48, 22)
 
@@ -4455,11 +4502,16 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "junie_hook_status": junie_status,
         "opencode_hook_status": opencode_status,
         "herdr_hook_status": herdr_status,
+        "t3code_status": t3code_status,
+        "t3code_diagnostics_status": t3code_diagnostics_status,
+        "t3code_log_directory": t3code_log_directory,
+        "t3code_links": t3code_links,
         "debug_log_status": debug_log_status,
         "codex_session_opener": codex_opener,
         "claude_session_opener": claude_opener,
         "grok_session_opener": grok_opener,
         "junie_session_opener": junie_opener,
+        "t3code_session_opener": t3code_opener,
         "session_terminal": terminal_popup,
         "custom_terminal_path": custom_terminal_path,
         "session_timeout_minutes": session_timeout,
@@ -4942,6 +4994,8 @@ def add_history_timeframe_popup(parent, x: int, y: int, target):
 
 
 def provider_open_actions(provider: str) -> tuple[str, ...]:
+    if provider == "t3code":
+        return (SESSION_OPEN_T3, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP)
     if provider == "junie":
         return ("automatic", SESSION_OPEN_TERMINAL, SESSION_OPEN_JETBRAINS)
     if provider == "claude":
@@ -4958,6 +5012,10 @@ def default_provider_open_action(provider: str) -> str:
 def provider_open_action_label(provider: str, action: str, settings=None) -> str:
     if action == "automatic":
         return "Automatic"
+    if action == SESSION_OPEN_T3:
+        return "Open in T3 Code"
+    if provider == "t3code" and action == SESSION_OPEN_APP:
+        return "Open Provider App"
     if action == SESSION_OPEN_VSCODE:
         return "VS Code"
     if action == SESSION_OPEN_TERMINAL:

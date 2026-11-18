@@ -12,6 +12,20 @@ def clean_text(value: str, limit: int) -> str:
     return value.encode('utf-8', errors='replace')[:limit].decode('utf-8', errors='ignore')
 
 
+def provider_report(provider: str, scope: str, status: dict, context: dict) -> dict:
+    """Encode provider status and presentation metadata for the shared daemon."""
+    status = {**status, 'app': 'claude-code' if provider == 'claude' else provider}
+    context = {'provider': provider, 'source_name': socket.gethostname(), **context}
+    if context.get('title'):
+        status['title'] = clean_text(context['title'], 192)
+    context = {key: value for key, value in context.items() if value is not None}
+    for field in ('origin', 'display_name', 'tool_name', 'source_name', 'title'):
+        if field in context:
+            context[field] = clean_text(context[field], CONTEXT_LIMITS[field])
+    return {'v': 1, 'type': 'program_status', 'scope': scope,
+            'status': validate_status(status), 'context': context}
+
+
 def hook_report(provider: str, line: dict) -> dict | None:
     from .collector import (
         StatusMetadata,
@@ -44,7 +58,7 @@ def hook_report(provider: str, line: dict) -> dict | None:
               'blocked_error': 'error', 'completed': 'done'}
     if mode not in states:
         return None
-    status = {'state': states[mode], 'app': 'claude-code' if provider == 'claude' else provider}
+    status = {'state': states[mode]}
     if record.agent_id:
         status['id'] = 'agents/' + hashlib.sha256(record.agent_id.encode()).hexdigest()[:32]
     if record.event_name == 'PermissionRequest':
@@ -53,24 +67,16 @@ def hook_report(provider: str, line: dict) -> dict | None:
         status['kind'] = 'permission' if 'permission' in record.event_name.lower() else 'question'
     if interpreted.message:
         status['msg'] = clean_text(interpreted.message, MAX_OUTBOUND_MESSAGE_BYTES)
-    if title:
-        status['title'] = clean_text(title, 192)
     # Presentation metadata travels as JSON context outside the OSC status fields.
-    context = {key: value for key, value in {
-        'provider': provider,
+    context = {
         'session_id': record.session_id, 'agent_id': record.agent_id,
         'cwd': interpreted.cwd, 'origin': interpreted.origin, 't3_link': record.t3_link,
         'display_name': interpreted.display_name, 'tool_name': record.tool_name,
         'mode': interpreted.mode.value, 'event_name': record.event_name,
-        'source_name': socket.gethostname(), 'title': title,
-        'title_source': 'session' if session_title else 'prompt',
-    }.items() if value is not None}
-    # Clean display text at the producer boundary. Identity and session-opening
-    # paths stay exact and are still checked strictly by the receiver.
-    for field in ('origin', 'display_name', 'tool_name', 'source_name', 'title'):
-        if field in context:
-            context[field] = clean_text(context[field], CONTEXT_LIMITS[field])
-    result = {**base, 'status': validate_status(status), 'context': context}
+        'title': title, 'title_source': 'session' if session_title else 'prompt',
+    }
+    result = provider_report(provider, scope, status, context)
+    result['request_id'] = base['request_id']
     from .herdr import current_pane_scope
     if pane_scope := current_pane_scope():
         result.update(scope=pane_scope, _hook_scope=scope)

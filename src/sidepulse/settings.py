@@ -478,10 +478,9 @@ class AgentMonitorSettings:
             )
             if action in SESSION_OPEN_CHOICES:
                 return action
-            # Provider-wide openers predate T3 Code and would send its sessions
-            # to another surface; only an origin-specific choice overrides T3.
             if is_t3_origin(origin):
-                return None
+                action = self.session_open_preferences.get("t3code")
+                return action if action in SESSION_OPEN_CHOICES else None
 
         if provider_key == "grok":
             action = self.grok_session_open_action

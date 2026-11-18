@@ -227,3 +227,90 @@ def test_modern_claude_log_counts_one_live_hook_session(source):
     final, = t3.state.statuses()
     assert final.agent_id == row.agent_id
     assert final.mode == AgentMode.COMPLETED
+
+
+def test_t3_codex_and_hook_updates_use_the_same_phone_and_bridge_states(source):
+    t3, log = source
+    hooks = ProgramState(publisher="hook-sidepulse")
+    now = time.time()
+    add(log, [line(now - 8, "thread.started", {"providerThreadId": "native"}, provider="codex")])
+
+    transitions = (
+        ("turn.started", "UserPromptSubmit"),
+        ("request.opened", "PermissionRequest"),
+        ("turn.completed", "Stop"),
+    )
+    for offset, (event, hook_event) in enumerate(transitions):
+        add(log, [line(now - 7 + offset, event, provider="codex")])
+        t3.poll(now=now)
+        hooks.submit(hook_report("codex", {"hook_event_name": hook_event, "session_id": "native"}))
+        _, t3_update = t3.state.pending_events("test")[-1]
+        _, hook_update = hooks.pending_events("test")[-1]
+        assert t3_update["scope"] == hook_update["scope"]
+        assert t3.state.statuses()[0].mode == hooks.statuses()[0].mode
+        for encode in (bridge_update, phone_update):
+            output = encode(t3_update)
+            expected = encode(hook_update)
+            # Hook permission requests may include a tool invocation ID.
+            assert {k: v for k, v in output["status"].items() if k != "id"} == {
+                k: v for k, v in expected["status"].items() if k != "id"
+            }
+            assert output.get("context") == expected.get("context")
+
+
+def test_claude_question_and_title_are_reported_from_native_logs(source):
+    t3, log = source
+    now = time.time()
+    add(log, [
+        native_line(now - 5, "claudeAgent", "incoming", {
+            "type": "system", "subtype": "session_title_changed", "title": "T3 thread",
+            "session_id": "claude-native",
+        }),
+        native_line(now - 4, "claudeAgent", "incoming", {
+            "type": "assistant", "session_id": "claude-native",
+            "message": {"content": [{"type": "tool_use", "id": "choice", "name": "AskUserQuestion",
+                                     "input": {"questions": ["private-question"]}}]},
+        }),
+    ])
+    t3.poll(now=now)
+    row, = t3.state.statuses()
+    assert row.mode == AgentMode.WAITING_FOR_INPUT
+    notification = phone_update(t3.state.pending_events("test")[-1][1])
+    assert notification["status"] == {"app": "claude-code", "state": "blocked",
+                                      "kind": "question", "title": "T3 thread"}
+    assert "private-question" not in json.dumps(notification)
+
+    add(log, [native_line(now - 2, "claudeAgent", "incoming", {
+        "type": "user", "session_id": "claude-native", "tool_use_result": "private-answer",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "choice"}]},
+    })])
+    t3.poll(now=now)
+    assert t3.state.statuses()[0].mode == AgentMode.WORKING
+
+
+def test_doctor_shows_t3_service_readiness_and_uses_local_fallback(source, monkeypatch, capsys):
+    from argparse import Namespace
+    from sidepulse.cli import cmd_doctor
+    from sidepulse.program_status import StatusError
+
+    t3, log = source
+    now = time.time()
+    assert t3.diagnostics()["files_read"] == 0
+    add(log, [line(now - 1, "turn.started")])
+    t3.poll(now=now)
+    monkeypatch.setattr("sidepulse.cli.detect_provider_configs", lambda: [])
+    monkeypatch.setattr("sidepulse.program_transport.daemon_command",
+                        lambda command: {"runtime": {"t3code": t3.diagnostics()}})
+    cmd_doctor(Namespace(json=True))
+    live = json.loads(capsys.readouterr().out)["t3code"]
+    assert live == {"log_directory": str(t3.root), "log_directory_exists": True,
+                    "files_read": 1, "thread_links_available": True}
+
+    def unavailable(command):
+        raise StatusError("service offline")
+
+    monkeypatch.setattr("sidepulse.program_transport.daemon_command", unavailable)
+    monkeypatch.setenv("T3CODE_HOME", str(t3.home))
+    cmd_doctor(Namespace(json=True))
+    offline = json.loads(capsys.readouterr().out)["t3code"]
+    assert offline == {**live, "files_read": None}

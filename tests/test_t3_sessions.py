@@ -162,3 +162,13 @@ def test_provider_wide_preference_does_not_override_t3() -> None:
 def test_t3_action_rejects_other_url_schemes_and_routes() -> None:
     for link in ("file:///tmp/app", "t3code://settings/one/two", "t3code://threads/one/two?extra=1"):
         assert session_open_target(status(t3_link=link), SESSION_OPEN_T3) is None
+
+
+def test_t3_default_opener_applies_across_providers_with_per_origin_overrides():
+    settings = AgentMonitorSettings(session_open_preferences={"claude": SESSION_OPEN_APP})
+    settings = settings.with_provider_session_open_action("t3code", SESSION_OPEN_TERMINAL)
+    assert settings.session_open_action("claude", "Claude in T3 Code") == SESSION_OPEN_TERMINAL
+    assert settings.session_open_action("codex", "Codex in T3 Code") == SESSION_OPEN_TERMINAL
+    assert settings.session_open_action("claude", "Claude Code CLI") == SESSION_OPEN_APP
+    settings = settings.with_session_open_action("claude", SESSION_OPEN_T3, "Claude in T3 Code")
+    assert settings.session_open_action("claude", "Claude in T3 Code") == SESSION_OPEN_T3

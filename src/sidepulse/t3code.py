@@ -1,4 +1,4 @@
-"""Read recent canonical T3 Code provider events and report their local status."""
+"""Read recent T3 Code provider events and report status through the SidePulse daemon."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ from typing import Iterator, Mapping
 
 from .models import provider_label
 from .origin import t3_data_dir, t3_environment_id, t3_link_for_thread
-from .program_adapter import clean_text
+from .program_adapter import clean_text, provider_report
 from .program_status import MAX_SESSIONS, ProgramState, StatusError, hook_scope
 
 MAX_FILE_AGE = 24 * 60 * 60
@@ -55,6 +55,7 @@ class ProviderEvent:
     tool: str | None
     request_id: str | None
     native: bool = False
+    title: str | None = None
 
 
 def parse_event(line: bytes, thread_from_file: str | None = None) -> ProviderEvent | None:
@@ -155,6 +156,9 @@ def codex_native_event(packet: dict, direction: object, thread: str, date: int) 
     native_thread = object_dict(params.get("thread"))
     native_id = string(params.get("threadId")) or string(native_thread.get("id"))
     cwd = clean_cwd(native_thread.get("cwd")) or clean_cwd(params.get("cwd"))
+    title = string(native_thread.get("name"))
+    if method == "thread/name/updated":
+        title = string(params.get("threadName"))
     name, state, kind, tool, wait = "thread.configured", None, None, None, None
     if direction == "outgoing":
         if method == "turn/start":
@@ -191,8 +195,9 @@ def codex_native_event(packet: dict, direction: object, thread: str, date: int) 
             name, state = "runtime.error", "error"
         elif method != "thread/started" and native_id is None:
             return None
-    if state or native_id or cwd:
-        return ProviderEvent("codex", thread, date, name, native_id, cwd, kind, state, tool, wait, native=True)
+    if state or native_id or cwd or title:
+        return ProviderEvent("codex", thread, date, name, native_id, cwd, kind, state, tool, wait,
+                             native=True, title=title)
     return None
 
 
@@ -200,13 +205,18 @@ def claude_native_event(packet: dict, direction: object, thread: str, date: int)
     message_type = packet.get("type")
     native_id = string(packet.get("session_id"))
     cwd = None
-    name, state, tool = "thread.configured", None, None
+    title = None
+    name, state, tool, kind, request_id = "thread.configured", None, None, None, None
     if direction == "outgoing" and message_type == "query.open":
         cwd = clean_cwd(object_dict(packet.get("options")).get("cwd"))
     elif direction == "outgoing" and message_type == "prompt.offer":
         name, state = "turn.started", "working"
-    elif direction == "incoming" and message_type == "system" and packet.get("subtype") == "init":
-        cwd = clean_cwd(packet.get("cwd"))
+    elif direction == "incoming" and message_type == "system":
+        subtype = packet.get("subtype")
+        if subtype == "init":
+            cwd = clean_cwd(packet.get("cwd"))
+        elif subtype == "session_title_changed":
+            title = string(packet.get("title"))
     elif direction == "incoming" and message_type == "assistant":
         content = object_dict(packet.get("message")).get("content")
         for block in content if isinstance(content, list) else ():
@@ -214,14 +224,24 @@ def claude_native_event(packet: dict, direction: object, thread: str, date: int)
             if block.get("type") == "tool_use":
                 tool = string(block.get("name")) or "Tool"
                 name, state = "item.started", "working"
+                if tool == "AskUserQuestion":
+                    name, state, kind = "user-input.requested", "blocked", "question"
+                    request_id = string(block.get("id"))
                 break
     elif direction == "incoming" and message_type == "user" and "tool_use_result" in packet:
+        content = object_dict(packet.get("message")).get("content")
+        for block in content if isinstance(content, list) else ():
+            block = object_dict(block)
+            if block.get("type") == "tool_result":
+                request_id = string(block.get("tool_use_id"))
+                break
         name, state = "item.completed", "working"
     elif direction == "incoming" and message_type == "result":
         name = "turn.completed"
         state = "error" if packet.get("is_error") is True else "done"
-    if state or native_id or cwd:
-        return ProviderEvent("claude", thread, date, name, native_id, cwd, None, state, tool, None, native=True)
+    if state or native_id or cwd or title:
+        return ProviderEvent("claude", thread, date, name, native_id, cwd, kind, state, tool, request_id,
+                             native=True, title=title)
     return None
 
 
@@ -257,11 +277,13 @@ class ThreadStatus:
     event: ProviderEvent | None = None
     session_id: str | None = None
     cwd: str | None = None
+    title: str | None = None
     pending: dict[str, str] = field(default_factory=dict)
 
     def apply(self, event: ProviderEvent) -> None:
         self.session_id = event.native_id or self.session_id
         self.cwd = event.cwd or self.cwd
+        self.title = event.title or self.title
         if event.state is None:
             return
         if event.state in TERMINAL_STATES or event.event == "turn.started":
@@ -272,6 +294,8 @@ class ThreadStatus:
             resolved = self.pending.pop(event.request_id or event.kind, None)
             if event.native and resolved is None:
                 return
+        elif event.provider == "claude" and event.native and event.event == "item.completed":
+            self.pending.pop(event.request_id, None)
         self.event = event
 
     def report(self, environment_id: str | None) -> dict:
@@ -281,14 +305,15 @@ class ThreadStatus:
         scope = hook_scope(event.provider, self.session_id or event.thread)
         origin = f"{provider_label(event.provider)} in T3 Code"
         mode = "tool_running" if event.tool else None
-        context = {"provider": event.provider, "session_id": self.session_id, "cwd": self.cwd,
+        context = {"session_id": self.session_id, "cwd": self.cwd,
                    "origin": origin, "display_name": origin, "event_name": event.event,
                    "tool_name": event.tool if state == "working" else None,
-                   "mode": mode, "t3_link": t3_link_for_thread(environment_id, event.thread)}
-        app = "claude-code" if event.provider == "claude" else event.provider
-        return {"v": 1, "type": "program_status", "scope": scope,
-                "status": {"state": state, "app": app, **({"kind": kind} if kind else {})},
-                "context": {key: value for key, value in context.items() if value is not None}}
+                   "mode": mode, "t3_link": t3_link_for_thread(environment_id, event.thread),
+                   "title": self.title, "title_source": "session" if self.title else None}
+        status = {"state": state}
+        if kind:
+            status["kind"] = kind
+        return provider_report(event.provider, scope, status, context)
 
 
 def read_events(path: Path) -> Iterator[ProviderEvent]:
@@ -307,15 +332,52 @@ def read_events(path: Path) -> Iterator[ProviderEvent]:
             yield event
 
 
+def log_directory(base: Path) -> Path:
+    return base / "userdata" / "logs" / "provider"
+
+
+def monitoring_status(base: Path | None = None, *, files_read: int | None = None) -> dict:
+    base = t3_data_dir(os.environ) if base is None else base
+    root = log_directory(base)
+    try:
+        exists = root.is_dir()
+    except OSError:
+        exists = False
+    return {
+        "log_directory": str(root),
+        "log_directory_exists": exists,
+        "files_read": files_read,
+        "thread_links_available": bool(t3_environment_id({"T3CODE_HOME": str(base)})),
+    }
+
+
+def monitoring_status_label(status: dict) -> str:
+    files_read = status.get("files_read")
+    if files_read is None:
+        return "Automatic · Service status unavailable"
+    if not status.get("log_directory_exists"):
+        return "Automatic · Waiting for provider logs"
+    if not files_read:
+        return "Automatic · Waiting for recent events"
+    return "Automatic · Reading provider logs"
+
+
 class T3CodeSource:
     def __init__(self, state: ProgramState, *, env: Mapping[str, str] | None = None):
         self.state = state
         base = t3_data_dir(os.environ if env is None else env)
-        self.root = base / "userdata" / "logs" / "provider"
+        self.root = log_directory(base)
         self.home = base
         self.files: dict[Path, tuple[tuple[int, int, int], list[ProviderEvent]]] = {}
         self.reported: dict[tuple[str, str], tuple[int, dict]] = {}
         self.environment_id: str | None = None
+
+    def diagnostics(self) -> dict:
+        files = self.files.copy()
+        return monitoring_status(
+            self.home,
+            files_read=sum(any(event.state for event in events) for _, events in files.values()),
+        )
 
     def poll(self, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
@@ -366,6 +428,8 @@ class T3CodeSource:
                 status.session_id = previous[1]["context"].get("session_id")
             if previous and not status.cwd:
                 status.cwd = previous[1]["context"].get("cwd")
+            if previous and not status.title:
+                status.title = previous[1]["context"].get("title")
             report = status.report(self.environment_id)
             if previous and (date < previous[0] or previous == (date, report)):
                 continue

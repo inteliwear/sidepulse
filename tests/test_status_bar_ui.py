@@ -779,6 +779,8 @@ class WindowBuildTests(StatusBarTestCase):
             "junie_hook_status",
             "opencode_hook_status",
             "herdr_hook_status",
+            "t3code_status",
+            "t3code_session_opener",
             "codex_session_opener",
             "claude_session_opener",
             "grok_session_opener",
@@ -792,6 +794,23 @@ class WindowBuildTests(StatusBarTestCase):
             {130.0},
         )
         self.assert_controls_are_wired(window)
+
+    def test_t3_monitoring_status_uses_the_service_on_all_setup_surfaces(self):
+        sb.build_settings_window(self.controller)
+        sb.build_setup_window(self.controller)
+        self.controller.refresh_t3_monitoring({"t3code": {
+            "log_directory": "/service/t3/logs/provider",
+            "log_directory_exists": True,
+            "files_read": 1,
+            "thread_links_available": True,
+        }})
+        expected = "Automatic · Reading provider logs"
+        self.assertEqual(self.controller.setup_fields["t3code_status"].stringValue(), expected)
+        for field in ("t3code_status", "t3code_diagnostics_status"):
+            self.assertEqual(self.controller.settings_fields[field].stringValue(), expected)
+        field = self.controller.settings_fields["t3code_log_directory"]
+        self.assertEqual(field.toolTip(), "/service/t3/logs/provider")
+        self.assertEqual(self.controller.settings_fields["t3code_links"].stringValue(), "Thread links: available")
 
     def test_open_junie_session_in_ide_uses_bundle_identifier_fallback(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")

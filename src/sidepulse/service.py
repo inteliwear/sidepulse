@@ -78,9 +78,12 @@ class SidePulseService:
                 self.sync_receiver(config)
                 try:
                     self.runtime.poll()
-                    self.t3code.poll()
                 except Exception as exc:
                     print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)
+                try:
+                    self.t3code.poll()
+                except OSError as exc:
+                    print(f"sidepulse service: T3 Code log update failed: {exc}", file=sys.stderr)
                 try:
                     self.sync_outputs()
                 except Exception as exc:
@@ -261,7 +264,8 @@ class SidePulseService:
             return {'output_errors': dict(self.output_errors), 'outputs_enabled': self.outputs_enabled,
                     'devices': [{**vars(device), 'root': str(device.root), 'target': str(device.target)} for device in self.runtime.devices],
                     'runtime': {**self.runtime.view, 'keep_awake_enabled': self.keep_awake_enabled,
-                        'battery_preview_until': self.battery_preview_until}}
+                        'battery_preview_until': self.battery_preview_until,
+                        't3code': self.t3code.diagnostics()}}
         with self.output_lock:
             if kind == 'output_control':
                 enabled = command.get('enabled', self.outputs_enabled)

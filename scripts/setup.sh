@@ -121,6 +121,8 @@ draw_checklist() {
         draw_group 'macOS integrations' $MAC_COMPONENTS
     fi
     draw_group 'Agent hooks' $AGENTS
+    printf '%.*s\n' "$menu_width" '      T3 Code (automatic)'
+    menu_lines=$((menu_lines + 1))
     row_count=$((row_count + 1))
     pointer=' '
     row_color=$menu_heading

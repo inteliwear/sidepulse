@@ -888,14 +888,19 @@ provider app, Terminal resume, or Claude Code in VS Code.
 SidePulse reads recent T3 Code provider logs for activity even when the
 underlying agent has no SidePulse hooks installed. Provider hooks and T3 events
 share a session when SidePulse can match the provider's native session ID or
-the T3 thread link. For a custom T3 data directory, set `T3CODE_HOME` in the
-SidePulse service environment.
+the T3 thread link. Agents and Setup show T3 Code's automatic monitoring.
+Use Settings → Diagnostics or `sidepulse doctor` to see the provider log
+directory, whether SidePulse has read recent events, and whether the T3
+environment ID is available. For a custom T3 data directory, set `T3CODE_HOME`
+in the SidePulse service environment.
 
 T3 Code sessions default to **Open in T3 Code** when SidePulse has the thread
 link. A compatible T3 Code desktop app handles the link. When the thread link
 is unavailable, SidePulse offers the underlying provider's available openers.
-Use the session's Open Options row to remember an opener for that provider in
-T3 Code.
+Set the default for T3 Code in Settings → Agents → Session Opening. A choice
+saved from a session's Open Options takes precedence for that provider in
+T3 Code. T3 Code sessions drive the same desktop, LED, and linked-phone status
+updates as hook sessions.
 
 Open a connected device under **Devices** to see its firmware version. The app
 checks published releases for that model in the background and offers
