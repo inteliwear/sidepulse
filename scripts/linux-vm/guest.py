@@ -70,7 +70,7 @@ def seed_migration():
     with codex.open('a') as stream:
         stream.write('\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "printf unrelated-linux-hook >&2"\n')
     settings = default_settings_path(HOME_DIR)
-    save_settings(replace(load_settings(settings), idle_timeout_seconds=321), settings)
+    save_settings(replace(load_settings(settings), session_timeout_seconds=321), settings)
 
 
 class LinuxHarness(common.Harness):
@@ -189,7 +189,7 @@ class LinuxHarness(common.Harness):
             assert before['service_pid'] != after['service_pid'], 'Upgrade did not restart the real service'
         assert json.loads(after['configs']['.claude/settings.json'])['env']['SIDEPULSE_MIGRATION_TEST'] == 'preserve-me'
         from sidepulse.settings import default_settings_path, load_settings
-        assert load_settings(default_settings_path(HOME_DIR)).idle_timeout_seconds == 321
+        assert load_settings(default_settings_path(HOME_DIR)).session_timeout_seconds == 321
         for provider, name in [('claude', '.claude/settings.json'), ('codex', '.codex/config.toml')]:
             assert after['configs'][name].count('printf unrelated-linux-hook >&2') == 1
             assert set(dict(common.EVENTS)) <= set(common.installed_commands(provider, HOME_DIR))

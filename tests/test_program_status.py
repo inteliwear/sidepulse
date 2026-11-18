@@ -3,13 +3,14 @@ import os
 import json
 import socket
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
 from sidepulse.program_status import ProgramState, StatusError
+from sidepulse.settings import AgentMonitorSettings
 from sidepulse.program_transport import ProgramServer, submit_report, submit_status, ProgramRelay, daemon_command
 from sidepulse.program_adapter import hook_report
 from sidepulse.program_presentation import ProgramMonitor, DaemonMonitor
@@ -34,6 +35,45 @@ def test_one_state_per_session_and_clear(store):
     assert [s.mode.value for s in store.statuses()] == ['completed']
     store.submit(report('clear'))
     assert not store.statuses()
+
+
+def test_session_timeout_applies_to_quiet_hooks_and_finished_menu_history(store):
+    working = hook_report('claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 'quiet'})
+    done = hook_report('claude', {'hook_event_name': 'SessionEnd', 'session_id': 'finished'})
+    old = int((datetime.now(timezone.utc) - timedelta(minutes=25)).timestamp() * 1000)
+    store.submit(working, observed_at=old)
+    store.submit(done, observed_at=old)
+    store.submit({**report('working'), 'scope': 'third-party'}, observed_at=old)
+    # Receiving a new update must leave older finished rows available for the menu.
+    store.submit({**report('idle'), 'scope': 'new'})
+    monitor = ProgramMonitor(store)
+
+    with patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings(session_timeout_seconds=1800)):
+        snapshot = monitor.snapshot()
+        assert snapshot.aggregate.active_count == 2
+        assert snapshot.aggregate.mode.value == 'working'
+        assert [row.session_id for row in snapshot.stale_statuses] == ['finished']
+
+    with patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings(session_timeout_seconds=600)):
+        snapshot = monitor.snapshot()
+        assert snapshot.aggregate.active_count == 1
+        assert all(row.session_id != 'quiet' for row in snapshot.statuses)
+        assert not snapshot.stale_statuses
+        store.submit(hook_report('claude', {'hook_event_name': 'UserPromptSubmit', 'session_id': 'quiet'}))
+        assert monitor.snapshot().aggregate.active_count == 2
+
+
+def test_finished_menu_history_does_not_drive_aggregate_after_twenty_minutes(store):
+    now = datetime.now(timezone.utc)
+    monitor = ProgramMonitor(store)
+    with patch('sidepulse.settings.load_settings', return_value=AgentMonitorSettings()):
+        store.submit(report('done'), observed_at=int((now - timedelta(minutes=19)).timestamp() * 1000))
+        assert monitor.snapshot().aggregate.mode.value == 'completed'
+        store.submit(report('clear'))
+        store.submit(report('done'), observed_at=int((now - timedelta(minutes=21)).timestamp() * 1000))
+        snapshot = monitor.snapshot()
+        assert snapshot.aggregate.mode.value == 'idle_ready'
+        assert len(snapshot.stale_statuses) == 1
 
 
 def test_cleared_sessions_do_not_exhaust_live_scope_limit(store):

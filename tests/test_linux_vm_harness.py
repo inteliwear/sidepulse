@@ -100,11 +100,11 @@ def test_migration_seed_updates_the_real_settings_file_and_preserves_other_prefe
     (home / '.claude/settings.json').write_text('{"env":{"KEEP":"yes"}}')
     (home / '.codex/config.toml').write_text('model = "test"\n')
     settings = default_settings_path(home)
-    save_settings(AgentMonitorSettings(idle_timeout_seconds=17, show_menu_bar_icon=False), settings)
+    save_settings(AgentMonitorSettings(session_timeout_seconds=17, show_menu_bar_icon=False), settings)
     monkeypatch.setattr(guest, 'HOME_DIR', home)
     guest.seed_migration()
     actual = load_settings(settings)
-    assert actual.idle_timeout_seconds == 321
+    assert actual.session_timeout_seconds == 321
     assert actual.show_menu_bar_icon is False
     assert json.loads((home / '.claude/settings.json').read_text())['env']['KEEP'] == 'yes'
     assert not (home / '.config/sidepulse/settings.json').exists()
