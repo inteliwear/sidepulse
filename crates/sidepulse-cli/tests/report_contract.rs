@@ -28,8 +28,6 @@ fn report(endpoint: &str, body: &Value) -> std::process::Output {
 fn program_status_reports_drive_the_service_session() {
     #[cfg(unix)]
     let directory = tempfile::tempdir_in("/tmp").unwrap();
-    #[cfg(windows)]
-    let directory = tempfile::tempdir().unwrap();
     let id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
