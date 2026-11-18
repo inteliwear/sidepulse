@@ -12,6 +12,7 @@ import subprocess
 from .program_adapter import clean_text
 from .program_status import CONTEXT_LIMITS, HERDR_EVENT, SEGMENT, StatusError, session_link_identity, text
 from .program_transport import daemon_command, submit_status
+from .providers import ProviderConfig
 
 PLUGIN_ID = 'sidepulse.status'
 PLUGIN_DIR = Path(__file__).with_name('resources') / 'herdr'
@@ -124,35 +125,67 @@ def sync() -> None:
         _reconcile(endpoint)
 
 
-def _cli(executable: str, *args: str) -> str:
-    result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=10)
+def _cli(executable: str, *args: str, env: dict | None = None, timeout: float = 10) -> str:
+    result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=timeout, env=env)
     if result.returncode:
         raise StatusError(result.stderr.strip() or result.stdout.strip() or f'Herdr exited with {result.returncode}')
     return result.stdout
 
 
-def setup(*, uninstall: bool, dry_run: bool) -> int:
+def executable_path(home: Path | None = None) -> str | None:
+    if os.name != 'posix':
+        return None
+    bin_dirs = [str((home or Path.home()) / '.local' / 'bin'), '/opt/homebrew/bin', '/usr/local/bin']
+    path = os.pathsep.join([os.environ.get('PATH', os.defpath), *bin_dirs])
+    return os.getenv('HERDR_BIN_PATH') or shutil.which('herdr', path=path)
+
+
+def _registration(executable: str, *, home: Path | None = None) -> dict | None:
+    env = None if home is None else {
+        **os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config'),
+    }
+    if env is not None:
+        env.pop('HERDR_SOCKET_PATH', None)
+        env.pop('HERDR_SESSION', None)
+    result = json.loads(_cli(executable, 'plugin', 'list', '--plugin', PLUGIN_ID, '--json', env=env, timeout=2))
+    return next((plugin for plugin in result['result']['plugins'] if plugin['plugin_id'] == PLUGIN_ID), None)
+
+
+def detect_config(home: Path | None = None) -> ProviderConfig:
+    executable = executable_path(home)
+    if not executable:
+        return ProviderConfig('herdr', PLUGIN_DIR / 'herdr-plugin.toml', False, False, (), ())
+    try:
+        plugin = _registration(executable, home=home)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        plugin = None
+    manifest = plugin.get('manifest_path') if plugin else None
+    return ProviderConfig('herdr', Path(manifest) if manifest else PLUGIN_DIR / 'herdr-plugin.toml',
+                          plugin is not None, bool(plugin and plugin.get('enabled')), (), ())
+
+
+def configure_plugin(*, uninstall: bool = False, dry_run: bool = False) -> str:
     if os.name != 'posix':
         raise StatusError('The SidePulse Herdr plugin requires macOS or Linux')
     if dry_run:
         action = 'unlink' if uninstall else 'link and sync'
-        print(f'Would {action} the SidePulse Herdr plugin.')
-        return 0
+        return f'Would {action} the SidePulse Herdr plugin.'
 
-    executable = os.getenv('HERDR_BIN_PATH') or shutil.which('herdr')
+    executable = executable_path()
     if not executable:
-        raise StatusError('Herdr is unavailable on PATH')
+        raise StatusError('Herdr is unavailable. Install Herdr 0.9.3 or newer first.')
     if uninstall:
+        if not _registration(executable):
+            return 'SidePulse Herdr plugin already removed.'
         _cli(executable, 'plugin', 'unlink', PLUGIN_ID)
-        print('SidePulse Herdr plugin removed.')
-        return 0
+        return 'SidePulse Herdr plugin removed.'
 
     _cli(executable, 'plugin', 'link', str(PLUGIN_DIR))
-    print('SidePulse Herdr plugin installed.')
     status = json.loads(_cli(executable, 'status', 'server', '--json'))
     if status.get('running'):
-        _cli(executable, 'plugin', 'action', 'invoke', PLUGIN_ID + '.sync')
-        print('Initial sync requested for the current Herdr session.')
-    else:
-        print('SidePulse will sync when Herdr starts.')
-    return 0
+        try:
+            _cli(executable, 'plugin', 'action', 'invoke', PLUGIN_ID + '.sync')
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            raise StatusError(f'Plugin installed. Could not sync the current Herdr session. {exc}') from exc
+        return 'SidePulse Herdr plugin installed. Initial sync requested for the current Herdr session.'
+    return 'SidePulse Herdr plugin installed. SidePulse will sync when Herdr starts.'

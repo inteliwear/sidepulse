@@ -26,7 +26,7 @@ INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 PLATFORM=$(uname -s)
-AGENTS='codex claude grok cursor junie opencode'
+AGENTS='codex claude grok cursor junie opencode herdr'
 MAC_COMPONENTS='sd-eject-guard status-bar'
 selected_components=" $AGENTS "
 if [ "$PLATFORM" = Darwin ]; then
@@ -97,6 +97,7 @@ draw_group() {
             cursor) label='Cursor' ;;
             junie) label='Junie' ;;
             opencode) label='OpenCode' ;;
+            herdr) label='Herdr' ;;
             status-bar) label='Status-bar indicator' ;;
         esac
         prefix="  $pointer [$checked]"

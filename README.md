@@ -482,7 +482,8 @@ The hook adapter, CLI decoder, or terminal wrapper translates input into JSON; t
 ### Herdr
 
 The bundled plugin supports macOS and Linux with Herdr 0.9.3 or newer.
-With the SidePulse service running, install the plugin from your shell.
+Install it from Settings → Agents or select Herdr in SidePulse setup. With the
+SidePulse service running, you can also install it from your shell.
 
 ```sh
 sidepulse setup herdr
@@ -513,8 +514,8 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse can monitor Codex, Claude, Grok, Cursor, and Junie through hooks, and OpenCode through a plugin. It can then
-translate the current agent state into a small, glanceable LED status.
+SidePulse monitors Codex, Claude, Grok, Cursor, and Junie through hooks and
+OpenCode and Herdr through plugins. Agent activity drives the LED status.
 
 Agent status modes:
 
@@ -664,7 +665,7 @@ sidepulse setup
 ```
 
 `sidepulse setup` installs or refreshes all supported agent integrations, including
-Junie CLI and the OpenCode plugin. On macOS it installs SidePulse Pro Eject Prevention, writes the status-bar
+Junie CLI, the OpenCode plugin, and the Herdr plugin when Herdr is available. On macOS it installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
@@ -734,6 +735,7 @@ sidepulse setup grok
 sidepulse setup cursor
 sidepulse setup junie
 sidepulse setup opencode
+sidepulse setup herdr
 ```
 
 Each hook invokes a small, standard-library-only Python entry point. It writes
@@ -835,6 +837,7 @@ sidepulse setup grok --uninstall
 sidepulse setup cursor --uninstall
 sidepulse setup junie --uninstall
 sidepulse setup opencode --uninstall
+sidepulse setup herdr --uninstall
 ```
 
 Install and start the macOS status-bar app:
@@ -925,7 +928,7 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can manage Codex, Claude, Grok, Cursor, and Junie hooks and the OpenCode plugin.
+window can manage Codex, Claude, Grok, Cursor, and Junie hooks and the OpenCode and Herdr plugins.
 The transcript checkboxes apply only to explicit file-based diagnostics. The status-bar app reads
 accounted OSC-style JSON through the daemon socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.

@@ -3911,6 +3911,8 @@ class AgentMonitorTests(unittest.TestCase):
 
         with (
             patch.object(cli_module.sys, "platform", "darwin"),
+            patch("sidepulse.herdr.executable_path", return_value="/test/herdr"),
+            patch("sidepulse.herdr.configure_plugin", return_value="Herdr plugin installed") as herdr,
             patch.object(cli_module, "ensure_receiver_config") as configure_receiver,
             patch.object(cli_module, "relay_link_command") as link_command,
             patch("sidepulse.service_launch.install_service", return_value=service_result) as service,
@@ -3946,6 +3948,7 @@ class AgentMonitorTests(unittest.TestCase):
         grok.assert_called_once()
         junie.assert_called_once()
         opencode.assert_called_once_with(dry_run=False)
+        herdr.assert_called_once_with(uninstall=False, dry_run=False)
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
         service.assert_called_once_with(start=True, dry_run=False)
@@ -4002,6 +4005,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         with (
             patch.object(cli_module.sys, "platform", "darwin"),
+            patch("sidepulse.herdr.executable_path", return_value=None),
             patch("sidepulse.service_launch.install_service", return_value=service_result),
             patch.object(cli_module, "install_hook_results", return_value=[hook_result]),
             patch(
@@ -4057,6 +4061,7 @@ class AgentMonitorTests(unittest.TestCase):
 
         with (
             patch.object(cli_module.sys, "platform", "linux"),
+            patch("sidepulse.herdr.executable_path", return_value=None),
             patch.object(cli_module, "install_hook_results", return_value=[hook_result]),
             patch("sidepulse.service_launch.install_service", return_value=service_result) as service,
             patch("sidepulse.sd_eject_guard_launch.install_sd_eject_guard") as guard,

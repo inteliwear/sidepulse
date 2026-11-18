@@ -203,3 +203,27 @@ def test_setup_registers_plugin_and_syncs_only_a_running_server(running, monkeyp
     assert calls[:2] == [('plugin', 'link', str(herdr.PLUGIN_DIR)), ('status', 'server', '--json')]
     assert calls[2:] == ([('plugin', 'action', 'invoke', 'sidepulse.status.sync')] if running else [])
     assert ('Initial sync requested' if running else 'sync when Herdr starts') in capsys.readouterr().out
+
+
+def test_setup_agent_herdr_starts_service_before_sync(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from sidepulse import service_launch
+    from sidepulse.cli import sidepulse_main
+
+    calls = []
+
+    def start_service(**kwargs):
+        calls.append('service')
+        return SimpleNamespace(path=Path('/test/service'), started=True, detail='')
+
+    def configure_plugin(**kwargs):
+        calls.append('plugin')
+        return 'Plugin installed'
+
+    monkeypatch.setattr(service_launch, 'install_service', start_service)
+    monkeypatch.setattr(herdr, 'executable_path', lambda: '/test/herdr')
+    monkeypatch.setattr(herdr, 'configure_plugin', configure_plugin)
+    assert sidepulse_main(['setup', '--agent', 'herdr', '--no-sd-eject-guard', '--no-status-bar']) == 0
+    assert calls == ['service', 'plugin']

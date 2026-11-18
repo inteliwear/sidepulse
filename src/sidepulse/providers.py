@@ -93,7 +93,7 @@ JUNIE_MONITOR_EVENTS = tuple(
 )
 
 LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
-HOOK_PROVIDERS = (*LOG_HOOK_PROVIDERS, "opencode")
+HOOK_PROVIDERS = (*LOG_HOOK_PROVIDERS, "opencode", "herdr")
 OPENCODE_PLUGIN_MARKER = "// Managed by SidePulse: `sidepulse setup` replaces this file and"
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
@@ -151,6 +151,8 @@ def default_log_path(provider: str, home: Path | None = None) -> Path:
 
 
 def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
+    from .herdr import detect_config as detect_herdr_config
+
     return [
         detect_codex_config(home),
         detect_claude_config(home),
@@ -158,6 +160,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_cursor_config(home),
         detect_junie_config(home),
         detect_opencode_config(home),
+        detect_herdr_config(home),
     ]
 
 

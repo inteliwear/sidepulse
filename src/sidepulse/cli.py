@@ -173,7 +173,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     agent_selection = setup.add_mutually_exclusive_group()
     agent_selection.add_argument(
         "provider",
-        choices=("all", *HOOK_PROVIDERS, "herdr"),
+        choices=("all", *HOOK_PROVIDERS),
         nargs="?",
         default="all",
         help="Agent hooks or Herdr plugin to install. Default: all agent hooks.",
@@ -966,13 +966,9 @@ def cmd_sidepulse_sdejectguard_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
-    if getattr(args, "provider", None) == "herdr":
-        from . import herdr
-        try:
-            return herdr.setup(uninstall=args.uninstall, dry_run=args.dry_run)
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            print(f"SidePulse Herdr plugin: {exc}", file=sys.stderr)
-            return 1
+    providers = selected_hook_providers(args)
+    if args.provider == "herdr" and not args.no_agent_monitor:
+        return configure_herdr(args)
     if getattr(args, "uninstall", False):
         return cmd_uninstall(args)
     if not args.no_agent_monitor:
@@ -990,6 +986,9 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     print(f"background service: {service_action}")
     if str(service_result.path):
         print(f"  config: {service_result.path}")
+
+    if not args.no_agent_monitor and "herdr" in providers:
+        configure_herdr(args, optional=True)
 
     if sys.platform != "darwin":
         print("macOS integrations: skipped (CLI-only setup on this platform)")
@@ -1203,6 +1202,18 @@ def cmd_status_bar(args: argparse.Namespace) -> int:
     return 0
 
 
+def configure_herdr(args: argparse.Namespace, *, optional: bool = False) -> int:
+    from . import herdr
+    if optional and not herdr.executable_path():
+        return 0
+    try:
+        print(herdr.configure_plugin(uninstall=args.uninstall, dry_run=args.dry_run))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"SidePulse Herdr plugin: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def selected_hook_providers(args: argparse.Namespace) -> tuple[str, ...]:
     if args.agent:
         return tuple(dict.fromkeys(args.agent))
@@ -1213,6 +1224,8 @@ def install_hook_results(args: argparse.Namespace):
     providers = selected_hook_providers(args)
     results = []
     for provider in providers:
+        if provider == "herdr":
+            continue
         if provider == "opencode":
             results.append(install_opencode_plugin(dry_run=args.dry_run))
             continue
@@ -1250,6 +1263,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     providers = selected_hook_providers(args)
     results = []
     for provider in providers:
+        if provider == "herdr":
+            continue
         if provider == "opencode":
             results.append(uninstall_opencode_plugin(dry_run=args.dry_run))
             continue
@@ -1276,7 +1291,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             print(f"  log: {result.log_path}")
         if result.backup_path:
             print(f"  backup: {result.backup_path}")
-    return 0
+    return configure_herdr(args, optional=True) if "herdr" in providers else 0
 
 
 def cmd_hook_log(args: argparse.Namespace) -> int:
