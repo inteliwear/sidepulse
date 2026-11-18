@@ -43,7 +43,7 @@ Hook adapters and bridge senders cap `msg` at 1,024 UTF-8 bytes before delivery.
 
 ## Scope and verification
 
-Permission approval responses are outside this change. The CLI supports explicit OSC submission and terminal capture through `wrap`, without adding a screen emulator. Capture preserves the existing one-state-per-session contract; OSC child IDs remain metadata. Wrap each agent inside its Herdr pane rather than relying on the outer multiplexer to re-emit reports.
+Permission approval responses are outside this change. The CLI supports explicit OSC submission and terminal capture through `wrap`, without adding a screen emulator. Capture preserves the existing one-state-per-session contract; OSC child IDs remain metadata. The bundled Herdr plugin reports detected agent status using the [same program status path](../protocol/program-status.md#herdr-plugin).
 
 Verify field normalization and accounting with shared desktop/Swift/Kotlin fixtures. Exercise real local sockets, existing bridge POST/SSE and phone recovery routes, queue bounds, stale replay, sender restart, session coalescing, oldest eviction, and a maximum 300-second expiry. Preserve provider parity and local-device output; verify phones receive state only and manual pushes remain available. See [automated evidence](../testing/osc7501-testing.md) and the [human checklist](../testing/osc7501-human-test-plan.md).
 

@@ -475,10 +475,27 @@ sp wrap claude
 and its arguments; `--` is optional. The wrapper preserves keyboard interaction,
 terminal resizing, and the command's exit code. It captures emitted OSC 7501
 reports and answers capability queries. The program must emit OSC 7501 to produce
-status updates; the wrapper does not infer status from screen text. In Herdr,
-run the wrapper inside each agent pane so reports retain separate identities.
+status updates; the wrapper does not infer status from screen text.
 
 The hook adapter, CLI decoder, or terminal wrapper translates input into JSON; the daemon holds the state, drives physical LEDs, and handles remote delivery. Individual status updates travel through the existing bridge queues to remote computers and updated iOS/Android apps, which account and render locally. Each session has one current state. The updated bridge keeps the latest queued value per source/session, up to 10 items per key for at most 300 seconds, with a 2048-byte request/recovery limit. Senders cap `msg` at 1,024 UTF-8 bytes and shorten it further if needed to fit. See the [protocol and quickstart](docs/protocol/program-status.md), [design plan](docs/design/osc7501-integration-plan.md), and [test strategy](docs/testing/osc7501-testing.md).
+
+### Herdr
+
+The bundled plugin supports macOS and Linux with Herdr 0.9.3 or newer.
+With the SidePulse service running, install the plugin from your shell.
+
+```sh
+sidepulse setup herdr
+```
+
+Setup registers the plugin and requests an initial sync for the current Herdr
+server if it is running. The plugin also syncs on Herdr startup and agent state
+changes. Launch agents normally from their Herdr panes. Herdr, SidePulse
+agent hooks, and `sidepulse wrap` share one SidePulse session per pane. Direct
+agent hooks take precedence when both report the same agent.
+
+Use `herdr plugin log list --plugin sidepulse.status` to check plugin errors.
+Use `sidepulse setup herdr --uninstall` to remove it.
 
 ## Battery LEDs
 

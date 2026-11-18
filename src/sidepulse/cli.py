@@ -129,6 +129,11 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
                       help="Command and its arguments; -- is optional.")
     wrap.set_defaults(func=cmd_wrap)
 
+    herdr = subparsers.add_parser("herdr", help="Use the SidePulse plugin for the Herdr terminal multiplexer.")
+    herdr_commands = herdr.add_subparsers(dest="herdr_command", required=True)
+    herdr_commands.add_parser("sync", help="Reconcile agent status when invoked by Herdr.")
+    herdr.set_defaults(func=cmd_herdr)
+
     version = subparsers.add_parser("version", help="Print the installed SidePulse version.")
     version.set_defaults(func=cmd_version)
     update = subparsers.add_parser("update", help="Update using the one-command setup installer.")
@@ -168,10 +173,10 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     agent_selection = setup.add_mutually_exclusive_group()
     agent_selection.add_argument(
         "provider",
-        choices=("all", *HOOK_PROVIDERS),
+        choices=("all", *HOOK_PROVIDERS, "herdr"),
         nargs="?",
         default="all",
-        help="Agent hooks to install. Default: all.",
+        help="Agent hooks or Herdr plugin to install. Default: all agent hooks.",
     )
     agent_selection.add_argument(
         "--agent",
@@ -961,6 +966,13 @@ def cmd_sidepulse_sdejectguard_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
+    if getattr(args, "provider", None) == "herdr":
+        from . import herdr
+        try:
+            return herdr.setup(uninstall=args.uninstall, dry_run=args.dry_run)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"SidePulse Herdr plugin: {exc}", file=sys.stderr)
+            return 1
     if getattr(args, "uninstall", False):
         return cmd_uninstall(args)
     if not args.no_agent_monitor:
@@ -1441,6 +1453,19 @@ def cmd_wrap(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"Could not wrap command: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_herdr(args: argparse.Namespace) -> int:
+    if os.name != 'posix':
+        print("The SidePulse Herdr plugin requires macOS or Linux.", file=sys.stderr)
+        return 2
+    from . import herdr
+    try:
+        herdr.sync()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"SidePulse Herdr plugin: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
