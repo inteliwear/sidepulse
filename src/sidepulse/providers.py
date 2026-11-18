@@ -11,7 +11,7 @@ from typing import Any
 from .hook_commands import observer_script, windows_log_path
 
 from .models import HookEvent, parse_datetime
-from .origin import origin_label_from_payload
+from .origin import origin_label_from_payload, valid_t3_link
 
 try:
     import tomllib
@@ -523,15 +523,8 @@ def parse_log_line(provider: str, line: str) -> HookEvent | None:
             "error_details",
         ),
         origin=origin_label_from_payload(provider, normalized_raw),
-        t3_link=t3_link_from_payload(normalized_raw),
+        t3_link=valid_t3_link(normalized_raw.get("t3_link")),
     )
-
-
-def t3_link_from_payload(raw: dict[str, Any]) -> str | None:
-    link = raw.get("t3_link")
-    if isinstance(link, str) and link.startswith("t3code://threads/"):
-        return link
-    return None
 
 
 def infer_provider_from_payload(provider: str, raw: dict[str, Any]) -> str:

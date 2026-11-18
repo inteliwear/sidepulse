@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 import socket
-from .program_status import CONTEXT_LIMITS, MAX_OUTBOUND_MESSAGE_BYTES, validate_status
+from .program_status import CONTEXT_LIMITS, MAX_OUTBOUND_MESSAGE_BYTES, hook_scope, validate_status
 
 
 def clean_text(value: str, limit: int) -> str:
@@ -27,7 +27,7 @@ def hook_report(provider: str, line: dict) -> dict | None:
     record = parse_log_line(provider, json.dumps(line, ensure_ascii=False))
     if record is None:
         return None
-    scope = provider + '-' + hashlib.sha256((record.session_id or record.status_key).encode()).hexdigest()[:32]
+    scope = hook_scope(provider, record.session_id or record.status_key)
     base = {'v': 1, 'type': 'program_status', 'scope': scope,
             'request_id': str(uuid.uuid4())}
     session_title = provider_session_title(record)

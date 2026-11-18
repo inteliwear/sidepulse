@@ -930,6 +930,8 @@ class WindowBuildTests(StatusBarTestCase):
                 patch.object(sb, "open_url") as open_url,
             ):
                 status = replace(make_status(provider="claude", origin=origin), t3_link=link)
+                menu = sb.build_session_options_menu(status, datetime.now(timezone.utc), self.controller)
+                self.assertEqual(menu.itemWithTitle_("Open in T3 Code").state(), 1)
                 self.controller.open_session(status, None, remember=False)
                 terminal_lookup.assert_not_called()
                 open_url.assert_called_once_with(link)

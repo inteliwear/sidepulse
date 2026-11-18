@@ -29,9 +29,11 @@ class SidePulseService:
         from .program_status import ProgramState
         from .program_transport import ProgramServer, ProgramRelay
         from .program_presentation import ProgramMonitor
+        from .t3code import T3CodeSource
         self.program_state = ProgramState()
         self.program_server = ProgramServer(self.program_state, on_command=self.handle_command)
         self.monitor = ProgramMonitor(self.program_state)
+        self.t3code = T3CodeSource(self.program_state)
         self.program_relay = ProgramRelay(self.program_state)
         self.receiver_stop: threading.Event | None = None
         self.receiver_thread: threading.Thread | None = None
@@ -76,6 +78,7 @@ class SidePulseService:
                 self.sync_receiver(config)
                 try:
                     self.runtime.poll()
+                    self.t3code.poll()
                 except Exception as exc:
                     print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)
                 try:

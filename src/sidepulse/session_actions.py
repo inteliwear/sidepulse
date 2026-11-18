@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,12 +8,13 @@ from urllib.parse import quote, urlencode
 from .jetbrains import jetbrains_launch_for_project
 from .junie_index import junie_session_project_dir
 from .models import AgentStatus, provider_label
+from .origin import valid_t3_link
 
 SESSION_OPEN_APP = "app"
 SESSION_OPEN_TERMINAL = "terminal"
 SESSION_OPEN_VSCODE = "vscode"
-SESSION_OPEN_T3 = "t3code"
 SESSION_OPEN_JETBRAINS = "jetbrains"
+SESSION_OPEN_T3 = "t3code"
 SESSION_OPEN_CHOICES = (
     SESSION_OPEN_T3,
     SESSION_OPEN_APP,
@@ -160,11 +160,8 @@ def session_open_target(
     action: str,
 ) -> SessionOpenTarget | None:
     if action == SESSION_OPEN_T3:
-        link = status.t3_link
-        segment = r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+"
-        if link and re.fullmatch(rf"t3code://threads/{segment}/{segment}", link):
-            return ("url", link)
-        return None
+        link = valid_t3_link(status.t3_link)
+        return ("url", link) if link else None
     if action == SESSION_OPEN_APP:
         url = session_deep_link(status)
         return ("url", url) if url else None

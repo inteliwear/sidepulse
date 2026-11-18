@@ -126,7 +126,7 @@ def test_daemon_keeps_t3_link_for_local_sessions(tmp_path, monkeypatch) -> None:
     report = hook_report("claude", line)
     assert report is not None and report["context"]["t3_link"] == LINK
 
-    state = ProgramState()
+    state = ProgramState(publisher="test-sidepulse")
     state.submit(report)
     # A later event without the link keeps the session's link.
     follow_up = {**report, "request_id": str(uuid.uuid4())}

@@ -297,18 +297,38 @@ def t3_thread_link(env: Mapping[str, str], *, home: Path | None = None) -> str |
     thread_id = clean_label(env.get(T3_THREAD_ENV))
     if not thread_id:
         return None
-    environment_id = t3_environment_id(env, home=home)
+    return t3_link_for_thread(t3_environment_id(env, home=home), thread_id)
+
+
+def t3_link_for_thread(environment_id: str | None, thread_id: str) -> str | None:
     if not environment_id:
         return None
-    return f"t3code://threads/{quote(environment_id, safe='')}/{quote(thread_id, safe='')}"
+    try:
+        link = f"t3code://threads/{quote(environment_id, safe='')}/{quote(thread_id, safe='')}"
+    except UnicodeError:
+        return None
+    return valid_t3_link(link)
+
+
+def valid_t3_link(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 1024:
+        return None
+    segment = r"(?:[A-Za-z0-9_.~+-]|%[0-9A-Fa-f]{2})+"
+    match = re.fullmatch(rf"t3code://threads/({segment})/({segment})", value)
+    return value if match and all(part not in {".", ".."} for part in match.groups()) else None
+
+
+def t3_data_dir(env: Mapping[str, str], home: Path | None = None) -> Path:
+    configured = env.get(T3_HOME_ENV, "").strip()
+    return Path(configured).expanduser() if configured else (home or Path.home()) / ".t3"
 
 
 def t3_environment_id(env: Mapping[str, str], *, home: Path | None = None) -> str | None:
-    configured = clean_label(env.get(T3_HOME_ENV))
-    base = Path(configured).expanduser() if configured else (home or Path.home()) / ".t3"
     try:
-        return clean_label((base / "userdata" / "environment-id").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
+        with (t3_data_dir(env, home) / "userdata" / "environment-id").open(encoding="utf-8") as handle:
+            value = handle.read(257)
+            return clean_label(value) if len(value) <= 256 else None
+    except (OSError, RuntimeError, UnicodeError):
         return None
 
 
