@@ -125,6 +125,8 @@ def test_chat_opener_has_a_named_stable_bundle_and_private_launch(tmp_path, monk
     assert opener.install_opener(tmp_path) == app
     assert signature.stat().st_mtime_ns == stamp
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    assert (app / "Contents/Resources" / info["CFBundleIconFile"]).read_bytes() == opener.ICON.read_bytes()
+    assert "CFBundleIconName" not in info
     assert info["CFBundleDisplayName"] == "SidePulse Chat Opener"
     assert info["CFBundleIdentifier"] == "io.sidepulse.chat-opener"
     subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(app)], check=True)

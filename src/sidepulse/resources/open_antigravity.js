@@ -65,8 +65,11 @@ function openChat(action, sessionId) {
     if (action === "check") return trusted ? "granted" : "missing";
     if (!trusted) {
         if (action === "request-and-select") {
-            // Only the explicit Review Permission button may trigger the macOS prompt.
-            $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
+            // Let the user choose this exact bundle, even on macOS versions that
+            // attribute an automatic system prompt to the process that launched it.
+            $.NSWorkspace.sharedWorkspace.activateFileViewerSelectingURLs([$.NSBundle.mainBundle.bundleURL]);
+            const settings = $.NSURL.URLWithString("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+            $.NSWorkspace.sharedWorkspace.openURL(settings);
         }
         return "";
     }

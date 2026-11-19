@@ -954,8 +954,8 @@ Google Antigravity's app, IDE, and CLI share a global hook configuration.
 Run `sidepulse setup antigravity` to track each conversation as it starts,
 runs tools, requests input, and finishes. On macOS, clicking a desktop session
 opens Antigravity. If the launcher needs Accessibility access, SidePulse offers
-a one-time choice. **Review Permission…** asks macOS for access so SidePulse can
-select the matching sidebar chat. After granting access, click the session again.
+a one-time choice. **Review Permission…** opens Accessibility settings and shows **SidePulse Chat Opener**
+in Finder. Enable it in Settings, or drag it into the list if it is missing. After granting access, click the session again.
 **Open App Only** remembers your choice and brings the app forward on each click.
 Use **⌘K** to find the chat. You can grant or revoke access later in System Settings
 → Privacy & Security → Accessibility under **SidePulse Chat Opener**. Choose

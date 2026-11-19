@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import plistlib
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 NAME = "SidePulse Chat Opener"
 BUNDLE_ID = "io.sidepulse.chat-opener"
-SCRIPT = Path(__file__).with_name("resources") / "open_antigravity.js"
+RESOURCES = Path(__file__).with_name("resources")
+SCRIPT = RESOURCES / "open_antigravity.js"
+ICON = RESOURCES / "SidePulse.icns"
 
 
 def install_opener(parent: Path | None = None) -> Path:
@@ -20,12 +23,12 @@ def install_opener(parent: Path | None = None) -> Path:
     parent = parent or Path.home() / "Library/Application Support/SidePulse"
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     app = parent / f"{NAME}.app"
-    digest = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
+    digest = hashlib.sha256(SCRIPT.read_bytes() + ICON.read_bytes()).hexdigest()
     with (parent / ".chat-opener.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             with (app / "Contents/Info.plist").open("rb") as stream:
-                if plistlib.load(stream).get("SidePulseScriptHash") == digest:
+                if plistlib.load(stream).get("SidePulseResourceHash") == digest:
                     return app
         except (FileNotFoundError, plistlib.InvalidFileException):
             pass
@@ -35,8 +38,11 @@ def install_opener(parent: Path | None = None) -> Path:
                            capture_output=True, check=True, timeout=20)
             plist = stage / "Contents/Info.plist"
             info = plistlib.loads(plist.read_bytes())
-            info.update(CFBundleName=NAME, CFBundleDisplayName=NAME, CFBundleIdentifier=BUNDLE_ID,
-                        LSUIElement=True, SidePulseScriptHash=digest)
+            # The generated applet also names its generic icon in Assets.car.
+            info.pop("CFBundleIconName", None)
+            shutil.copyfile(ICON, stage / "Contents/Resources" / ICON.name)
+            info.update(CFBundleIconFile=ICON.name, CFBundleName=NAME, CFBundleDisplayName=NAME, CFBundleIdentifier=BUNDLE_ID,
+                        LSUIElement=True, SidePulseResourceHash=digest)
             plist.write_bytes(plistlib.dumps(info))
             subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(stage)],
                            capture_output=True, check=True, timeout=20)
