@@ -28,6 +28,8 @@ from unittest.mock import patch
 
 from packaging.requirements import Requirement
 
+from import_contract import importable_module_names
+
 try:  # Python 3.11+
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10
@@ -304,30 +306,8 @@ class ImportContractTests(unittest.TestCase):
 class ModuleImportSmokeTests(unittest.TestCase):
     """Every shipped module must import. Nothing here is clever; that is the point."""
 
-    def module_names(self) -> list[str]:
-        names = []
-        for path in sorted(SRC_ROOT.rglob("*.py")):
-            rel = path.relative_to(SRC_ROOT)
-            if rel.name == "__main__.py":
-                continue  # executes on import by design
-            parts = list(rel.parts)
-            parts[-1] = rel.stem
-            if parts[-1] == "__init__":
-                parts.pop()
-            if parts:
-                names.append(".".join(parts))
-        return names
-
     def test_every_module_imports(self):
-        darwin_only = {
-            "sidepulse.status_bar",
-            "sidepulse.status_icon",
-            "sidepulse.virtual_device",
-            "sidepulse.led_wasm",
-        }
-        for name in self.module_names():
-            if name in darwin_only and sys.platform != "darwin":
-                continue
+        for name in importable_module_names(SRC_ROOT):
             with self.subTest(module=name):
                 try:
                     importlib.import_module(name)

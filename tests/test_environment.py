@@ -32,6 +32,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from import_contract import importable_module_names
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The error the status bar prints when PyObjC imports fail. If a clean install
@@ -165,20 +167,6 @@ class CleanInstallTests(unittest.TestCase):
             env=self.env(), cwd=str(self.home), **kwargs,
         )
 
-    def shipped_modules(self) -> list[str]:
-        names = []
-        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
-            rel = path.relative_to(REPO_ROOT / "src")
-            if rel.name == "__main__.py":
-                continue  # runs the CLI on import by design
-            parts = list(rel.parts)
-            parts[-1] = rel.stem
-            if parts[-1] == "__init__":
-                parts.pop()
-            if parts:
-                names.append(".".join(parts))
-        return names
-
     # -- tests -----------------------------------------------------------
 
     def test_installed_package_is_not_the_source_tree(self):
@@ -240,14 +228,7 @@ class CleanInstallTests(unittest.TestCase):
         )
 
     def test_every_shipped_module_imports_after_plain_install(self):
-        darwin_only = {
-            "sidepulse.status_bar",
-            "sidepulse.virtual_device",
-            "sidepulse.led_wasm",
-        }
-        for name in self.shipped_modules():
-            if name in darwin_only and sys.platform != "darwin":
-                continue
+        for name in importable_module_names(REPO_ROOT / "src"):
             with self.subTest(module=name):
                 result = self.run_python(f"import {name}")
                 self.assertEqual(
