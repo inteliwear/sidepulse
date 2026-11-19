@@ -94,6 +94,7 @@ JUNIE_MONITOR_EVENTS = tuple(
 
 LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
 HOOK_PROVIDERS = (*LOG_HOOK_PROVIDERS, "opencode", "herdr")
+AGENT_INTEGRATIONS = (*HOOK_PROVIDERS, "t3code")
 OPENCODE_PLUGIN_MARKER = "// Managed by SidePulse: `sidepulse setup` replaces this file and"
 KNOWN_EVENTS = tuple(
     dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)

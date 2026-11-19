@@ -27,6 +27,7 @@ from .device_writer import (
 )
 from .hook import hook_log_main
 from .install import (
+    configure_t3code_monitoring,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -68,7 +69,7 @@ from .lid_sleep import (
 )
 from .models import AgentStatus
 from .providers import (
-    HOOK_PROVIDERS,
+    AGENT_INTEGRATIONS,
     LOG_HOOK_PROVIDERS,
     detect_provider_configs,
     default_log_path,
@@ -168,21 +169,21 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     doctor.set_defaults(func=cmd_doctor)
     setup = subparsers.add_parser(
         "setup",
-        help="Install agent hooks and, on macOS, start the status-bar app.",
+        help="Set up agent integrations and start SidePulse.",
     )
     agent_selection = setup.add_mutually_exclusive_group()
     agent_selection.add_argument(
         "provider",
-        choices=("all", *HOOK_PROVIDERS),
+        choices=("all", *AGENT_INTEGRATIONS),
         nargs="?",
         default="all",
-        help="Agent hooks or Herdr plugin to install. Default: all agent hooks.",
+        help="Agent integration to enable. Default: all integrations.",
     )
     agent_selection.add_argument(
         "--agent",
-        choices=HOOK_PROVIDERS,
+        choices=AGENT_INTEGRATIONS,
         action="append",
-        help="Select one agent's hooks. Repeat for multiple agents.",
+        help="Select one agent integration. Repeat for multiple agents.",
     )
     setup.add_argument("--log-dir", type=Path, help="Directory for provider JSONL files.")
     setup.add_argument("--codex-log", type=Path, help="Codex JSONL log path.")
@@ -249,10 +250,11 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     )
     service.add_argument(
         "service_command",
-        choices=("start", "stop", "status", "run"),
+        choices=("start", "stop", "status", "run", "scan-t3"),
         nargs="?",
         default="status",
     )
+    service.add_argument("--socket", type=Path, help=argparse.SUPPRESS)
     service.set_defaults(func=cmd_sidepulse_service)
 
     add_sidepulse_status_bar_parser(subparsers)
@@ -985,7 +987,6 @@ def cmd_sidepulse_setup(args: argparse.Namespace) -> int:
     if str(service_result.path):
         print(f"  config: {service_result.path}")
 
-    print("T3 Code: provider logs are monitored automatically by the background service")
     herdr_result = 0
     if not args.no_agent_monitor and "herdr" in providers:
         herdr_result = configure_herdr(args)
@@ -1035,6 +1036,10 @@ def cmd_sidepulse_service(args: argparse.Namespace) -> int:
     from .service_launch import install_service, service_is_running, stop_service
 
     command = args.service_command
+    if command == "scan-t3":
+        from .t3_scanner import run_scanner
+        from .program_transport import status_socket_path
+        return run_scanner(args.socket or status_socket_path())
     if command == "run":
         from .service import run_service
 
@@ -1103,7 +1108,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except (OSError, ValueError):
         t3_status = None
     if t3_status is None:
-        t3_status = monitoring_status()
+        t3_status = monitoring_status(enabled=load_settings().t3code_enabled)
     payload = {"providers": [config.to_dict() for config in configs], "t3code": t3_status}
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -1116,8 +1121,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  events: {', '.join(config.hook_events) if config.hook_events else '-'}")
         print(f"  logs: {', '.join(str(path) for path in config.log_paths) if config.log_paths else '-'}")
     print(f"T3 Code: {monitoring_status_label(t3_status)}")
-    print(f"  logs: {t3_status['log_directory']} ({'found' if t3_status['log_directory_exists'] else 'missing'})")
-    print(f"  thread links: {'available' if t3_status['thread_links_available'] else 'waiting for environment ID'}")
+    print(f"  logs: {t3_status['log_directory']}")
+    if t3_status.get("files_read") is not None:
+        links = "available" if t3_status["thread_links_available"] else "waiting for environment ID"
+        print(f"  thread links: {links}")
     return 0
 
 
@@ -1230,7 +1237,7 @@ def configure_herdr(args: argparse.Namespace) -> int:
 def selected_hook_providers(args: argparse.Namespace) -> tuple[str, ...]:
     if args.agent:
         return tuple(dict.fromkeys(args.agent))
-    return HOOK_PROVIDERS if args.provider == "all" else (args.provider,)
+    return AGENT_INTEGRATIONS if args.provider == "all" else (args.provider,)
 
 
 def install_hook_results(args: argparse.Namespace):
@@ -1238,6 +1245,9 @@ def install_hook_results(args: argparse.Namespace):
     results = []
     for provider in providers:
         if provider == "herdr":
+            continue
+        if provider == "t3code":
+            results.append(configure_t3code_monitoring(True, dry_run=args.dry_run))
             continue
         if provider == "opencode":
             results.append(install_opencode_plugin(dry_run=args.dry_run))
@@ -1277,6 +1287,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     results = []
     for provider in providers:
         if provider == "herdr":
+            continue
+        if provider == "t3code":
+            results.append(configure_t3code_monitoring(False, dry_run=args.dry_run))
             continue
         if provider == "opencode":
             results.append(uninstall_opencode_plugin(dry_run=args.dry_run))

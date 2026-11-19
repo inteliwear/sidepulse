@@ -6,6 +6,9 @@ from enum import Enum
 from typing import Any
 
 
+REMOTE_HERDR_ORIGIN = "Herdr · "
+
+
 class AgentMode(str, Enum):
     IDLE_READY = "idle_ready"
     WORKING = "working"
@@ -82,6 +85,10 @@ class AgentStatus:
     seq: int | None = None
     session_link: str | None = None
     t3_link: str | None = None
+
+    @property
+    def is_remote_herdr(self) -> bool:
+        return bool(self.origin and self.origin.startswith(REMOTE_HERDR_ORIGIN))
 
     @property
     def priority(self) -> int:

@@ -305,6 +305,42 @@ class AdvancedAutosaveTests(StatusBarTestCase):
             self.assertEqual(getattr(self.saved[-1], attribute), expected)
         self.assertEqual(len(self.saved), 2)
 
+    def test_hide_sessions_on_exit_is_off_by_default_and_saves(self):
+        checkbox = self.target.settings_buttons["hide_sessions_on_exit"]
+        self.assertFalse(sb.AgentMonitorSettings().hide_sessions_on_exit)
+        self.assertEqual(checkbox.state(), sb.NSOffState)
+        checkbox.performClick_(None)
+        self.assertTrue(self.saved[-1].hide_sessions_on_exit)
+        checkbox.performClick_(None)
+        self.assertFalse(self.saved[-1].hide_sessions_on_exit)
+
+    def test_menu_hides_exits_only_when_enabled(self):
+        from sidepulse.program_adapter import hook_report
+        from sidepulse.program_presentation import ProgramMonitor
+        from sidepulse.program_status import ProgramState, SESSION_CLOSED_EVENT
+
+        state = ProgramState(publisher="exit-check")
+        for provider, event, session in (
+            ("claude", "SessionEnd", "claude-exited"),
+            ("junie", "SessionEnd", "junie-exited"),
+            ("claude", "Stop", "turn-finished"),
+        ):
+            state.submit(hook_report(provider, {"session_id": session, "hook_event_name": event}))
+        session = "herdr-closed"
+        working = hook_report("claude", {"session_id": session, "hook_event_name": "UserPromptSubmit"})
+        state.submit(working)
+        state.submit({"v": 1, "type": "program_status", "scope": working["scope"],
+                      "status": {"state": "clear"}, "context": {"event_name": SESSION_CLOSED_EVENT}})
+
+        snapshot = ProgramMonitor(state).snapshot()
+        default = sb.AgentMonitorSettings()
+        assert {row.session_id for row in sb.recent_statuses(snapshot, default)} == {
+            "claude-exited", "junie-exited", "turn-finished", "herdr-closed",
+        }
+        assert [row.session_id for row in sb.recent_statuses(
+            snapshot, default.with_hide_sessions_on_exit(True),
+        )] == ["turn-finished"]
+
     def test_switching_tabs_commits_the_active_field(self):
         self.edit("session_timeout_minutes", "10")
         self.tabs.selectTabViewItemWithIdentifier_("agents")
@@ -605,6 +641,19 @@ class MenuBuildTests(StatusBarTestCase):
         self.assertNotIn("No recent sessions", titles)
         self.assert_menu_is_wired(menu)
 
+    def test_remote_herdr_rows_are_visible_when_local_agent_list_is_full(self):
+        locals = [make_status(agent_id=f"local-{i}") for i in range(15)]
+        remote = make_status(agent_id="remote", origin="Herdr · Workbox · Disconnected",
+                             display_name="Remote project", mode=AgentMode.IDLE_READY)
+        snapshot = make_snapshot(statuses=[*locals, remote])
+        menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
+        self.assertIn("Remote Herdr", [item.title() for item in menu.itemArray()])
+        item, = [item for item in menu.itemArray()
+                 if isinstance(item.representedObject(), AgentStatus) and item.representedObject() == remote]
+        self.assertIn("Workbox · Disconnected", item.title())
+        self.assertIsNone(item.action())
+        self.assertEqual(len(sb.recent_statuses(snapshot)), 10)
+
     def test_menu_builds_for_every_agent_mode(self):
         for mode in AgentMode:
             with self.subTest(mode=mode.value):
@@ -630,6 +679,28 @@ class MenuBuildTests(StatusBarTestCase):
         )
         menu = sb.build_menu(snapshot, sb.STATE_WORKING, self.controller)
         self.assert_menu_is_wired(menu)
+
+    def test_t3_session_title_keeps_its_colon_without_a_project(self):
+        status = make_status(
+            provider="codex", display_name="Fix: welcome screen", cwd=None, origin="Codex in T3 Code",
+        )
+        self.assertEqual(sb.native_session_menu_title(status), "Fix: welcome screen")
+
+    def test_pending_question_is_menu_title_and_session_name_returns_when_resolved(self):
+        question = "What would you most like to improve in Cardflow?"
+        status = replace(make_status(
+            provider="codex", display_name="Explain the Project’s Purpose", cwd=None,
+            mode=AgentMode.WAITING_FOR_INPUT,
+        ), message=question)
+        item = sb.build_session_menu_item(status, datetime.now(timezone.utc), self.controller)
+        self.assertEqual(str(item.title()), question)
+        self.assertIn("Explain the Project’s Purpose", str(item.toolTip()))
+        self.assertEqual(item.representedObject(), status)
+        self.assertIn(status.session_id[:8], sb.native_session_menu_title(status, disambiguate=True))
+        self.assertEqual(
+            sb.native_session_menu_title(replace(status, mode=AgentMode.COMPLETED)),
+            "Explain the Project’s Purpose",
+        )
 
     def test_menu_handles_hostile_session_names(self):
         """Session titles come from user directories and must not break layout."""
@@ -804,7 +875,7 @@ class WindowBuildTests(StatusBarTestCase):
             "files_read": 1,
             "thread_links_available": True,
         }})
-        expected = "Automatic · Reading provider logs"
+        expected = "Enabled · Reading provider logs"
         self.assertEqual(self.controller.setup_fields["t3code_status"].stringValue(), expected)
         for field in ("t3code_status", "t3code_diagnostics_status"):
             self.assertEqual(self.controller.settings_fields[field].stringValue(), expected)

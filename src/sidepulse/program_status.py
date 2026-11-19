@@ -20,6 +20,7 @@ KINDS = {'permission', 'question', 'auth'}
 SEGMENT = re.compile(r'[A-Za-z0-9_.+-]{1,32}\Z')
 MAX_BYTES = 65536
 MAX_SESSIONS = 64
+RECENT_SESSION_LIMIT = 10
 CONTEXT_LIMITS = {'provider': 128, 'session_id': 512, 'agent_id': 512,
                   'cwd': 4096, 'origin': 512, 'display_name': 512, 'tool_name': 512,
                   'mode': 64, 'event_name': 128, 'source_name': 256, 'title': 512, 'title_source': 16,
@@ -30,6 +31,8 @@ MAX_BRIDGE_MESSAGE_BYTES = 2048
 MAX_OUTBOUND_MESSAGE_BYTES = 1024
 HERDR_EVENT = 'HerdrStatus'
 TERMINAL_EVENT = 'TerminalOSC'
+SESSION_CLOSED_EVENT = 'SessionClosed'
+T3_TITLE_SOURCE = 't3'
 HERDR_SCOPE = re.compile(r'herdr-[0-9a-f]{32}-[0-9a-f]{32}\Z')
 MODES = {'idle': AgentMode.IDLE_READY, 'working': AgentMode.WORKING,
          'blocked': AgentMode.WAITING_FOR_INPUT, 'done': AgentMode.COMPLETED,
@@ -155,7 +158,11 @@ def bridge_update(update: dict) -> dict:
     context = result.pop('context', {})
     title = context.get('title')
     if title and result['status']['state'] != 'clear':
-        result['status'].setdefault('title', title.encode('utf-8')[:192].decode('utf-8', errors='ignore'))
+        title = title.encode('utf-8')[:192].decode('utf-8', errors='ignore')
+        if context.get('title_source') == T3_TITLE_SOURCE:
+            result['status']['title'] = title
+        else:
+            result['status'].setdefault('title', title)
     # Keep native session identity for future provider links, not bulky paths or labels.
     identity = {key: context[key] for key in ('provider', 'session_id') if key in context}
     if identity:
@@ -211,7 +218,7 @@ def _ignore_pane_update(previous: dict, update: dict) -> bool:
         return (previous['status'] == update['status']
                 and old_context.get('session_id') == new_context.get('session_id')
                 and all(old_context.get(field) == new_context[field]
-                        for field in ('provider', 'cwd', 'title') if field in new_context))
+                        for field in ('provider', 'cwd', 'title', 'origin') if field in new_context))
     return source == TERMINAL_EVENT and old_source not in {HERDR_EVENT, TERMINAL_EVENT}
 
 
@@ -248,6 +255,7 @@ class ProgramState:
         self.publisher = publisher or installation_publisher()
         self.lock = threading.RLock()
         self._sessions = OrderedDict()
+        self._closed_sessions = {}
         # Clear records keep a replay guard within the same bounded latest-session set.
         self._sequences = OrderedDict()
         self._suppressed = set()
@@ -257,7 +265,11 @@ class ProgramState:
         self._cursors = {}
         self._event_serial = time.time_ns() // 1000
 
-    def submit(self, report: dict, *, observed_at: int | None = None) -> dict:
+    def submit(
+        self, report: dict, *, observed_at: int | None = None,
+        wait_cleared_at: int | None = None, t3_scan: bool = False,
+    ) -> dict:
+        """Apply a local report, preserving input waits newer than a log's last release."""
         if not isinstance(report, dict):
             raise StatusError('Report must be an object')
         if report.get('type') != 'program_status':
@@ -288,14 +300,21 @@ class ProgramState:
                 'seq': self._sequences.get(key, 0) + 1, 'updated_at': now if observed_at is None else observed_at,
                 **({'status': {'state': 'clear'}} if suppressed else {})})
             previous = self._sessions.get(key)
+            closed = self._closed_sessions.get(key)
+            if observed_at is not None and closed and observed_at <= closed['updated_at']:
+                return {'ok': True, 'seq': self._sequences.get(key, 0), 'revision': self._revision}
             if observed_at is not None and previous and observed_at < previous['updated_at']:
                 if update['status']['state'] == 'clear':
                     return {'ok': True, 'seq': self._sequences[key], 'revision': self._revision}
                 # Delayed log events may identify a live session but cannot rewind it.
                 context = dict(previous.get('context', {}))
-                for field in ('origin', 't3_link'):
-                    if field in update.get('context', {}):
-                        context[field] = update['context'][field]
+                incoming = update.get('context', {})
+                fields = ('origin', 't3_link')
+                if incoming.get('title_source') == T3_TITLE_SOURCE and incoming.get('title'):
+                    fields += ('title', 'title_source')
+                for field in fields:
+                    if field in incoming:
+                        context[field] = incoming[field]
                 if context != previous.get('context', {}):
                     self._apply_update('local', {**previous, 'seq': update['seq'], 'context': context})
                     self._revision += 1
@@ -305,10 +324,13 @@ class ProgramState:
                 previous = None
             ignored = (report.get('unless_state') == 'done' and previous is not None
                        and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
-            ignored = ignored or (previous is not None
-                and guard_kind is not None
-                and previous['status']['state'] == 'blocked'
-                and previous['status'].get('kind') == guard_kind)
+            if previous is not None and previous['status']['state'] == 'blocked':
+                ignored = ignored or (
+                    guard_kind is not None and previous['status'].get('kind') == guard_kind
+                ) or (
+                    not suppressed and wait_cleared_at is not None
+                    and previous['updated_at'] > wait_cleared_at
+                )
             if herdr_pane:
                 hook_scope = report.get('_hook_scope')
                 if isinstance(hook_scope, str) and hook_scope in self._suppressed:
@@ -319,6 +341,8 @@ class ProgramState:
                 sequence = report.get('seq', update['seq'])
                 if type(sequence) is not int or sequence != update['seq']:
                     raise StatusError('Sequence gap or duplicate; submit without seq locally')
+                if t3_scan and (previous is None or previous.get('_t3_scan')):
+                    update['_t3_scan'] = True
                 self._apply_update('local', update)
                 if suppressed:
                     self._suppressed.add(scope)
@@ -329,6 +353,13 @@ class ProgramState:
                 while len(self._receipts) > MAX_SESSIONS:
                     self._receipts.popitem(last=False)
             return copy.deepcopy(ack)
+
+    def clear_t3_scan_sessions(self) -> None:
+        with self.lock:
+            for (_, _, scope), update in list({**self._closed_sessions, **self._sessions}.items()):
+                if update.get('_t3_scan'):
+                    self.submit({'v': 1, 'type': 'program_status', 'scope': scope,
+                                 'status': {'state': 'clear'}})
 
     def _scope_for_thread(self, scope, context):
         provider = context.get('provider')
@@ -352,7 +383,8 @@ class ProgramState:
 
     def _apply_update(self, sender, update):
         key = (sender, update['publisher'], update['scope'])
-        previous = self._sessions.get(key)
+        current = self._sessions.get(key)
+        previous = current
         if sender == 'local' and previous and previous['status']['state'] == 'done' and update['updated_at'] - previous['updated_at'] > 1200000:
             previous = None
         herdr_pane = sender == 'local' and HERDR_SCOPE.fullmatch(update['scope'])
@@ -366,8 +398,15 @@ class ProgramState:
                     context['origin'] = previous_context['origin']
                 if previous_context.get('session_id'):
                     context.setdefault('session_id', previous_context['session_id'])
-            if previous_context.get('title') and context.get('title_source') != 'session':
+            title_source = context.get('title_source')
+            previous_source = previous_context.get('title_source')
+            if previous_context.get('title') and (
+                title_source not in {'session', T3_TITLE_SOURCE}
+                or (previous_source == T3_TITLE_SOURCE and title_source != T3_TITLE_SOURCE)
+            ):
                 context['title'] = previous_context['title']
+                if previous_source == T3_TITLE_SOURCE:
+                    context['title_source'] = previous_source
             inherited = ('cwd', 'origin', 'title', 't3_link')
             if herdr_pane and context.get('event_name') == TERMINAL_EVENT:
                 inherited += ('provider', 'session_id')
@@ -385,7 +424,23 @@ class ProgramState:
         self._sequences[key] = update['seq']
         self._sessions.pop(key, None)
         if update['status']['state'] != 'clear':
+            self._closed_sessions.pop(key, None)
             self._sessions[key] = update
+        elif sender == 'local' and update.get('context', {}).get('event_name') == SESSION_CLOSED_EVENT:
+            if current is not None:
+                # A normal exit still forwards clear. Keep its title and link for the desktop menu.
+                status = {field: current['status'][field] for field in ('app', 'title')
+                          if field in current['status']}
+                self._closed_sessions[key] = {
+                    **current, 'updated_at': update['updated_at'], 'seq': update['seq'],
+                    'status': {**status, 'state': 'done'},
+                    'context': {**current.get('context', {}), 'event_name': SESSION_CLOSED_EVENT},
+                }
+                if len(self._closed_sessions) > RECENT_SESSION_LIMIT:
+                    oldest = min(self._closed_sessions, key=lambda key: self._closed_sessions[key]['updated_at'])
+                    del self._closed_sessions[oldest]
+        else:
+            self._closed_sessions.pop(key, None)
         while len(self._sessions) > MAX_SESSIONS:
             self._sessions.popitem(last=False)
         while len(self._sequences) > MAX_SESSIONS * 2:
@@ -462,9 +517,12 @@ class ProgramState:
     def _session_identity(key):
         return 'program:' + hashlib.sha256(json.dumps(list(key)).encode()).hexdigest()
 
-    def statuses(self, *, inactive_before_ms: float | None = None) -> tuple[AgentStatus, ...]:
+    def statuses(
+        self, *, inactive_before_ms: float | None = None, include_closed: bool = False,
+    ) -> tuple[AgentStatus, ...]:
         with self.lock:
-            rows = copy.deepcopy(self._sessions)
+            closed = self._closed_sessions if include_closed else {}
+            rows = copy.deepcopy({**closed, **self._sessions})
         result = []
         for (sender, publisher, scope), update in sorted(rows.items()):
             status = update['status']
@@ -472,7 +530,7 @@ class ProgramState:
             context = update.get('context', {})
             if (inactive_before_ms is not None and update['updated_at'] < inactive_before_ms
                     and sender == 'local' and status['state'] != 'done'
-                    and is_integrated_session(scope, context)):
+                    and (update.get('_t3_scan') or is_integrated_session(scope, context))):
                 continue
             updated_at = datetime.fromtimestamp(update['updated_at'] / 1000, timezone.utc)
             mode = MODES[status['state']]
@@ -494,12 +552,13 @@ class ProgramState:
                 cwd=context.get('cwd'), tool_name=context.get('tool_name'), message=status.get('msg'), origin=origin or sender,
                 seq=update['seq'], session_link='sidepulse://sessions?' + urllib.parse.urlencode(
                     {'publisher': self.forward_publisher(sender, publisher), 'scope': scope}, quote_via=urllib.parse.quote),
-                t3_link=t3_link))
+                stale=context.get('event_name') == SESSION_CLOSED_EVENT, t3_link=t3_link))
         return tuple(result)
 
     def close(self):
         with self.lock:
             self._sessions.clear()
+            self._closed_sessions.clear()
             self._sequences.clear()
             self._suppressed.clear()
             self._receipts.clear()

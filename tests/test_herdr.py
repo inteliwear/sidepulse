@@ -115,6 +115,19 @@ def test_release_event_clears_direct_status(integration, monkeypatch):
                        '{"event":"pane_agent_detected","data":{"pane_id":"w1:p1","released":true}}')
     herdr.sync()
     assert not state.statuses()
+    view = daemon_command({"type": "get_state"})["snapshot"]
+    assert view["aggregate"]["mode"] == "idle_ready"
+    assert [(row["session_id"], row["mode"]) for row in view["stale_statuses"]] == [("native", "completed")]
+    events = state.pending_events("phone")
+    assert events[-1][1]["status"] == {"state": "clear"}
+    herdr.sync()
+    assert state.pending_events("phone") == events
+
+    # Reopening the pane starts a live row and replaces the retained entry.
+    state.submit(_hook())
+    view = daemon_command({"type": "get_state"})["snapshot"]
+    assert [row["session_id"] for row in view["statuses"]] == ["native"]
+    assert not view["stale_statuses"]
 
 
 def test_reused_pane_does_not_keep_direct_status_for_previous_agent(integration):
@@ -214,10 +227,21 @@ def test_setup_registers_plugin_and_syncs_only_a_running_server(selection, runni
         setup_service.append(args)
         return '{"running": true}' if running else '{"running": false}'
 
+    checks = []
+
+    def query(_command):
+        checks.append("socket")
+        if len(checks) == 1:
+            raise herdr.StatusError("service still starting")
+        setup_service.append("ready")
+        return {"ok": True}
+
     monkeypatch.setattr(herdr, '_cli', cli)
+    monkeypatch.setattr(herdr, 'daemon_command', query)
     assert sidepulse_main(['setup', *selection, '--no-sd-eject-guard', '--no-status-bar']) == 0
     assert setup_service[:3] == ['service', ('plugin', 'link', str(herdr.PLUGIN_DIR)), ('status', 'server', '--json')]
-    assert setup_service[3:] == ([('plugin', 'action', 'invoke', 'sidepulse.status.sync')] if running else [])
+    assert setup_service[3:] == (["ready", ('plugin', 'action', 'invoke', 'sidepulse.status.sync')] if running else [])
+    assert len(checks) == (2 if running else 0)
     assert ('Initial sync requested' if running else 'sync when Herdr starts') in capsys.readouterr().out
 
 
@@ -245,3 +269,85 @@ def test_setup_skips_missing_herdr_only_when_it_is_not_explicitly_selected(selec
     monkeypatch.setattr(herdr, 'executable_path', lambda: None)
     assert cli.sidepulse_main(['setup', *selection, '--no-sd-eject-guard', '--no-status-bar']) == exit_code
     assert setup_service == ['service']
+
+
+def test_monitors_only_enabled_remote_machines_and_preserves_disconnect(monkeypatch):
+    import json
+    import subprocess
+
+    from sidepulse import herdr_remote
+    from sidepulse.session_actions import default_session_open_target
+
+    machines = [
+        {"id": "a", "label": "Machine A", "enabled": True},
+        {"id": "b", "label": "Machine B", "enabled": True},
+        {"id": "off", "label": "Disabled", "enabled": False},
+    ]
+    reports = {
+        "a": {"terminal_id": "pane", "agent": "claude", "agent_status": "working",
+              "agent_session": {"kind": "id", "value": "session"}},
+        "b": {"terminal_id": "pane", "agent": "claude", "agent_status": "idle",
+              "agent_session": {"kind": "id", "value": "session"}},
+    }
+    plugin = {"enabled": True}
+    calls = []
+    unreachable = set()
+    now = [100.]
+
+    def cli(executable, *args, timeout, stdin):
+        assert stdin == subprocess.DEVNULL
+        if args == ("machine", "list", "--json"):
+            return json.dumps(machines)
+        flag, machine, *command = args
+        assert flag == "--machine" and command == ["agent", "list"] and machine != "off"
+        calls.append(machine)
+        if machine in unreachable:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return json.dumps({"result": {"agents": [reports[machine]] if machine in reports else []}})
+
+    monkeypatch.setattr(herdr_remote, "_cli", cli)
+    monkeypatch.setattr(herdr_remote, "_registration", lambda _: plugin)
+    monkeypatch.setattr(herdr_remote, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    state = ProgramState(publisher="test")
+    monitor = herdr_remote.RemoteHerdrMonitor("herdr", threading.Event(), state.submit)
+
+    monitor.poll()
+    assert calls == ["a", "b"]
+    active = {row.origin: row for row in state.statuses()}
+    assert set(active) == {"Herdr · Machine A", "Herdr · Machine B"}
+    assert active["Herdr · Machine A"].mode.value == "working"
+    assert active["Herdr · Machine A"].agent_id != active["Herdr · Machine B"].agent_id
+    assert default_session_open_target(active["Herdr · Machine A"]) is None
+
+    previous = state.pending_events("phone")
+    monitor.poll()
+    assert state.pending_events("phone") == previous
+
+    # Idle should still gain the disconnected label, and working must stop driving output.
+    unreachable.update(("a", "b"))
+    monitor.poll()
+    assert {(row.origin, row.mode.value) for row in state.statuses()} == {
+        ("Herdr · Machine A · Disconnected", "idle_ready"),
+        ("Herdr · Machine B · Disconnected", "idle_ready"),
+    }
+    assert len(state.statuses(include_closed=True)) == 2
+    previous_calls = list(calls)
+    monitor.poll()
+    assert calls == previous_calls
+
+    unreachable.clear()
+    now[0] += herdr_remote.RETRY_SECONDS
+    monitor.poll()
+    assert {(row.origin, row.mode.value) for row in state.statuses()} == {
+        ("Herdr · Machine A", "working"),
+        ("Herdr · Machine B", "idle_ready"),
+    }
+
+    del reports["a"]
+    monitor.poll()
+    assert [row.origin for row in state.statuses()] == ["Herdr · Machine B"]
+    assert len(state.statuses(include_closed=True)) == 2
+
+    plugin["enabled"] = False
+    monitor.poll()
+    assert not state.statuses()

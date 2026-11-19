@@ -12,6 +12,22 @@ def clean_text(value: str, limit: int) -> str:
     return value.encode('utf-8', errors='replace')[:limit].decode('utf-8', errors='ignore')
 
 
+def question_text(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    questions = payload.get('questions')
+    if not isinstance(questions, list):
+        return None
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        for field in ('question', 'title', 'header'):
+            value = question.get(field)
+            if isinstance(value, str) and value.strip():
+                return clean_text(' '.join(value.split()), MAX_OUTBOUND_MESSAGE_BYTES)
+    return None
+
+
 def provider_report(provider: str, scope: str, status: dict, context: dict) -> dict:
     """Encode provider status and presentation metadata for the shared daemon."""
     status = {**status, 'app': 'claude-code' if provider == 'claude' else provider}
@@ -65,8 +81,11 @@ def hook_report(provider: str, line: dict) -> dict | None:
         status['id'] = wait_id(record)
     if status['state'] == 'blocked':
         status['kind'] = 'permission' if 'permission' in record.event_name.lower() else 'question'
-    if interpreted.message:
-        status['msg'] = clean_text(interpreted.message, MAX_OUTBOUND_MESSAGE_BYTES)
+    message = interpreted.message
+    if mode == 'waiting_for_input':
+        message = question_text(record.raw.get('tool_input')) or message
+    if message:
+        status['msg'] = clean_text(message, MAX_OUTBOUND_MESSAGE_BYTES)
     # Presentation metadata travels as JSON context outside the OSC status fields.
     context = {
         'session_id': record.session_id, 'agent_id': record.agent_id,

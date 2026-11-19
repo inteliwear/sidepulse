@@ -309,10 +309,11 @@ print(settings)
 
     def test_piped_setup_confirms_toggled_components_before_installing(self):
         status, output = self.run_piped_setup_in_terminal(
-            b'\x1b[A', b'\x1b[A', b'\x1b[A', b' ', b'\x1bOB', b'\x1b[B', b'\x1b[B', b'\x1b[B', b' ',  # Junie and SD eject prevention.
+            b'\x1b[A', b'\x1b[A', b'\x1b[A', b'\x1b[A', b' ',  # Junie.
+            b'\x1bOB', b'\x1b[B', b'\x1b[B', b'\x1b[B', b'\x1b[B', b' ',  # SD eject prevention.
             b'\r\x1b[B', b' ',  # Enter on a checkbox does not install. Skip the status-bar indicator.
             b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ',  # Claude Code and Grok.
-            b'\x1b[B', b' ', b' ', b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b'\r',  # Recheck Cursor, skip both plugins.
+            b'\x1b[B', b' ', b' ', b'\x1b[B', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b'\r',  # Recheck Cursor, skip both plugins and T3 Code.
             install_keys=b'\x1b[C',
         )
         self.assertEqual(status, 0, output)
@@ -333,11 +334,11 @@ print(settings)
             '[x] Junie',
             '[x] OpenCode',
             '[x] Herdr',
-            'T3 Code (automatic)',
+            '[x] T3 Code',
             '> Install',
         ])
         for component in (
-            'SD card ejection prevention', 'Claude Code', 'Grok', 'Junie', 'OpenCode', 'Herdr', 'Status-bar indicator',
+            'SD card ejection prevention', 'Claude Code', 'Grok', 'Junie', 'OpenCode', 'Herdr', 'T3 Code', 'Status-bar indicator',
         ):
             self.assertIn(f'> [ ] {component}', output)
         self.assertEqual(output.count('SidePulse\r\n'), 1)
@@ -347,7 +348,7 @@ print(settings)
 
     def test_piped_linux_setup_can_skip_all_agents(self):
         status, output = self.run_piped_setup_in_terminal(
-            b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b'\r',
+            b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b' ', b'\x1b[B', b'\r',
             platform='Linux',
         )
         self.assertEqual(status, 0, output)

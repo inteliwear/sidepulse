@@ -15,7 +15,9 @@ class ProgramMonitor:
 
         now = datetime.now(timezone.utc)
         timeout = load_settings().session_timeout_seconds
-        rows = self.store.statuses(inactive_before_ms=(now.timestamp() - timeout) * 1000)
+        rows = self.store.statuses(
+            inactive_before_ms=(now.timestamp() - timeout) * 1000, include_closed=True,
+        )
         statuses = []
         stale = []
         has_active = any(status_counts_active(row) for row in rows)
@@ -24,7 +26,7 @@ class ProgramMonitor:
                 statuses.append(row)
                 continue
             age = row.age_seconds(now)
-            if not has_active and age <= COMPLETED_VISIBLE_SECONDS:
+            if not row.stale and not has_active and age <= COMPLETED_VISIBLE_SECONDS:
                 statuses.append(row)
             elif age <= timeout:
                 stale.append(replace(row, stale=True))

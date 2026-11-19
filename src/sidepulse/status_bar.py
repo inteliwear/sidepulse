@@ -114,6 +114,7 @@ from .herdr import (
     executable_path as herdr_executable_path,
 )
 from .install import (
+    configure_t3code_monitoring,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -149,7 +150,7 @@ from .lid_sleep import (
 )
 from .agent_terminal import AgentTerminal, claude_session_terminal, junie_session_terminal
 from .junie_index import junie_session_info
-from .models import AgentMode, AgentStatus, MODE_LABELS, provider_label
+from .models import AgentMode, AgentStatus, MODE_LABELS, REMOTE_HERDR_ORIGIN, provider_label
 from .providers import (
     ProviderConfig,
     detect_claude_config,
@@ -182,6 +183,7 @@ from .session_actions import (
     session_open_origin,
     session_open_target,
 )
+from .text_utils import truncate_text
 from .settings import (
     ANIMATION_STATE_LID_CLOSED,
     ANIMATION_STATE_LID_OPEN,
@@ -251,6 +253,7 @@ from .settings import (
     save_settings,
     with_imported_agent_animation_profile,
 )
+from .program_status import RECENT_SESSION_LIMIT, SESSION_CLOSED_EVENT
 from .status_bar_launch import install_launch_agent, launch_agent_installed
 from .status_icon import NativeStatusIconRenderer
 
@@ -387,7 +390,6 @@ STATUS_BAR_KEEPALIVE_VOLUME_NAMES = (
 STATUS_BAR_REFRESH_SECONDS = 2.0
 STATUS_HISTORY_SAMPLE_SECONDS = 15.0
 STATUS_BAR_DEVICE_POLL_SECONDS = 2.0
-STATUS_BAR_SESSION_HISTORY_LIMIT = 10
 SIDEPULSE_NOTCH_FEATURE_ENABLED = True
 STATUS_BAR_MAX_LINES_PER_SOURCE = 500
 SETTINGS_WINDOW_WIDTH = 680
@@ -901,6 +903,18 @@ class StatusBarController(NSObject):
         self.refresh_settings_window()
 
     @objc.IBAction
+    def setHideSessionsOnExit_(self, sender):
+        settings = self.settings.with_hide_sessions_on_exit(checkbox_is_on(sender))
+        try:
+            save_settings(settings)
+        except OSError as exc:
+            self.set_settings_message(f"Could not save the session exit setting: {exc}")
+            set_checkbox_state(sender, self.settings.hide_sessions_on_exit)
+            return
+        self.settings = settings
+        self.refresh_(None)
+
+    @objc.IBAction
     def openSetup_(self, _sender):
         self.show_setup_window()
 
@@ -971,6 +985,24 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def uninstallHerdrPlugin_(self, _sender):
         self.update_herdr_plugin(uninstall=True)
+
+    @objc.IBAction
+    def installT3CodeMonitoring_(self, _sender):
+        self.update_t3code_monitoring(True)
+
+    @objc.IBAction
+    def uninstallT3CodeMonitoring_(self, _sender):
+        self.update_t3code_monitoring(False)
+
+    def update_t3code_monitoring(self, enabled: bool) -> None:
+        try:
+            configure_t3code_monitoring(enabled)
+            self.settings = load_settings()
+            message = f"T3 Code monitoring {'enabled' if enabled else 'disabled'}."
+        except OSError as exc:
+            message = f"Could not update T3 Code monitoring: {exc}"
+        self.set_settings_message(message)
+        self.refresh_settings_window()
 
     def update_herdr_plugin(self, *, uninstall: bool) -> None:
         try:
@@ -1466,6 +1498,7 @@ class StatusBarController(NSObject):
         herdr = detect_herdr_config()
         set_field_value(self.setup_fields.get("herdr_status"), hook_status_text(herdr))
         self.set_setup_checkbox("herdr", herdr_available, enabled=herdr_available and not herdr.hooks_enabled)
+        self.set_setup_checkbox("t3code", True, enabled=not self.settings.t3code_enabled)
         eject_uninstall = self.setup_buttons.get("eject_guard_uninstall")
         if eject_uninstall is not None:
             eject_uninstall.setEnabled_(eject_installed)
@@ -1483,7 +1516,7 @@ class StatusBarController(NSObject):
         runtime = getattr(self.monitor, "runtime", {}) if runtime is None else runtime
         status = runtime.get("t3code")
         if status is None:
-            status = monitoring_status()
+            status = monitoring_status(enabled=self.settings.t3code_enabled)
         label = monitoring_status_label(status)
         set_field_value(setup_status, label)
         set_field_value(agents_status, label)
@@ -1493,8 +1526,10 @@ class StatusBarController(NSObject):
             directory = status["log_directory"]
             set_field_value(log_path, f"Provider logs: {directory}")
             log_path.setToolTip_(directory)
-        links = "available" if status["thread_links_available"] else "waiting for environment ID"
-        set_field_value(self.settings_fields.get("t3code_links"), f"Thread links: {links}")
+        links = ""
+        if status.get("files_read") is not None:
+            links = "Thread links: available" if status["thread_links_available"] else "Thread links: waiting for environment ID"
+        set_field_value(self.settings_fields.get("t3code_links"), links)
 
     def set_setup_checkbox(self, key: str, checked: bool, *, enabled: bool) -> None:
         button = self.setup_buttons.get(key)
@@ -1536,6 +1571,14 @@ class StatusBarController(NSObject):
                 messages.append(configure_herdr_plugin())
             except Exception as exc:
                 errors.append(f"Herdr plugin setup failed: {exc}")
+
+        if checkbox_is_on(self.setup_buttons.get("t3code")) and not self.settings.t3code_enabled:
+            try:
+                configure_t3code_monitoring(True)
+                self.settings = load_settings()
+                messages.append("T3 Code monitoring enabled.")
+            except OSError as exc:
+                errors.append(f"T3 Code monitoring setup failed: {exc}")
 
         if errors:
             set_field_value(self.setup_fields.get("message"), "  ".join(errors))
@@ -1598,6 +1641,10 @@ class StatusBarController(NSObject):
         set_checkbox_state(
             self.settings_buttons.get("show_menu_bar_icon"),
             self.settings.show_menu_bar_icon,
+        )
+
+        set_checkbox_state(
+            self.settings_buttons.get("hide_sessions_on_exit"), self.settings.hide_sessions_on_exit,
         )
 
         codex = detect_codex_config()
@@ -3045,12 +3092,14 @@ def build_menu(snapshot, state: StatusBarState, target: StatusBarController) -> 
     add_app_info(menu, target)
     menu.addItem_(NSMenuItem.separatorItem())
 
-    menu.addItem_(disabled_menu_item("Agents"))
-
-    statuses = recent_statuses(snapshot, target.settings)
-    if not statuses:
-        menu.addItem_(disabled_menu_item("No recent sessions"))
-    else:
+    sections = [("Agents", recent_statuses(snapshot, target.settings))]
+    remote = recent_statuses(snapshot, target.settings, remote_herdr=True)
+    if remote:
+        sections.append(("Remote Herdr", remote))
+    for title, statuses in sections:
+        menu.addItem_(disabled_menu_item(title))
+        if not statuses:
+            menu.addItem_(disabled_menu_item("No recent sessions"))
         collision_keys = session_title_collision_keys(statuses)
         for status in statuses:
             session_item = build_session_menu_item(
@@ -3359,7 +3408,7 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
     add_label(content, "Show Herdr agent activity in SidePulse.", 56, 90, 320, 20)
     herdr_status = add_label(content, "", 398, 112, 190, 22)
 
-    add_label(content, "T3 Code", 32, 58, 110, 22)
+    t3code = add_checkbox(content, "T3 Code", 32, 58, 168, 24, target, "")
     t3code_status = add_label(content, "", 211, 58, 379, 22)
     message = add_label(content, "", 24, 36, width - 48, 20)
 
@@ -3380,6 +3429,7 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "eject_guard_uninstall": eject_uninstall,
         "sleep_helper": sleep_helper,
         "herdr": herdr,
+        "t3code": t3code,
     }
     return window
 
@@ -4168,12 +4218,15 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         y: int,
         install_selector: str,
         uninstall_selector: str,
+        *,
+        install_title: str = "Install",
+        uninstall_title: str = "Uninstall",
     ):
         add_label(agents_tab, title, label_x, y, 80, 22)
         status = add_label(agents_tab, "", value_x, y, value_width, 22)
         add_button(
             agents_tab,
-            "Install",
+            install_title,
             primary_action_x,
             y - 4,
             90,
@@ -4183,7 +4236,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         )
         add_button(
             agents_tab,
-            "Uninstall",
+            uninstall_title,
             secondary_action_x,
             y - 4,
             100,
@@ -4217,8 +4270,10 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "Herdr", 314, "installHerdrPlugin:", "uninstallHerdrPlugin:"
     )
 
-    add_label(agents_tab, "T3 Code", label_x, 288, 90, 22)
-    t3code_status = add_label(agents_tab, "", value_x, 288, tab_width - value_x - 24, 22)
+    t3code_status = add_hook_row(
+        "T3 Code", 288, "installT3CodeMonitoring:", "uninstallT3CodeMonitoring:",
+        install_title="Enable", uninstall_title="Disable",
+    )
 
     add_separator(agents_tab, section_x, 274, tab_width - 48)
     add_label(agents_tab, "Session Opening", section_x, 248, 240, 24)
@@ -4411,6 +4466,10 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     add_label(behavior_tab, "minutes without an update", 268, 356, 220, 22)
     add_label(behavior_tab, "Applies to finished sessions and built-in agents that stop reporting.",
               32, 323, 530, 22)
+    hide_sessions_on_exit = add_checkbox(
+        behavior_tab, "Hide sessions when the agent exits", 32, 290, 340, 24,
+        target, "setHideSessionsOnExit:",
+    )
     add_separator(behavior_tab, 24, 272, tab_width - 48)
     add_label(behavior_tab, "Sleep Prevention", 24, 238, 240, 24)
     add_label(behavior_tab, "Let Mac sleep on battery below", 32, 196, 210, 22)
@@ -4533,6 +4592,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
     }
     target.settings_buttons = {
         "show_menu_bar_icon": show_menu_bar_icon,
+        "hide_sessions_on_exit": hide_sessions_on_exit,
         "codex_transcripts": codex_transcripts,
         "claude_transcripts": claude_transcripts,
         "battery_power_preview": battery_power_preview,
@@ -5447,11 +5507,16 @@ def build_session_menu_item(
 ) -> NSMenuItem:
     item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         native_session_menu_title(status, disambiguate=disambiguate_title),
-        "openSessionPrimary:",
+        None if status.is_remote_herdr else "openSessionPrimary:",
         "",
     )
     item.setTarget_(target)
     item.setRepresentedObject_(status)
+    if status.mode == AgentMode.WAITING_FOR_INPUT and status.message:
+        title, _ = session_title_parts(status)
+        item.setToolTip_(f"{title}\n{status.message}")
+    elif status.is_remote_herdr:
+        item.setToolTip_("Open this session in Herdr.")
     image = session_row_icon_for_status(status)
     if image is not None:
         item.setImage_(image)
@@ -5460,9 +5525,13 @@ def build_session_menu_item(
 
 def native_session_menu_title(status: AgentStatus, *, disambiguate: bool = False) -> str:
     title, project = session_title_parts(status)
+    if status.mode == AgentMode.WAITING_FOR_INPUT and status.message:
+        title = truncate_text(" ".join(status.message.split()), 120)
     if disambiguate and status.session_id:
         title = f"{title} ({status.session_id[:8]})"
     parts = [title]
+    if status.is_remote_herdr:
+        parts.insert(0, status.origin.removeprefix(REMOTE_HERDR_ORIGIN))
     if project:
         parts.append(project)
     return "  ".join(parts)
@@ -5904,9 +5973,12 @@ def recent_statuses(
     snapshot,
     settings=None,
     *,
-    limit: int = STATUS_BAR_SESSION_HISTORY_LIMIT,
+    limit: int = RECENT_SESSION_LIMIT,
+    remote_herdr: bool = False,
 ) -> list[AgentStatus]:
-    statuses = coalesced_menu_statuses(menu_statuses(snapshot, settings))
+    statuses = coalesced_menu_statuses(
+        row for row in menu_statuses(snapshot, settings) if row.is_remote_herdr == remote_herdr
+    )
     statuses.sort(key=lambda status: (status.priority, -status.updated_at.timestamp()))
     return statuses[:limit]
 
@@ -5928,6 +6000,8 @@ def menu_statuses(snapshot, settings=None) -> tuple[AgentStatus, ...]:
         if status.mode == AgentMode.COMPLETED
         and status.age_seconds(now) <= retention_seconds
     )
+    if settings is not None and settings.hide_sessions_on_exit:
+        statuses = [status for status in statuses if status.event_name not in {"SessionEnd", SESSION_CLOSED_EVENT}]
     return tuple(statuses)
 
 
@@ -5965,6 +6039,8 @@ def coalesce_statuses_by_key(statuses, key_fn) -> list[AgentStatus]:
 
 
 def menu_session_coalesce_key(status: AgentStatus) -> tuple[str, ...] | None:
+    if status.is_remote_herdr and status.session_link:
+        return ("remote_herdr", status.session_link)
     if not status.session_id:
         return None
     return ("session", status.provider.lower(), status.session_id)
@@ -6016,7 +6092,7 @@ def session_title_parts(status: AgentStatus) -> tuple[str, str | None]:
     title = strip_session_short_id(status.display_name, status.session_id)
     if project and title.startswith(f"{project}: "):
         title = title[len(project) + 2 :]
-    elif ": " in title:
+    elif ": " in title and not (status.t3_link or is_t3_origin(status.origin)):
         maybe_project, maybe_title = title.split(": ", 1)
         if not project:
             project = maybe_project

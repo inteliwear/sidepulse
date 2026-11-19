@@ -326,6 +326,8 @@ class AgentMonitorSettings:
     session_terminal_app: str = TERMINAL_APP_TERMINAL
     custom_terminal_path: str = ""
     session_timeout_seconds: float = DEFAULT_SESSION_TIMEOUT_SECONDS
+    hide_sessions_on_exit: bool = False
+    t3code_enabled: bool = False
     sleep_prevention_min_battery_percent: float = DEFAULT_SLEEP_PREVENTION_MIN_BATTERY_PERCENT
     history_timeframe_seconds: float = DEFAULT_HISTORY_TIMEFRAME_SECONDS
     setup_screen_completed: bool = False
@@ -338,6 +340,9 @@ class AgentMonitorSettings:
         if provider == "claude":
             return self.claude_transcripts_enabled
         return False
+
+    def with_t3code_monitoring(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, t3code_enabled=enabled)
 
     def with_transcript_provider(self, provider: str, enabled: bool) -> "AgentMonitorSettings":
         if provider == "codex":
@@ -784,6 +789,9 @@ class AgentMonitorSettings:
     def with_virtual_status_device(self, enabled: bool) -> "AgentMonitorSettings":
         return replace(self, virtual_status_device_enabled=bool(enabled))
 
+    def with_hide_sessions_on_exit(self, enabled: bool) -> "AgentMonitorSettings":
+        return replace(self, hide_sessions_on_exit=enabled)
+
     def with_session_timeout(self, seconds: float) -> "AgentMonitorSettings":
         return replace(self, session_timeout_seconds=normalize_seconds_setting(seconds))
 
@@ -800,6 +808,7 @@ class AgentMonitorSettings:
         return {
             "led_display": self.led_display,
             "show_menu_bar_icon": self.show_menu_bar_icon,
+            "t3code_enabled": self.t3code_enabled,
             "phone_session_sync": dict(sorted(self.phone_session_sync.items())),
             "devices": [device.to_dict() for device in self.devices],
             "sleep_prevention_policy": self.sleep_prevention_policy,
@@ -824,6 +833,7 @@ class AgentMonitorSettings:
             },
             "agent_list": {
                 "session_timeout_seconds": self.session_timeout_seconds,
+                "hide_sessions_on_exit": self.hide_sessions_on_exit,
             },
             "sleep_prevention": {
                 "min_battery_percent": self.sleep_prevention_min_battery_percent,
@@ -998,6 +1008,8 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         session_terminal_app=normalize_terminal_app(terminal.get("app")),
         custom_terminal_path=_string_setting(terminal.get("custom_path")),
         session_timeout_seconds=session_timeout,
+        hide_sessions_on_exit=_bool_setting(agent_list.get("hide_sessions_on_exit"), False),
+        t3code_enabled=_bool_setting(data.get("t3code_enabled"), False),
         sleep_prevention_min_battery_percent=normalize_percent_setting(
             sleep_prevention.get(
                 "min_battery_percent",

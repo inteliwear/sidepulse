@@ -230,6 +230,23 @@ class OpenCodePluginTests(unittest.TestCase):
             ("working", None, None), ("idle", None, None), ("clear", None, None), ("clear", None, None),
         ])
 
+    def test_shutdown_retains_recent_history_until_explicit_deletion(self) -> None:
+        from sidepulse.program_status import ProgramState
+
+        reports, _ = run_plugin(self.sessions, [
+            event("start", "session.execution.started", sessionID="ses_a"),
+            event("shutdown", "session.execution.interrupted", sessionID="ses_a", reason="shutdown"),
+            event("delete", "session.deleted", sessionID="ses_a"),
+        ])
+        state = ProgramState(publisher="opencode-exit")
+        for report in reports[:2]:
+            state.submit(report)
+        row, = state.statuses(include_closed=True)
+        self.assertEqual((row.session_id, row.mode, row.stale), ("ses_a", AgentMode.COMPLETED, True))
+        self.assertEqual(state.pending_events("phone")[-1][1]["status"]["state"], "clear")
+        state.submit(reports[-1])
+        self.assertFalse(state.statuses(include_closed=True))
+
     def test_subagent_prompts_block_the_parent_until_every_prompt_is_answered(self) -> None:
         self.assertEqual(self.states([
             event("e1", "session.execution.started", sessionID="ses_a"),

@@ -152,7 +152,10 @@ function createSidePulse(
       if (waiting.msg) status.msg = waiting.msg
     }
     if (entry.title && entry.state !== "clear") status.title = statusTitle(entry.title)
-    const context: Record<string, string> = { provider: "opencode", session_id: rootID, event_name: event.type }
+    const eventName = entry.state === "clear" && event.type === "session.execution.interrupted"
+      ? "SessionClosed"
+      : event.type
+    const context: Record<string, string> = { provider: "opencode", session_id: rootID, event_name: eventName }
     if (entry.cwd) context.cwd = entry.cwd
     if (entry.title) {
       context.title = statusTitle(entry.title)

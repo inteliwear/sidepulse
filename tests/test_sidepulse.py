@@ -61,6 +61,7 @@ from sidepulse.device_writer import (
 from sidepulse.hook import format_hook_payload, routed_hook_payload, write_hook_payload
 from sidepulse.ipc import UICommandServer, request_settings_window
 from sidepulse.install import (
+    InstallResult,
     hook_command,
     install_claude_hooks,
     install_codex_hooks,
@@ -3930,6 +3931,10 @@ class AgentMonitorTests(unittest.TestCase):
                 "install_opencode_plugin",
                 return_value=opencode_result,
             ) as opencode,
+            patch.object(
+                cli_module, "configure_t3code_monitoring",
+                return_value=InstallResult("t3code", Path("/tmp/settings.json"), None, True),
+            ) as t3code,
             patch(
                 "sidepulse.sd_eject_guard_launch.install_sd_eject_guard",
                 return_value=guard_result,
@@ -3948,6 +3953,7 @@ class AgentMonitorTests(unittest.TestCase):
         grok.assert_called_once()
         junie.assert_called_once()
         opencode.assert_called_once_with(dry_run=False)
+        t3code.assert_called_once_with(True, dry_run=False)
         herdr.assert_called_once_with(uninstall=False, dry_run=False)
         guard.assert_called_once_with(scope="auto", dry_run=False)
         launch.assert_called_once_with(start=True)
@@ -5618,7 +5624,11 @@ class AgentMonitorTests(unittest.TestCase):
 
             self.assertEqual(load_settings(settings_path).session_timeout_seconds, 15 * 60)
             self.assertEqual(json.loads(settings_path.read_text())["agent_list"],
-                             {"session_timeout_seconds": 15 * 60})
+                             {"session_timeout_seconds": 15 * 60, "hide_sessions_on_exit": False})
+
+            self.assertFalse(load_settings(settings_path).hide_sessions_on_exit)
+            save_settings(settings.with_hide_sessions_on_exit(True), settings_path)
+            self.assertTrue(load_settings(settings_path).hide_sessions_on_exit)
 
     def test_settings_migrate_legacy_session_timeouts(self) -> None:
         cases = (

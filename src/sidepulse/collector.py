@@ -1716,14 +1716,15 @@ def display_name_from_parts(
     short_id: str,
     fallback: str,
 ) -> str:
+    suffix = f" ({short_id})" if short_id else ""
     if project and title:
         if normalized_name_part(project) == normalized_name_part(title):
-            return truncate_text(f"{title} ({short_id})", 96)
-        return truncate_text(f"{project}: {title} ({short_id})", 96)
+            return truncate_text(f"{title}{suffix}", 96)
+        return truncate_text(f"{project}: {title}{suffix}", 96)
     if title:
-        return truncate_text(f"{title} ({short_id})", 96)
+        return truncate_text(f"{title}{suffix}", 96)
     if project:
-        return truncate_text(f"{project} ({short_id})", 96)
+        return truncate_text(f"{project}{suffix}", 96)
     return fallback
 
 

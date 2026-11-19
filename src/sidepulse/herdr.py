@@ -8,9 +8,12 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import time
 
 from .program_adapter import clean_text
-from .program_status import CONTEXT_LIMITS, HERDR_EVENT, SEGMENT, StatusError, session_link_identity, text
+from .program_status import (
+    CONTEXT_LIMITS, HERDR_EVENT, SEGMENT, SESSION_CLOSED_EVENT, StatusError, session_link_identity, text,
+)
 from .program_transport import daemon_command, submit_status
 from .providers import ProviderConfig
 
@@ -87,6 +90,8 @@ def _reconcile(endpoint: str) -> None:
     rows = view['snapshot']['statuses'] + view['snapshot']['stale_statuses']
     existing = {}
     for row in rows:
+        if row.get('event_name') == SESSION_CLOSED_EVENT:
+            continue
         identity = session_link_identity(row)
         if identity and identity[0] == view['publisher'] and identity[1].startswith(prefix):
             existing[identity[1]] = row
@@ -107,7 +112,8 @@ def _reconcile(endpoint: str) -> None:
             continue
         # If a direct report arrived after get_state, leave it for the next sync.
         submit_status({'v': 1, 'type': 'program_status', 'scope': scope,
-                       'seq': row['seq'] + 1, 'status': {'state': 'clear'}})
+                       'seq': row['seq'] + 1, 'status': {'state': 'clear'},
+                       'context': {'event_name': SESSION_CLOSED_EVENT}})
     for scope, agent in agents.items():
         if agent.get('agent_status') in STATES:
             submit_status(_agent_report(scope, agent))
@@ -125,8 +131,12 @@ def sync() -> None:
         _reconcile(endpoint)
 
 
-def _cli(executable: str, *args: str, env: dict | None = None, timeout: float = 10) -> str:
-    result = subprocess.run([executable, *args], capture_output=True, text=True, timeout=timeout, env=env)
+def _cli(
+    executable: str, *args: str, env: dict | None = None, timeout: float = 10, stdin: int | None = None,
+) -> str:
+    result = subprocess.run(
+        [executable, *args], stdin=stdin, capture_output=True, text=True, timeout=timeout, env=env,
+    )
     if result.returncode:
         raise StatusError(result.stderr.strip() or result.stdout.strip() or f'Herdr exited with {result.returncode}')
     return result.stdout
@@ -184,6 +194,15 @@ def configure_plugin(*, uninstall: bool = False, dry_run: bool = False) -> str:
     status = json.loads(_cli(executable, 'status', 'server', '--json'))
     if status.get('running'):
         try:
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    daemon_command({'type': 'get_state'})
+                    break
+                except StatusError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.1)
             _cli(executable, 'plugin', 'action', 'invoke', PLUGIN_ID + '.sync')
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise StatusError(f'Plugin installed. Could not sync the current Herdr session. {exc}') from exc

@@ -159,6 +159,8 @@ def session_open_target(
     status: AgentStatus,
     action: str,
 ) -> SessionOpenTarget | None:
+    if status.is_remote_herdr:
+        return None
     if action == SESSION_OPEN_T3:
         link = valid_t3_link(status.t3_link)
         return ("url", link) if link else None

@@ -29,11 +29,11 @@ class SidePulseService:
         from .program_status import ProgramState
         from .program_transport import ProgramServer, ProgramRelay
         from .program_presentation import ProgramMonitor
-        from .t3code import T3CodeSource
+        from .t3_scanner import T3Scanner
         self.program_state = ProgramState()
         self.program_server = ProgramServer(self.program_state, on_command=self.handle_command)
         self.monitor = ProgramMonitor(self.program_state)
-        self.t3code = T3CodeSource(self.program_state)
+        self.t3code = T3Scanner(self.program_state, self.program_server.path)
         self.program_relay = ProgramRelay(self.program_state)
         self.receiver_stop: threading.Event | None = None
         self.receiver_thread: threading.Thread | None = None
@@ -67,6 +67,11 @@ class SidePulseService:
             if self.stop_event.is_set():
                 return 0
             self.program_relay.start()
+            from .herdr_remote import monitor_remote_herdr
+            threading.Thread(
+                target=monitor_remote_herdr, args=(self.stop_event, self.program_state.submit),
+                daemon=True, name="SidePulse Herdr",
+            ).start()
             while not self.stop_event.is_set():
                 if not self.program_server.running:
                     self.program_server.stop()
@@ -81,16 +86,18 @@ class SidePulseService:
                 except Exception as exc:
                     print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)
                 try:
-                    self.t3code.poll()
+                    self.t3code.sync(load_settings().t3code_enabled)
                 except OSError as exc:
-                    print(f"sidepulse service: T3 Code log update failed: {exc}", file=sys.stderr)
+                    print(f"sidepulse service: T3 Code scanner failed: {exc}", file=sys.stderr)
                 try:
                     self.sync_outputs()
                 except Exception as exc:
                     print(f"sidepulse service: output update failed: {exc}", file=sys.stderr)
                 self.stop_event.wait(self.poll_seconds)
         finally:
+            self.stop_event.set()
             try:
+                self.t3code.close()
                 self.stop_receiver()
                 self.program_server.stop()
                 self.program_relay.stop()
@@ -257,6 +264,9 @@ class SidePulseService:
                 raise StatusError('Invalid output control duration')
             return value
         kind = command.get('type')
+        from .t3_scanner import COMMANDS
+        if kind in COMMANDS:
+            return self.t3code.handle_command(command)
         if kind == 'service_stop':
             self.stop()
             return {'ok': True}

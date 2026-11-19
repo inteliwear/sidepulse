@@ -351,6 +351,19 @@ def uninstall_junie_hooks(
     return InstallResult("junie", config, target_log, changed, backup, dry_run)
 
 
+def configure_t3code_monitoring(enabled: bool, *, dry_run: bool = False) -> InstallResult:
+    from .settings import default_settings_path, load_settings, save_settings
+
+    config = default_settings_path()
+    settings = load_settings(config)
+    changed = settings.t3code_enabled != enabled
+    if changed and not dry_run:
+        save_settings(settings.with_t3code_monitoring(enabled), config)
+    action = "enable" if enabled else "disable"
+    note = f"would {action}" if dry_run and changed else f"{action}d"
+    return InstallResult("t3code", config, None, changed, dry_run=dry_run, note=note)
+
+
 def opencode_plugin_source() -> str:
     from importlib.resources import files
 

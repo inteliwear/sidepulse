@@ -496,6 +496,12 @@ from their Herdr panes. Herdr, SidePulse agent hooks, and `sidepulse wrap`
 share one SidePulse session per pane. Direct agent hooks take precedence when
 both report the same agent.
 
+SidePulse also reads agent status from enabled saved machines in Herdr's
+sidebar. The SidePulse menu shows these sessions under **Remote Herdr**, with
+their machine name. If a machine becomes
+unreachable, its last known sessions show **Disconnected** until it
+reconnects. Use Herdr to open those sessions.
+
 Use `herdr plugin log list --plugin sidepulse.status` to check plugin errors.
 Use `sidepulse setup herdr --uninstall` to remove it.
 
@@ -885,10 +891,12 @@ row to open that agent using the remembered choice for that provider. Use the
 session's Open Options row to choose and remember another opener, such as the
 provider app, Terminal resume, or Claude Code in VS Code.
 
-SidePulse reads recent T3 Code provider logs for activity even when the
-underlying agent has no SidePulse hooks installed. Provider hooks and T3 events
+Enable T3 Code in Settings → Agents or run `sidepulse setup t3code`. To stop
+monitoring its provider logs, click Disable or run `sidepulse setup t3code --uninstall`.
+A separate process reads recent provider logs and reports status to the
+SidePulse background service, even without native SidePulse hooks. Provider hooks and T3 events
 share a session when SidePulse can match the provider's native session ID or
-the T3 thread link. Agents and Setup show T3 Code's automatic monitoring.
+the T3 thread link. Agents and Setup show T3 Code's monitoring status.
 Use Settings → Diagnostics or `sidepulse doctor` to see the provider log
 directory, whether SidePulse has read recent events, and whether the T3
 environment ID is available. For a custom T3 data directory, set `T3CODE_HOME`
