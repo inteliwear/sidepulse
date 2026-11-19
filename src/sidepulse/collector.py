@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -29,6 +32,7 @@ CODEX_TRANSCRIPT_PROVIDER = "codex-transcripts"
 CLAUDE_TRANSCRIPT_PROVIDER = "claude-transcripts"
 CODEX_TRANSCRIPT_MAX_FILES = 12
 CODEX_TRANSCRIPT_MAX_LINES = 500
+CODEX_TRANSCRIPT_MAX_HEADER_BYTES = 8 * 1024 * 1024
 CLAUDE_TRANSCRIPT_MAX_FILES = 24
 CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
@@ -205,7 +209,7 @@ class AgentMonitor:
         self._suppressed_codex_sessions = {
             record.session_id
             for record in records
-            if record.session_id and is_codex_composer_prediction(record)
+            if record.session_id and is_codex_internal_session(record)
         }
 
         for record in records:
@@ -420,7 +424,7 @@ class LiveAgentMonitor:
             if record.provider == "codex" and record.session_id:
                 if record.session_id in self._suppressed_codex_sessions:
                     return
-                if is_codex_composer_prediction(record):
+                if is_codex_internal_session(record):
                     self._suppressed_codex_sessions.add(record.session_id)
                     if self._discard_suppressed_statuses():
                         self.write_latest_state()
@@ -1537,10 +1541,56 @@ def is_codex_composer_prediction(record: HookEvent) -> bool:
     )
 
 
+@lru_cache(maxsize=128)
+def _codex_memory_session_id(path: Path, signature: tuple[float, int]) -> str | None:
+    # Session metadata is the first rollout row, outside the bounded activity tail.
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            header = stream.readline(CODEX_TRANSCRIPT_MAX_HEADER_BYTES + 1)
+            if len(header) > CODEX_TRANSCRIPT_MAX_HEADER_BYTES:
+                return None
+            row = json.loads(header)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(row, dict) or row.get("type") != "session_meta":
+        return None
+    payload = row.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    source = payload.get("source")
+    if isinstance(source, dict) and (
+        source.get("internal") == "memory_consolidation"
+        or source.get("subagent") == "memory_consolidation"
+    ):
+        return _string_or_none(payload.get("id"))
+    return None
+
+
+def is_codex_memory_consolidation(record: HookEvent) -> bool:
+    if record.provider != "codex" or not record.session_id:
+        return False
+    transcript_path = _string_or_none(record.raw.get("transcript_path"))
+    if not transcript_path:
+        return False
+    path = Path(transcript_path)
+    try:
+        signature = file_signature(path)
+    except ValueError:
+        return False
+    return signature is not None and _codex_memory_session_id(path, signature) == record.session_id
+
+
+def is_codex_internal_session(record: HookEvent) -> bool:
+    return is_codex_composer_prediction(record) or is_codex_memory_consolidation(record)
+
+
 def should_ignore_record(record: HookEvent, metadata: StatusMetadata) -> bool:
     if record.provider != "codex":
         return False
-    if is_codex_composer_prediction(record):
+    if is_codex_internal_session(record):
         return True
 
     raw = record.raw
