@@ -112,3 +112,21 @@ def test_invalid_input_leaves_the_permission_decision_with_antigravity(tmp_path,
     assert hook_log_main("antigravity", log, event="PreToolUse") == 0
     assert json.loads(capsys.readouterr().out) == {"decision": "allow"}
     assert not log.exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS application bundle")
+def test_chat_opener_has_a_named_stable_bundle_and_private_launch(tmp_path, monkeypatch):
+    import plistlib
+    from sidepulse import antigravity_opener as opener
+
+    app = opener.install_opener(tmp_path)
+    signature = app / "Contents/_CodeSignature/CodeResources"
+    stamp = signature.stat().st_mtime_ns
+    assert opener.install_opener(tmp_path) == app
+    assert signature.stat().st_mtime_ns == stamp
+    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    assert info["CFBundleDisplayName"] == "SidePulse Chat Opener"
+    assert info["CFBundleIdentifier"] == "io.sidepulse.chat-opener"
+    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(app)], check=True)
+    monkeypatch.setattr(opener, "install_opener", lambda: app)
+    assert opener.run_antigravity_helper("check") in {"missing", "granted"}

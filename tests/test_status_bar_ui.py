@@ -134,12 +134,10 @@ def test_antigravity_desktop_primary_action_opens_the_clicked_conversation():
     assert sender.action() == "openSessionPrimary:"
     with patch.object(sb, "antigravity_access_missing", return_value=False), \
          patch.object(sb, "confirm_antigravity_access") as offer, \
-         patch.object(sb.threading, "Thread") as thread:
+         patch.object(controller.antigravity_open_queue, "submit") as submit:
         controller.openSessionPrimary_(sender)
     offer.assert_not_called()
-    thread.assert_called_once_with(target=controller.open_antigravity_conversation,
-                                   args=(status.session_id, False), daemon=True)
-    thread.return_value.start.assert_called_once()
+    submit.assert_called_once_with(controller.open_antigravity_conversation, status.session_id, False)
     assert sb.default_session_open_target(replace(status, origin="Antigravity CLI"))[0] == "terminal"
     assert sb.default_session_open_target(replace(status, session_id=None)) is None
 
@@ -153,12 +151,12 @@ def test_antigravity_permission_choice_is_remembered_for_both_answers(tmp_path):
         with patch.object(sb, "antigravity_access_missing", return_value=True) as check, \
              patch.object(sb, "confirm_antigravity_access", return_value=review) as offer, \
              patch.object(sb, "save_settings", side_effect=lambda s: save_settings(s, path)), \
-             patch.object(sb.threading, "Thread") as thread:
+             patch.object(controller.antigravity_open_queue, "submit") as submit:
             controller.open_session(status, None, remember=False)
-            assert thread.call_args.kwargs["args"] == (status.session_id, review)
+            assert submit.call_args.args[1:] == (status.session_id, review)
             controller.settings = sb.load_settings(path)
             controller.open_session(status, None, remember=False)
-            assert thread.call_args.kwargs["args"] == (status.session_id, False)
+            assert submit.call_args.args[1:] == (status.session_id, False)
         check.assert_called_once()
         offer.assert_called_once()
 

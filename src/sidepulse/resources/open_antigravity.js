@@ -1,4 +1,4 @@
-// Run by macOS osascript. Use the app's own conversation links, which carry
+// Bundled as SidePulse Chat Opener. Use the app's own conversation links, which carry
 // the conversation ID even when a title changes or two titles are identical.
 ObjC.import("AppKit");
 ObjC.import("ApplicationServices");
@@ -56,8 +56,11 @@ function conversationInWindow(window, path) {
     return {toggle: !sidebarVisible && toggle};
 }
 
-function run(argv) {
-    const [action, sessionId] = argv;
+function openChat(action, sessionId) {
+    if (!["check", "select", "request-and-select"].includes(action)) return "";
+    if (action !== "check" && !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(sessionId)) {
+        return "This session has no valid Antigravity conversation ID.";
+    }
     const trusted = $.AXIsProcessTrusted();
     if (action === "check") return trusted ? "granted" : "missing";
     if (!trusted) {
@@ -69,7 +72,8 @@ function run(argv) {
     }
     const path = "/c/" + sessionId;
     const deadline = Date.now() + 8000;
-    let pressed = false;
+    let nextPress = 0;
+    let targetWindow = null;
     let revealed = false;
     while (Date.now() < deadline) {
         const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.google.antigravity");
@@ -84,20 +88,37 @@ function run(argv) {
                     if (match.toggle) hiddenSidebar = match.toggle;
                     continue;
                 }
-                $.AXUIElementPerformAction(window, $("AXRaise"));
-                process.activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
-                if (match.selected) return "";
-                if (!pressed) {
-                    $.AXUIElementPerformAction(match.link, $("AXPress"));
-                    pressed = true;
+                if (!targetWindow || !$.CFEqual(targetWindow, window) || !process.active) {
+                    process.activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
+                    $.AXUIElementPerformAction(window, $("AXRaise"));
+                    targetWindow = window;
+                    nextPress = Date.now() + 350;
+                    break;
                 }
+                if (match.selected) return "";
+                // Electron can acknowledge AXPress before the window is ready.
+                // Confirm the destination on the next pass and retry if necessary.
+                if (Date.now() >= nextPress) {
+                    $.AXUIElementPerformAction(match.link, $("AXScrollToVisible"));
+                    $.AXUIElementPerformAction(match.link, $("AXPress"));
+                    nextPress = Date.now() + 1000;
+                }
+                break;
             }
-            if (!pressed && !revealed && hiddenSidebar) {
+            if (!targetWindow && !revealed && hiddenSidebar) {
                 $.AXUIElementPerformAction(hiddenSidebar, $("AXPress"));
                 revealed = true;
             }
         }
         delay(0.2);
     }
-    return "Antigravity could not select this conversation. Check that it is visible in the sidebar.";
+    return "Antigravity could not select this conversation. Press ⌘K in Antigravity to find the chat.";
+}
+
+
+function run() {
+    const argv = ObjC.deepUnwrap($.NSProcessInfo.processInfo.arguments);
+    const result = openChat(argv[1], argv[2]);
+    const data = $(JSON.stringify(result)).dataUsingEncoding($.NSUTF8StringEncoding);
+    $.NSFileHandle.fileHandleWithStandardOutput.writeData(data);
 }

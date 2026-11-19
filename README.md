@@ -958,8 +958,8 @@ a one-time choice. **Review Permission…** asks macOS for access so SidePulse c
 select the matching sidebar chat. After granting access, click the session again.
 **Open App Only** remembers your choice and brings the app forward on each click.
 Use **⌘K** to find the chat. You can grant or revoke access later in System Settings
-→ Privacy & Security → Accessibility. macOS may list the launcher as Python, and the
-grant applies to other scripts using that Python installation.
+→ Privacy & Security → Accessibility under **SidePulse Chat Opener**. Choose
+**Review Chat Access…** in a desktop session’s options to revisit the choice.
 CLI sessions resume in Terminal. The SidePulse hook group appears in the
 CLI's `/hooks` view and the app and IDE's Hooks settings.
 [Antigravity hook reference](https://antigravity.google/docs/hooks)
