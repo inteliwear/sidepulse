@@ -57,10 +57,17 @@ function conversationInWindow(window, path) {
 }
 
 function run(argv) {
-    const path = "/c/" + argv[0];
-    // The caller has already opened the app. Only select a sidebar link when
-    // the launcher already has access. A menu click must never request it.
-    if (!$.AXIsProcessTrusted()) return "";
+    const [action, sessionId] = argv;
+    const trusted = $.AXIsProcessTrusted();
+    if (action === "check") return trusted ? "granted" : "missing";
+    if (!trusted) {
+        if (action === "request-and-select") {
+            // Only the explicit Review Permission button may trigger the macOS prompt.
+            $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
+        }
+        return "";
+    }
+    const path = "/c/" + sessionId;
     const deadline = Date.now() + 8000;
     let pressed = false;
     let revealed = false;

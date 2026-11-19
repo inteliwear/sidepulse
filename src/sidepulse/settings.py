@@ -333,6 +333,7 @@ class AgentMonitorSettings:
     setup_screen_completed: bool = False
     show_menu_bar_icon: bool = True
     phone_session_sync: dict[str, bool] = field(default_factory=dict)
+    antigravity_access_explained: bool = False
 
     def transcript_enabled(self, provider: str) -> bool:
         if provider == "codex":
@@ -808,6 +809,7 @@ class AgentMonitorSettings:
         return {
             "led_display": self.led_display,
             "show_menu_bar_icon": self.show_menu_bar_icon,
+            "antigravity_access_explained": self.antigravity_access_explained,
             "t3code_enabled": self.t3code_enabled,
             "phone_session_sync": dict(sorted(self.phone_session_sync.items())),
             "devices": [device.to_dict() for device in self.devices],
@@ -964,6 +966,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
     if not isinstance(phone_session_sync, dict):
         phone_session_sync = {}
     return AgentMonitorSettings(
+        antigravity_access_explained=_bool_setting(data.get("antigravity_access_explained"), False),
         show_menu_bar_icon=_bool_setting(data.get("show_menu_bar_icon"), True),
         phone_session_sync={
             key: value for key, value in phone_session_sync.items()

@@ -6,10 +6,11 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -2330,7 +2331,17 @@ class StatusBarController(NSObject):
                 session_hints=terminal_session_hints(status),
             )
         elif kind == "antigravity":
-            threading.Thread(target=self.open_antigravity_conversation, args=(value,), daemon=True).start()
+            request_access = False
+            if not self.settings.antigravity_access_explained and antigravity_access_missing():
+                request_access = confirm_antigravity_access()
+                self.settings = replace(self.settings, antigravity_access_explained=True)
+                try:
+                    save_settings(self.settings)
+                except OSError as exc:
+                    log_status_bar(f"Could not remember the Antigravity permission choice: {exc}")
+            threading.Thread(
+                target=self.open_antigravity_conversation, args=(value, request_access), daemon=True,
+            ).start()
         elif kind == "ide":
             if value.app_path:
                 subprocess.Popen(["open", "-a", value.app_path, value.project_path])
@@ -2352,18 +2363,16 @@ class StatusBarController(NSObject):
                 self.set_settings_message(f"Could not save open preference: {exc}")
                 self.settings = load_settings()
 
-    def open_antigravity_conversation(self, session_id: str) -> None:
-        script = Path(__file__).with_name("resources") / "open_antigravity.js"
+    @objc.python_method
+    def open_antigravity_conversation(self, session_id: str, request_access: bool) -> None:
         try:
             subprocess.run(
                 ["/usr/bin/open", "-b", "com.google.antigravity"], check=True,
                 capture_output=True, timeout=8,
             )
-            result = subprocess.run(
-                ["/usr/bin/osascript", "-l", "JavaScript", str(script), session_id],
-                check=True, capture_output=True, text=True, timeout=12,
+            message = run_antigravity_helper(
+                "request-and-select" if request_access else "select", session_id,
             )
-            message = result.stdout.strip()
         except (OSError, subprocess.SubprocessError) as exc:
             log_status_bar(f"Antigravity session opening failed: {exc}")
             message = "Could not open the conversation in the Antigravity app."
@@ -3477,6 +3486,41 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
         "t3code": t3code,
     }
     return window
+
+
+def run_antigravity_helper(action: str, *args: str) -> str:
+    script = Path(__file__).with_name("resources") / "open_antigravity.js"
+    result = subprocess.run(
+        ["/usr/bin/osascript", "-l", "JavaScript", str(script), action, *args],
+        check=True, capture_output=True, text=True, timeout=2 if action == "check" else 12,
+    )
+    return result.stdout.strip()
+
+
+def antigravity_access_missing() -> bool:
+    try:
+        return run_antigravity_helper("check") == "missing"
+    except (OSError, subprocess.SubprocessError) as exc:
+        log_status_bar(f"Could not check Antigravity accessibility access: {exc}")
+        return False
+
+
+def confirm_antigravity_access() -> bool:
+    launcher = Path(sys.executable).resolve().name
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Open the selected chat in Antigravity?")
+    alert.setInformativeText_(
+        "SidePulse can use Accessibility access to click the matching chat in Antigravity’s sidebar. "
+        f"macOS may list the SidePulse launcher as “{launcher}”. Other scripts using that "
+        "Python installation would also be able to control apps. After granting access, "
+        "click the session again.\n\n"
+        "Choose Open App Only to bring Antigravity forward. You can then press ⌘K to choose a chat. "
+        "You can change access later in System Settings → Privacy & Security → Accessibility."
+    )
+    alert.addButtonWithTitle_("Review Permission…")
+    decline = alert.addButtonWithTitle_("Open App Only")
+    decline.setKeyEquivalent_("\x1b")
+    return alert.runModal() == NSAlertFirstButtonReturn
 
 
 def confirm_linked_phone_removal(name: str) -> bool:
