@@ -953,7 +953,9 @@ accounted OSC-style JSON through the daemon socket. Settings are stored at
 Google Antigravity's app, IDE, and CLI share a global hook configuration.
 Run `sidepulse setup antigravity` to track each conversation as it starts,
 runs tools, requests input, and finishes. On macOS, clicking a desktop session
-opens Antigravity. If the launcher needs Accessibility access, SidePulse offers
+opens Antigravity and uses **⌘K**, the chat title, and **Return** to select the conversation.
+SidePulse checks the opened chat ID. If multiple chats share the title, it leaves search open.
+If the launcher needs Accessibility access, SidePulse offers
 a one-time choice. **Review Permission…** opens Accessibility settings and shows **SidePulse Chat Opener**
 in Finder. Enable it in Settings, or drag it into the list if it is missing. After granting access, click the session again.
 **Open App Only** remembers your choice and brings the app forward on each click.

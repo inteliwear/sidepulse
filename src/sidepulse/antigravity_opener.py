@@ -1,4 +1,4 @@
-"""Launch the Antigravity sidebar helper under its own macOS permission identity."""
+"""Launch the Antigravity keyboard helper under its own macOS permission identity."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import hashlib
 import json
 import plistlib
 import shutil
+import sqlite3
 import subprocess
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 NAME = "SidePulse Chat Opener"
@@ -58,8 +60,29 @@ def install_opener(parent: Path | None = None) -> Path:
     return app
 
 
+def conversation_search_title(session_id: str, database: Path | None = None) -> tuple[str, str]:
+    database = database or Path.home() / ".gemini/antigravity/conversation_summaries.db"
+    try:
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=0.3)) as db:
+            row = db.execute(
+                "SELECT title FROM conversation_summaries WHERE conversation_id = ?", (session_id,),
+            ).fetchone()
+            if row and isinstance(row[0], str) and row[0].strip():
+                title = row[0]
+                duplicate = db.execute(
+                    "SELECT 1 FROM conversation_summaries WHERE title = ? COLLATE NOCASE "
+                    "AND conversation_id != ? LIMIT 1", (title, session_id),
+                ).fetchone()
+                return title, "duplicate" if duplicate else ""
+    except sqlite3.Error:
+        pass
+    return "", ""
+
+
 def run_antigravity_helper(action: str, *args: str) -> str:
     app = install_opener()
+    if args and action in {"select", "request-and-select"}:
+        args = (*args, *conversation_search_title(args[0]))
     # LaunchServices gives the helper its own Accessibility identity. Running
     # its script as a child of the menu process would attribute access to the caller.
     with tempfile.TemporaryDirectory(prefix="sidepulse-chat-") as directory:

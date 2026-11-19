@@ -3508,7 +3508,7 @@ def confirm_antigravity_access() -> bool:
     alert = NSAlert.alloc().init()
     alert.setMessageText_("Open the selected chat in Antigravity?")
     alert.setInformativeText_(
-        "SidePulse can use Accessibility access to click the matching chat in Antigravity’s sidebar. "
+        "SidePulse can use Accessibility access to open ⌘K in Antigravity, type the chat title, and press Return. "
         "In System Settings, enable SidePulse Chat Opener. If it’s missing, drag the selected "
         "app from Finder into the list. Then click the session again.\n\n"
         "Choose Open App Only to bring Antigravity forward. You can then press ⌘K to choose a chat. "
