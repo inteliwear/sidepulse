@@ -59,7 +59,7 @@ function conversationInWindow(window, path) {
 function run(argv) {
     const path = "/c/" + argv[0];
     if (!$.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}))) {
-        return "Allow the SidePulse status bar launcher under Privacy & Security → Accessibility, then click the session again.";
+        return "In System Settings → Privacy & Security, allow the SidePulse launcher under Device Control and Data Access (Accessibility on earlier macOS versions), then click the session again.";
     }
     const deadline = Date.now() + 8000;
     let pressed = false;
