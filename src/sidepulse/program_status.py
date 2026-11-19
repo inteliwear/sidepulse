@@ -324,6 +324,9 @@ class ProgramState:
                 previous = None
             ignored = (report.get('unless_state') == 'done' and previous is not None
                        and previous['status']['state'] == 'done' and now - previous['updated_at'] <= 1200000)
+            if previous and '_waiting_tool' in previous and report.get('_finished_tool'):
+                # A parallel tool may return while the monitored call is still open.
+                ignored = ignored or report['_finished_tool'] != previous['_waiting_tool']
             if previous is not None and previous['status']['state'] == 'blocked':
                 ignored = ignored or (
                     guard_kind is not None and previous['status'].get('kind') == guard_kind
@@ -343,6 +346,11 @@ class ProgramState:
                     raise StatusError('Sequence gap or duplicate; submit without seq locally')
                 if t3_scan and (previous is None or previous.get('_t3_scan')):
                     update['_t3_scan'] = True
+                wait = report.get('_tool_wait')
+                if isinstance(wait, dict) and update['status']['state'] == 'working':
+                    update['_waiting_tool'] = identifier(wait.get('call'), 'tool call')
+                    update['_wait_deadline'] = time.monotonic() + integer(wait.get('seconds'), 'seconds', 1)
+                    update['_wait_message'] = text(wait.get('message'), MAX_OUTBOUND_MESSAGE_BYTES, 'message')
                 self._apply_update('local', update)
                 if suppressed:
                     self._suppressed.add(scope)
@@ -353,6 +361,24 @@ class ProgramState:
                 while len(self._receipts) > MAX_SESSIONS:
                     self._receipts.popitem(last=False)
             return copy.deepcopy(ack)
+
+    def check_tool_waits(self) -> None:
+        # Keep the deadline on the current local row. Replacing or removing that
+        # row cancels it, even if the session ends on the same tick.
+        with self.lock:
+            now = time.monotonic()
+            for row in list(self._sessions.values()):
+                if '_wait_deadline' not in row or now < row['_wait_deadline']:
+                    continue
+                update = dict(row)
+                del update['_wait_deadline']
+                update['status'] = {**row['status'], 'state': 'blocked', 'kind': 'question',
+                                    'msg': update.pop('_wait_message')}
+                update['context'] = {**row.get('context', {}), 'mode': 'waiting_for_input'}
+                # Preserve the hook time so a delayed real event can supersede it.
+                update['seq'] += 1
+                self._apply_update('local', update)
+                self._revision += 1
 
     def clear_t3_scan_sessions(self) -> None:
         with self.lock:
