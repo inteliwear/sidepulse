@@ -32,6 +32,8 @@ dependencies = [
     "pywinpty>=3.1.2,<4; sys_platform == 'win32'",
     "libusb-package>=1.0.26,<2",
     "watchdog>=6,<7",
+    "tomlkit>=0.15.2,<1",
+    "tomli>=2; python_version < '3.11'",
     "qrcode>=8,<9",
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
@@ -51,8 +53,6 @@ status-bar = []
 reply-classifier = ["mlx-lm>=0.24,<1"]
 test = [
     "pytest>=7",
-    # tests/test_packaging.py reads pyproject.toml; tomllib is 3.11+.
-    "tomli>=2; python_version < '3.11'",
 ]
 
 [project.scripts]

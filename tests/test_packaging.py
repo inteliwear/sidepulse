@@ -197,6 +197,8 @@ def third_party(records: list[ImportRecord]) -> list[ImportRecord]:
         if record.top not in sys.stdlib_module_names
         and record.top not in FIRST_PARTY
         and record.top not in CONDITIONAL_STDLIB
+        # The tomli backport is required only when the stdlib parser is absent.
+        and not (record.top == "tomli" and "tomllib" in sys.stdlib_module_names)
     ]
 
 
@@ -244,6 +246,14 @@ class ImportContractTests(unittest.TestCase):
             if record.optional:
                 continue
             providers = module_to_dists.get(record.top)
+            if providers is None and normalize_dist_name(record.top) in closure:
+                # Python 3.10's mapping omits wheels without top_level.txt.
+                try:
+                    files = distribution(record.top).files or []
+                except PackageNotFoundError:
+                    files = []
+                if any(str(path) in {f"{record.top}/__init__.py", f"{record.top}.py"} for path in files):
+                    providers = [record.top]
             if providers is None:
                 missing.append(
                     f"{record.where}: imports {record.top!r}, which is not "

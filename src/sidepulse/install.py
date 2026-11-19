@@ -16,6 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import tomlkit
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 from .hook_commands import observer_script, WINDOWS_MARKER
 
 from .providers import (
@@ -35,6 +42,7 @@ from .providers import (
 
 MANAGED_START = "# >>> agent-monitor hooks >>>"
 MANAGED_END = "# <<< agent-monitor hooks <<<"
+MANAGED_DESCRIPTION = "# Provider-neutral status collection. Do not edit inside this block."
 
 
 @dataclass(frozen=True)
@@ -69,11 +77,25 @@ def install_codex_hooks(
     target_log = (log_path or detect_log_path("codex")).expanduser()
     original = config.read_text() if config.exists() else ""
 
-    text = strip_managed_block(original)
-    text = remove_codex_hook_blocks_for_log(text, target_log)
-    text = ensure_codex_hooks_feature(text)
-    block = codex_hook_block(target_log, python_executable)
-    new_text = _ensure_trailing_newline(text) + "\n" + block
+    try:
+        source = original
+        try:
+            existing = tomllib.loads(source)
+        except tomllib.TOMLDecodeError:
+            source = repair_legacy_codex_trust_suffix(original, config)
+            existing = tomllib.loads(source)
+
+        text = strip_managed_block(source)
+        text = remove_codex_hook_blocks_for_log(text, target_log)
+        text = ensure_codex_hooks_feature(text)
+        block = codex_hook_block(target_log, python_executable)
+        new_text = _ensure_trailing_newline(text) + "\n" + block
+        updated = tomllib.loads(new_text)
+        markers_present = {MANAGED_START, MANAGED_END}.issubset(source.splitlines())
+        if markers_present and updated == existing:
+            new_text = source
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Cannot update Codex config {config}: {exc}") from exc
     changed = new_text != original
 
     backup = None
@@ -89,6 +111,7 @@ def install_codex_hooks(
                 current_text = config.read_text() if config.exists() else ""
                 trusted_text = update_codex_trusted_hashes(current_text, trusted_hashes)
                 if trusted_text != current_text:
+                    tomllib.loads(trusted_text)
                     if backup is None:
                         backup = backup_file(config)
                     config.write_text(trusted_text)
@@ -735,10 +758,7 @@ def codex_hook_block(
     python_executable: str | None = None,
 ) -> str:
     command = hook_command("codex", log_path, python_executable)
-    lines = [
-        MANAGED_START,
-        "# Provider-neutral status collection. Do not edit inside this block.",
-    ]
+    lines = [MANAGED_START, MANAGED_DESCRIPTION]
     for event_name in CODEX_EVENTS:
         lines.extend(
             [
@@ -894,60 +914,55 @@ def codex_cli_path() -> Path | None:
     return None
 
 
+def repair_legacy_codex_trust_suffix(text: str, config: Path) -> str:
+    # Older installers appended two-line trust tables after the end
+    # marker. Keep the pre-install trust record until Codex supplies its hash.
+    prefix, marker, suffix = text.rpartition("\n" + MANAGED_END + "\n")
+    if not marker or MANAGED_START not in prefix.splitlines():
+        return text
+    legacy_entry = re.compile(
+        r'\n\[hooks\.state\.(?P<key>"(?:[^"\\\n]|\\["\\])*")\]\n'
+        r"""trusted_hash = (?P<quote>["'])sha256:[0-9a-f]{64}(?P=quote)(?:\n|$)"""
+    )
+    if not suffix.strip() or legacy_entry.sub("", suffix).strip():
+        return text
+
+    hooks = tomllib.loads(prefix).get("hooks")
+    if not isinstance(hooks, dict) or not isinstance(hooks.get("state"), dict):
+        return text
+    state = hooks["state"]
+
+    def keep_distinct(entry: re.Match[str]) -> str:
+        key = json.loads(entry["key"])
+        previous = state.get(key)
+        if key.startswith(f"{config}:") and isinstance(previous, dict) and "trusted_hash" in previous:
+            return ""
+        return entry[0]
+
+    return prefix + marker + legacy_entry.sub(keep_distinct, suffix)
+
+
 def update_codex_trusted_hashes(text: str, trusted_hashes: dict[str, str]) -> str:
     if not trusted_hashes:
         return text
 
-    result = _ensure_hooks_state_table(text)
+    document = tomlkit.parse(text)
+    hooks = document.setdefault("hooks", tomlkit.table())
+    state = hooks.setdefault("state", tomlkit.table())
+    changed = False
     for key, trusted_hash in trusted_hashes.items():
-        result = _set_codex_trusted_hash(result, key, trusted_hash)
-    return result
-
-
-def _ensure_hooks_state_table(text: str) -> str:
-    if re.search(r"^\s*\[hooks\.state\]\s*$", text, re.MULTILINE):
-        return text
-    return _ensure_trailing_newline(text) + "\n[hooks.state]\n"
-
-
-def _set_codex_trusted_hash(text: str, key: str, trusted_hash: str) -> str:
-    header = f'[hooks.state."{toml_basic_string_escape(key)}"]'
-    lines = text.splitlines(keepends=True)
-    header_index = None
-    for index, line in enumerate(lines):
-        if line.strip() == header:
-            header_index = index
-            break
-
-    if header_index is None:
-        block = f'\n{header}\ntrusted_hash = "{toml_basic_string_escape(trusted_hash)}"\n'
-        return _ensure_trailing_newline(text) + block
-
-    end = len(lines)
-    for index in range(header_index + 1, len(lines)):
-        if re.match(r"\s*\[.*\]\s*$", lines[index]):
-            end = index
-            break
-
-    trusted_line = f'trusted_hash = "{toml_basic_string_escape(trusted_hash)}"\n'
-    for index in range(header_index + 1, end):
-        if re.match(r"\s*trusted_hash\s*=", lines[index]):
-            lines[index] = trusted_line
-            return "".join(lines)
-
-    lines.insert(header_index + 1, trusted_line)
-    return "".join(lines)
-
-
-def toml_basic_string_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+        entry = state.setdefault(key, tomlkit.table())
+        if entry.get("trusted_hash") != trusted_hash:
+            entry["trusted_hash"] = trusted_hash
+            changed = True
+    return tomlkit.dumps(document) if changed else text
 
 
 def strip_managed_block(text: str) -> str:
     # Codex may append its own tables between these comments when it rewrites
     # config.toml.  Remove only the comments; hook tables are removed below.
     return "\n".join(
-        line for line in text.splitlines() if line.strip() not in {MANAGED_START, MANAGED_END}
+        line for line in text.splitlines() if line.strip() not in {MANAGED_START, MANAGED_DESCRIPTION, MANAGED_END}
     ) + ("\n" if text.endswith("\n") else "")
 
 
@@ -958,12 +973,12 @@ def remove_codex_hook_blocks_for_log(text: str, log_path: Path) -> str:
     index = 0
 
     while index < len(lines):
-        event_match = re.match(r"\s*\[\[hooks\.([A-Za-z0-9_]+)\]\]\s*$", lines[index])
+        event_match = re.match(r"\s*\[\[hooks\.([A-Za-z0-9_]+)\]\]\s*(?:#.*)?$", lines[index])
         if event_match and event_match.group(1) in CODEX_EVENTS:
             event_name = event_match.group(1)
             end = index + 1
-            nested = re.compile(rf"\s*\[\[hooks\.{re.escape(event_name)}\.hooks\]\]\s*$")
-            table = re.compile(r"\s*\[.*\]\s*$")
+            nested = re.compile(rf"\s*\[\[hooks\.{re.escape(event_name)}\.hooks\]\]\s*(?:#.*)?$")
+            table = re.compile(r"\s*\[.*\]\s*(?:#.*)?$")
             while end < len(lines):
                 if table.match(lines[end]) and not nested.match(lines[end]):
                     break

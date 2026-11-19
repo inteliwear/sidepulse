@@ -3310,6 +3310,88 @@ class AgentMonitorTests(unittest.TestCase):
             self.assertEqual(tomllib.loads(text)["hooks"]["state"][key]["trusted_hash"], "sha256:new-current-hash")
             self.assertIn('trusted_hash = "sha256:new-current-hash"', text)
 
+    def test_codex_reinstall_preserves_quoted_trust_keys_and_other_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.toml"
+            log = Path(tmp) / "codex.jsonl"
+            key = f"{config}:session_start:1:0"
+            other = f"{config}:session_start:0:0"
+            original = (
+                "[[hooks.SessionStart]]\nmatcher = 'startup'\n"
+                "[[hooks.SessionStart.hooks]]\ntype = 'command'\ncommand = 'echo hello'\n"
+                "[hooks.state]\n"
+                f"[hooks.state.'{other}']\ntrusted_hash = 'keep'\n"
+                f"[hooks.state.'{key}'] # SidePulse\ntrusted_hash = 'old' # keep comment\n"
+            )
+            config.write_text(original)
+            with (
+                patch("sidepulse.install.should_refresh_codex_hook_trust", return_value=True),
+                patch("sidepulse.install.resolve_codex_hook_hashes", return_value={key: "sha256:new"}),
+            ):
+                first = install_codex_hooks(log, config)
+                installed = config.read_text()
+                second = install_codex_hooks(log, config)
+
+            hooks = tomllib.loads(installed)["hooks"]
+            self.assertEqual(hooks["state"], {other: {"trusted_hash": "keep"}, key: {"trusted_hash": "sha256:new"}})
+            self.assertEqual(len(hooks["SessionStart"]), 2)
+            self.assertEqual(hooks["SessionStart"][0]["hooks"][0]["command"], "echo hello")
+            self.assertIn(f"[hooks.state.'{key}'] # SidePulse", installed)
+            self.assertIn("# keep comment", installed)
+            self.assertEqual(first.backup_path.read_text(), original)
+            self.assertFalse(second.changed)
+            self.assertEqual(config.read_text(), installed)
+
+    def test_codex_setup_recovers_legacy_duplicate_trust_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.toml"
+            log = Path(tmp) / "codex.jsonl"
+            key = f"{config}:stop:0:0"
+            config.write_text(f"[hooks.state.'{key}']\ntrusted_hash = 'old'\n")
+            install_codex_hooks(log, config)
+            distinct = f"{config}:interrupt:0:0"
+            digest = "sha256:" + "a" * 64
+            damaged = config.read_text() + (
+                f"\n[hooks.state.{json.dumps(key)}]\ntrusted_hash = '{digest}'\n"
+                f'\n[hooks.state.{json.dumps(distinct)}]\ntrusted_hash = "{digest}"\n\n'
+            )
+            config.write_text(damaged)
+            with self.assertRaises(tomllib.TOMLDecodeError):
+                tomllib.loads(damaged)
+            with (
+                patch("sidepulse.install.should_refresh_codex_hook_trust", return_value=True),
+                patch("sidepulse.install.resolve_codex_hook_hashes", return_value={key: "sha256:verified"}),
+            ):
+                result = install_codex_hooks(log, config)
+            self.assertEqual(result.backup_path.read_text(), damaged)
+            state = tomllib.loads(config.read_text())["hooks"]["state"]
+            self.assertEqual(state[key]["trusted_hash"], "sha256:verified")
+            self.assertEqual(state[distinct]["trusted_hash"], digest)
+
+    def test_codex_setup_leaves_unrelated_invalid_config_intact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.toml"
+            invalid = "[features]\nhooks = true\n[features]\nhooks = false\n"
+            config.write_text(invalid)
+            with self.assertRaisesRegex(ValueError, "config.toml"):
+                install_codex_hooks(Path(tmp) / "codex.jsonl", config)
+            self.assertEqual(config.read_text(), invalid)
+
+    def test_codex_setup_validates_trust_changes_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.toml"
+            log = Path(tmp) / "codex.jsonl"
+            install_codex_hooks(log, config)
+            original = config.read_bytes()
+            with (
+                patch("sidepulse.install.should_refresh_codex_hook_trust", return_value=True),
+                patch("sidepulse.install.resolve_codex_hook_hashes", return_value={"key": "sha256:new"}),
+                patch("sidepulse.install.update_codex_trusted_hashes", return_value="[invalid"),
+                self.assertRaises(ValueError),
+            ):
+                install_codex_hooks(log, config)
+            self.assertEqual(config.read_bytes(), original)
+
     def test_update_codex_trusted_hashes_preserves_other_state(self) -> None:
         text = "\n".join(
             [
