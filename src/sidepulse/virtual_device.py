@@ -35,6 +35,11 @@ NOTCH_BOTTOM_RADIUS = 8.0
 LED_BLEND_RADIUS_LEDS = 1.5
 BLEND_COLUMN_WIDTH = 4.0
 LED_GLOW_HEIGHT = 11.0
+# Detached placement: the strip sits under the menu bar, so it carries no
+# camera-housing silhouette and only needs the band plus its upward glow.
+STRIP_HEIGHT = LED_BAND_HEIGHT + LED_GLOW_HEIGHT
+STRIP_RIGHT_MARGIN = 12.0
+STRIP_TOP_GAP = 4.0
 LED_CORE_BOOST = 1.22
 LED_HOTLINE_BOOST = 1.46
 LED_GAMMA = 0.86
@@ -74,17 +79,14 @@ def screen_has_notch(screen) -> bool:
     return notch_depth_for_screen(screen) > 0.0
 
 
-def window_height_for_notch_depth(notch_depth: float) -> float:
-    return max(0.0, float(notch_depth)) + LED_BAND_HEIGHT
-
-
 def virtual_window_frame_for_screen(screen):
+    """Right-aligned just below the menu bar, clear of the menu bar extras."""
     frame = screen.frame()
+    visible = screen.visibleFrame()
     width = slot_width_for_screen(screen)
-    height = window_height_for_notch_depth(notch_depth_for_screen(screen))
-    x = frame.origin.x + (frame.size.width - width) / 2.0
-    y = frame.origin.y + frame.size.height - height
-    return ((x, y), (width, height))
+    x = frame.origin.x + frame.size.width - width - STRIP_RIGHT_MARGIN
+    y = visible.origin.y + visible.size.height - STRIP_HEIGHT - STRIP_TOP_GAP
+    return ((x, y), (width, STRIP_HEIGHT))
 
 
 def led_band_rect(width: float):
@@ -560,7 +562,7 @@ class VirtualStatusDevice(NSObject):
         window_frame = virtual_window_frame_for_screen(screen)
         self.window.setFrame_display_(window_frame, True)
         if self.view is not None:
-            self.view.setHasNotch_(screen_has_notch(screen))
+            self.view.setHasNotch_(False)
             self.view.setFrame_(((0, 0), window_frame[1]))
 
     def _build_window(self):
