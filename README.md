@@ -939,7 +939,8 @@ target LED, fading one LED width left and right. It shares the physical
 device's status animations, display-mode selection, and per-device brightness
 control. SidePulse Notch evaluates the same `LEDS.LED` programs with the
 firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
-frames.
+frames. Select **Stick to Main Monitor** in the SidePulse Notch submenu to keep
+it on the primary display instead of following the active window.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
 window can manage Codex, Claude, Grok, Cursor, and Junie hooks and the OpenCode and Herdr plugins.

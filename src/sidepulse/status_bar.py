@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -563,6 +563,7 @@ class StatusBarController(NSObject):
         self.last_connected_device_signature = None
         self.event_refresh_pending = False
         self.virtual_status_device = VirtualStatusDevice.alloc().init()
+        self.virtual_status_device.primary_screen = self.settings.virtual_status_device_primary_screen
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
@@ -1162,6 +1163,22 @@ class StatusBarController(NSObject):
             self.set_virtual_status_device(False)
             return
         self.set_virtual_status_device(not self.settings.virtual_status_device_enabled)
+
+    @objc.IBAction
+    def toggleVirtualPrimaryScreen_(self, _sender):
+        try:
+            settings = replace(
+                self.settings,
+                virtual_status_device_primary_screen=not self.settings.virtual_status_device_primary_screen,
+            )
+            save_settings(settings)
+        except Exception as exc:
+            self.set_settings_message(f"Could not save SidePulse Notch display: {exc}")
+            return
+        self.settings = settings
+        self.virtual_status_device.primary_screen = settings.virtual_status_device_primary_screen
+        self.virtual_status_device.reposition()
+        self.refresh_(None)
 
     @objc.IBAction
     def saveLidAnimations_(self, _sender):
@@ -3298,6 +3315,13 @@ def build_device_menu_item(device: StatusBarDevice, target: StatusBarController)
         submenu.addItem_(remove_phone)
 
     if device.device_id == VIRTUAL_DEVICE_ID:
+        submenu.addItem_(NSMenuItem.separatorItem())
+        primary_screen = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Stick to Main Monitor", "toggleVirtualPrimaryScreen:", "",
+        )
+        primary_screen.setTarget_(target)
+        primary_screen.setState_(1 if target.settings.virtual_status_device_primary_screen else 0)
+        submenu.addItem_(primary_screen)
         submenu.addItem_(NSMenuItem.separatorItem())
         remove_sidepulse_notch = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Remove SidePulse Notch",

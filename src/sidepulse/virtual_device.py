@@ -505,6 +505,7 @@ class VirtualStatusDevice(NSObject):
             self.view = None
             self.timer = None
             self.frame_interval = None
+            self.primary_screen = False
         return self
 
     def show(self):
@@ -554,7 +555,8 @@ class VirtualStatusDevice(NSObject):
         self.frame_interval = None
 
     def reposition(self):
-        screen = NSScreen.mainScreen()
+        screens = NSScreen.screens() if self.primary_screen else None
+        screen = screens[0] if screens else NSScreen.mainScreen()
         if screen is None or self.window is None:
             return
         window_frame = virtual_window_frame_for_screen(screen)
