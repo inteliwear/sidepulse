@@ -82,6 +82,7 @@ class SidePulseService:
                 config = load_relay_config()
                 self.sync_receiver(config)
                 try:
+                    self.program_state.check_tool_waits()
                     self.runtime.poll()
                 except Exception as exc:
                     print(f"sidepulse service: runtime update failed: {exc}", file=sys.stderr)

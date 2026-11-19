@@ -4,7 +4,43 @@ import hashlib
 import json
 import uuid
 import socket
+from urllib.parse import urlsplit
 from .program_status import CONTEXT_LIMITS, MAX_OUTBOUND_MESSAGE_BYTES, hook_scope, validate_status
+
+
+CLAUDE_BROWSER_WAIT_SECONDS = 10
+CLAUDE_BROWSER_PAGE_TOOLS = {'mcp__Claude_Browser__navigate', 'mcp__Claude_Browser__preview_start'}
+
+
+def add_claude_browser_wait(report: dict, record) -> None:
+    from .collector import explicit_mode_for_record
+
+    invocation = record.raw.get('tool_use_id')
+    if not isinstance(invocation, str) or not invocation:
+        return
+    if record.event_name == 'PostToolUse':
+        # Only ordinary success can be ignored as a parallel completion.
+        if report['context']['mode'] == 'working' and explicit_mode_for_record(record) is None:
+            report['_finished_tool'] = hashlib.sha256(invocation.encode('utf-8', errors='replace')).hexdigest()
+        return
+    if (record.event_name != 'PreToolUse' or record.tool_name not in CLAUDE_BROWSER_PAGE_TOOLS
+            or report['context']['mode'] != 'tool_running'):
+        return
+    tool_input = record.raw.get('tool_input')
+    url = tool_input.get('url') if isinstance(tool_input, dict) else None
+    if not isinstance(url, str):
+        return
+    try:
+        page = urlsplit(url)
+        if page.scheme not in {'https', 'http'} or not page.hostname:
+            return
+    except ValueError:
+        return
+    report['_tool_wait'] = {
+        'call': hashlib.sha256(invocation.encode('utf-8', errors='replace')).hexdigest(),
+        'seconds': CLAUDE_BROWSER_WAIT_SECONDS,
+        'message': 'Check the browser pane — this page is still opening.',
+    }
 
 
 def clean_text(value: str, limit: int) -> str:
@@ -95,6 +131,8 @@ def hook_report(provider: str, line: dict) -> dict | None:
         'title': title, 'title_source': 'session' if session_title else 'prompt',
     }
     result = provider_report(provider, scope, status, context)
+    if provider == 'claude':
+        add_claude_browser_wait(result, record)
     result['request_id'] = base['request_id']
     from .herdr import current_pane_scope
     if pane_scope := current_pane_scope():
