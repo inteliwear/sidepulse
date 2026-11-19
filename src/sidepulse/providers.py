@@ -92,12 +92,14 @@ JUNIE_MONITOR_EVENTS = tuple(
     event for event in JUNIE_EVENTS if event != "PermissionRequest"
 )
 
-LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie")
+ANTIGRAVITY_EVENTS = ("SessionStart", "PreInvocation", "PreToolUse", "PostToolUse", "Stop")
+
+LOG_HOOK_PROVIDERS = ("codex", "claude", "grok", "cursor", "junie", "antigravity")
 HOOK_PROVIDERS = (*LOG_HOOK_PROVIDERS, "opencode", "herdr")
 AGENT_INTEGRATIONS = (*HOOK_PROVIDERS, "t3code")
 OPENCODE_PLUGIN_MARKER = "// Managed by SidePulse: `sidepulse setup` replaces this file and"
 KNOWN_EVENTS = tuple(
-    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS)
+    dict.fromkeys(CODEX_EVENTS + CLAUDE_EVENTS + GROK_EVENTS + JUNIE_EVENTS + ANTIGRAVITY_EVENTS)
 )
 
 
@@ -160,6 +162,7 @@ def detect_provider_configs(home: Path | None = None) -> list[ProviderConfig]:
         detect_grok_config(home),
         detect_cursor_config(home),
         detect_junie_config(home),
+        detect_antigravity_config(home),
         detect_opencode_config(home),
         detect_herdr_config(home),
     ]
@@ -350,6 +353,61 @@ def detect_cursor_config(home: Path | None = None) -> ProviderConfig:
     )
 
 
+def antigravity_config_path(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".gemini" / "config" / "hooks.json"
+
+
+def is_antigravity_handler(handler: Any) -> bool:
+    if not isinstance(handler, dict) or not isinstance(handler.get("command"), str):
+        return False
+    command = handler["command"]
+    decoded = observer_script(command)
+    if decoded != command:
+        return "'--provider' 'antigravity'" in decoded
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(args) == 10
+        and (Path(args[1]).name == "hook_entry.py" or args[1] == "hook-log")
+        and args[2:5] == ["--provider", "antigravity", "--event"]
+        and args[6] == "--log"
+        and args[8:] == [";", "true"]
+    )
+
+
+def detect_antigravity_config(home: Path | None = None) -> ProviderConfig:
+    path = antigravity_config_path(home)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    group = data.get("sidepulse") if isinstance(data, dict) else None
+    if not isinstance(group, dict):
+        return ProviderConfig("antigravity", path, path.exists(), False, (), ())
+    events = []
+    paths = []
+    for event in ANTIGRAVITY_EVENTS:
+        entries = group.get(event, [])
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            handlers = entry.get("hooks", []) if event in {"PreToolUse", "PostToolUse"} else [entry]
+            if not isinstance(handlers, list):
+                continue
+            for handler in handlers:
+                if is_antigravity_handler(handler):
+                    events.append(event)
+                    paths.extend(extract_log_paths_from_command(handler["command"]))
+    return ProviderConfig(
+        "antigravity", path, True, bool(events) and group.get("enabled") is not False,
+        tuple(sorted(set(events))), _dedupe_paths(paths),
+    )
+
+
 def default_junie_hook_config_path(home: Path | None = None) -> Path:
     base = home or Path.home()
     return base / ".junie" / "config.json"
@@ -464,6 +522,8 @@ def detect_log_path(provider: str, home: Path | None = None) -> Path:
         config = detect_grok_config(home)
     elif provider == "cursor":
         config = detect_cursor_config(home)
+    elif provider == "antigravity":
+        config = detect_antigravity_config(home)
     elif provider == "junie":
         config = detect_junie_config(home)
     else:

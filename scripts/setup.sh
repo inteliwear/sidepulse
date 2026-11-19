@@ -26,7 +26,7 @@ INSTALL_ROOT=${SIDEPULSE_INSTALL_ROOT:-"$HOME/.local/share/sidepulse"}
 VENV=$INSTALL_ROOT/venv
 BIN_DIR=${SIDEPULSE_BIN_DIR:-"$HOME/.local/bin"}
 PLATFORM=$(uname -s)
-hook_agents='codex claude grok cursor junie opencode'
+hook_agents='codex claude grok cursor junie antigravity opencode'
 default_agents="$hook_agents t3code"
 AGENTS="$hook_agents herdr t3code"
 MAC_COMPONENTS='sd-eject-guard status-bar'
@@ -101,6 +101,7 @@ draw_group() {
             claude) label='Claude Code' ;;
             grok) label='Grok' ;;
             cursor) label='Cursor' ;;
+            antigravity) label='Antigravity' ;;
             junie) label='Junie' ;;
             opencode) label='OpenCode' ;;
             herdr) label='Herdr' ;;

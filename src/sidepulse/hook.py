@@ -185,7 +185,15 @@ def latest_junie_hook_context(
 def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> int:
     try:
         payload_text = sys.stdin.read()
-        if provider == "cursor" and event:
+        if provider == "antigravity":
+            from .antigravity_hook import normalize_payload
+
+            raw = json.loads(payload_text)
+            normalized = normalize_payload(event, raw) if isinstance(raw, dict) else None
+            if normalized is None:
+                return 0
+            payload_text = json.dumps(normalized)
+        elif provider == "cursor" and event:
             from .cursor_hook import normalize_payload
 
             try:
@@ -228,4 +236,8 @@ def hook_log_main(provider: str, log_path: Path, event: str | None = None) -> in
             pass
     except Exception:
         return 0
+    finally:
+        if provider == "antigravity":
+            # "allow" defers to the normal tool policy. "auto_approve" would bypass prompts.
+            print('{"decision":"allow"}' if event == "PreToolUse" else "{}")
     return 0

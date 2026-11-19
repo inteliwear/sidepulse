@@ -115,6 +115,7 @@ from .herdr import (
 )
 from .install import (
     configure_t3code_monitoring,
+    configure_antigravity_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -153,6 +154,7 @@ from .junie_index import junie_session_info
 from .models import AgentMode, AgentStatus, MODE_LABELS, REMOTE_HERDR_ORIGIN, provider_label
 from .providers import (
     ProviderConfig,
+    detect_antigravity_config,
     detect_claude_config,
     detect_codex_config,
     detect_cursor_config,
@@ -963,6 +965,14 @@ class StatusBarController(NSObject):
         self.update_hooks("cursor", install=False)
 
     @objc.IBAction
+    def installAntigravityHooks_(self, _sender):
+        self.update_hooks("antigravity", install=True)
+
+    @objc.IBAction
+    def uninstallAntigravityHooks_(self, _sender):
+        self.update_hooks("antigravity", install=False)
+
+    @objc.IBAction
     def installJunieHooks_(self, _sender):
         self.update_hooks("junie", install=True)
 
@@ -1651,6 +1661,10 @@ class StatusBarController(NSObject):
         claude = detect_claude_config()
         grok = detect_grok_config()
         cursor = detect_cursor_config()
+        set_field_value(
+            self.settings_fields.get("antigravity_hook_status"),
+            hook_status_text(detect_antigravity_config()),
+        )
         junie = detect_junie_config()
         opencode = detect_opencode_config()
         self.refresh_t3_monitoring()
@@ -1888,6 +1902,8 @@ class StatusBarController(NSObject):
                 result = install_cursor_hooks()
             elif provider == "cursor":
                 result = uninstall_cursor_hooks()
+            elif provider == "antigravity":
+                result = configure_antigravity_hooks(uninstall=not install)
             elif provider == "junie" and install:
                 result = install_junie_hooks()
             elif provider == "junie":
@@ -4275,51 +4291,55 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         install_title="Enable", uninstall_title="Disable",
     )
 
-    add_separator(agents_tab, section_x, 274, tab_width - 48)
-    add_label(agents_tab, "Session Opening", section_x, 248, 240, 24)
-    add_label(agents_tab, "Terminal App", primary_action_x, 248, 200, 24)
+    antigravity_status = add_hook_row(
+        "Antigravity", 262, "installAntigravityHooks:", "uninstallAntigravityHooks:"
+    )
 
-    add_label(agents_tab, "Codex", label_x, 212, 90, 22)
+    add_separator(agents_tab, section_x, 248, tab_width - 48)
+    add_label(agents_tab, "Session Opening", section_x, 222, 240, 24)
+    add_label(agents_tab, "Terminal App", primary_action_x, 222, 200, 24)
+
+    add_label(agents_tab, "Codex", label_x, 186, 90, 22)
     codex_opener = add_provider_opener_popup(
-        agents_tab, "codex", value_x, 210, target, width=value_width
+        agents_tab, "codex", value_x, 184, target, width=value_width
     )
-    add_label(agents_tab, "Claude", label_x, 184, 90, 22)
+    add_label(agents_tab, "Claude", label_x, 158, 90, 22)
     claude_opener = add_provider_opener_popup(
-        agents_tab, "claude", value_x, 182, target, width=value_width
+        agents_tab, "claude", value_x, 156, target, width=value_width
     )
-    add_label(agents_tab, "Grok", label_x, 156, 90, 22)
+    add_label(agents_tab, "Grok", label_x, 130, 90, 22)
     grok_opener = add_provider_opener_popup(
-        agents_tab, "grok", value_x, 154, target, width=value_width
+        agents_tab, "grok", value_x, 128, target, width=value_width
     )
-    add_label(agents_tab, "Junie", label_x, 128, 90, 22)
+    add_label(agents_tab, "Junie", label_x, 102, 90, 22)
     junie_opener = add_provider_opener_popup(
-        agents_tab, "junie", value_x, 126, target, width=value_width
+        agents_tab, "junie", value_x, 100, target, width=value_width
     )
 
-    add_label(agents_tab, "T3 Code", label_x, 100, 90, 22)
+    add_label(agents_tab, "T3 Code", label_x, 74, 90, 22)
     t3code_opener = add_provider_opener_popup(
-        agents_tab, "t3code", value_x, 98, target, width=value_width
+        agents_tab, "t3code", value_x, 72, target, width=value_width
     )
 
     terminal_popup = add_terminal_popup(
-        agents_tab, primary_action_x, 210, target, width=200
+        agents_tab, primary_action_x, 184, target, width=200
     )
     custom_terminal_path = add_label(
-        agents_tab, "", primary_action_x, 178, 200, 22
+        agents_tab, "", primary_action_x, 152, 200, 22
     )
     add_button(
         agents_tab,
         "Choose...",
         secondary_action_x,
-        142,
+        116,
         100,
         28,
         target,
         "chooseSessionTerminal:",
     )
 
-    add_separator(agents_tab, section_x, 78, tab_width - 48)
-    add_label(agents_tab, "Transcript Monitoring", section_x, 50, 240, 24)
+    add_separator(agents_tab, section_x, 66, tab_width - 48)
+    add_label(agents_tab, "Transcript Monitoring", section_x, 40, 240, 24)
     codex_transcripts = add_checkbox(
         agents_tab,
         "CLI fallback: Codex transcripts",
@@ -4558,6 +4578,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
         "cursor_hook_status": cursor_status,
+        "antigravity_hook_status": antigravity_status,
         "junie_hook_status": junie_status,
         "opencode_hook_status": opencode_status,
         "herdr_hook_status": herdr_status,
@@ -5365,6 +5386,8 @@ def hook_status_text(config: ProviderConfig) -> str:
         if config.hooks_enabled:
             return "Plugin installed"
         return "Existing plugin is unmanaged" if config.exists else "Plugin not installed"
+    if config.provider == "antigravity" and config.hook_events and not config.hooks_enabled:
+        return "Disabled in Antigravity"
     if not config.exists:
         return "Not installed — config created on install"
     if config.hook_events:

@@ -3927,6 +3927,10 @@ class AgentMonitorTests(unittest.TestCase):
             patch.object(cli_module, "install_grok_hooks", return_value=grok_result) as grok,
             patch.object(cli_module, "install_junie_hooks", return_value=junie_result) as junie,
             patch.object(
+                cli_module, "configure_antigravity_hooks",
+                return_value=InstallResult("antigravity", Path("/tmp/hooks.json"), None, True),
+            ) as antigravity,
+            patch.object(
                 cli_module,
                 "install_opencode_plugin",
                 return_value=opencode_result,
@@ -3952,6 +3956,7 @@ class AgentMonitorTests(unittest.TestCase):
         cursor.assert_called_once()
         grok.assert_called_once()
         junie.assert_called_once()
+        antigravity.assert_called_once()
         opencode.assert_called_once_with(dry_run=False)
         t3code.assert_called_once_with(True, dry_run=False)
         herdr.assert_called_once_with(uninstall=False, dry_run=False)
