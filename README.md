@@ -952,13 +952,11 @@ accounted OSC-style JSON through the daemon socket. Settings are stored at
 
 Google Antigravity's app, IDE, and CLI share a global hook configuration.
 Run `sidepulse setup antigravity` to track each conversation as it starts,
-runs tools, requests input, and finishes. On macOS, click an Antigravity App
-session in the SidePulse menu to select its conversation in the app. This uses
-macOS Accessibility to follow the conversation's sidebar link. The permission
-appears under **Privacy & Security → Device Control and Data Access** on newer
-macOS versions. For a Python installation, macOS lists the Python executable.
-CLI sessions
-resume in Terminal. The SidePulse hook group appears in the
+runs tools, requests input, and finishes. On macOS, clicking a desktop session
+brings Antigravity to the front without requesting system permissions. Use
+**⌘K** to choose the conversation. If the SidePulse launcher already has
+Accessibility access, it selects the matching sidebar conversation automatically.
+CLI sessions resume in Terminal. The SidePulse hook group appears in the
 CLI's `/hooks` view and the app and IDE's Hooks settings.
 [Antigravity hook reference](https://antigravity.google/docs/hooks)
 
