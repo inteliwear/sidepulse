@@ -31,9 +31,29 @@ class SetupUpdateTests(unittest.TestCase):
         self.log = self.root / 'calls.jsonl'
         self.home = self.root / 'home'
         self.home.mkdir()
+        self.tools = self.root / 'tools'
+        self.tools.mkdir()
+        for name, output in (('uname', 'Linux'), ('id', '501')):
+            tool = self.tools / name
+            tool.write_text(f'#!/bin/sh\nprintf "%s\\n" "{output}"\n')
+            tool.chmod(0o755)
+        sudo = self.tools / 'sudo'
+        sudo.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''
+            import json, os, sys
+            args = sys.argv[1:]
+            with open(os.environ['SIDEPULSE_TEST_LOG'], 'a') as log:
+                log.write(json.dumps(['sudo', args]) + '\\n')
+            if args[-1] == '-v':
+                sys.exit(0)
+            if args[:2] != ['-n', '-H'] or os.environ.get('SIDEPULSE_TEST_SUDO_FAIL'):
+                sys.exit(1)
+            os.execv(args[2], args[2:])
+        '''))
+        sudo.chmod(0o755)
         self.env = {
             **os.environ,
             'HOME': str(self.home),
+            'PATH': f'{self.tools}:{os.environ["PATH"]}',
             'PYTHON_BIN': sys.executable,
             'SIDEPULSE_INSTALL_ROOT': str(self.install_root),
             'SIDEPULSE_BIN_DIR': str(self.bin),
@@ -186,6 +206,7 @@ class SetupUpdateTests(unittest.TestCase):
 
     def run_piped_setup_in_terminal(
         self, *inputs, headless=False, install_keys=b'', platform='Darwin', no_color=False,
+        developer_tools=False, sudo_fail=False, skip_guard=False,
     ):
         import pty
 
@@ -193,8 +214,8 @@ class SetupUpdateTests(unittest.TestCase):
         stubs.mkdir()
         for name, body in (
             ('uname', f'printf "{platform}\\n"'),
-            ('xcode-select', 'exit 0' if headless else 'exit 1'),
-            ('xcrun', 'exit 0' if headless else 'exit 1'),
+            ('xcode-select', 'exit 0' if headless or developer_tools else 'exit 1'),
+            ('xcrun', 'exit 0' if headless or developer_tools else 'exit 1'),
         ):
             stub = stubs / name
             stub.write_text(f'#!/bin/sh\n{body}\n')
@@ -205,7 +226,11 @@ class SetupUpdateTests(unittest.TestCase):
             'SIDEPULSE_INSTALL_SPEC': str(self.new), 'SIDEPULSE_SETUP_NONINTERACTIVE': '0',
             'TERM': 'xterm-256color', 'NO_COLOR': '1' if no_color else '',
         }
+        if sudo_fail:
+            env['SIDEPULSE_TEST_SUDO_FAIL'] = '1'
         options = ['--headless'] if headless else []
+        if skip_guard:
+            options.append('--no-sd-eject-guard')
         terminal_state = '''
 import termios
 
@@ -290,7 +315,7 @@ print(settings)
         self.assertEqual([line.strip() for line in first_screen if line.strip()], [
             'SidePulse',
             'macOS integrations',
-            '> [x] SD card ejection prevention (important for deep sleep)',
+            '> [x] SD card ejection prevention (system-wide, important for deep sleep)',
             '[x] Status-bar indicator',
             'Agent hooks',
             '[x] Codex',
@@ -346,7 +371,44 @@ print(settings)
         self.assertNotIn('Agent hooks', output)
         self.assertNotRegex(output, r'\x1b\[[\d;]*m')
         self.assertIn('SidePulse is installed.', output)
-        self.assertEqual(self.calls()[0], ['new', ['setup']])
+        self.assertEqual(self.calls(), [
+            ['sudo', ['-n', '-H', str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system']],
+            ['new', ['sdejectguard', 'start', '--scope', 'system']],
+            ['new', ['sdejectguard', 'uninstall', '--scope', 'user']],
+            ['new', ['setup', '--no-sd-eject-guard']],
+            ['new', ['--version']],
+        ])
+
+    def test_piped_setup_authorizes_only_the_system_guard(self):
+        status, output = self.run_piped_setup_in_terminal(b'\r', developer_tools=True)
+        self.assertEqual(status, 0, output)
+        self.assertIn('Administrator access is required', output)
+        calls = self.calls()
+        self.assertEqual(calls[0], ['sudo', ['-p', '[SidePulse] Administrator password for %p: ', '-v']])
+        self.assertEqual([call for call in calls if call[0] == 'sudo'][1:], [
+            ['sudo', ['-n', '-H', str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system']],
+        ])
+        self.assertEqual(calls[-3:-1], [
+            ['new', ['sdejectguard', 'uninstall', '--scope', 'user']],
+            ['new', ['setup', '--no-sd-eject-guard']],
+        ])
+
+    def test_headless_setup_keeps_user_guard_when_sudo_fails(self):
+        status, output = self.run_piped_setup_in_terminal(headless=True, sudo_fail=True)
+        self.assertNotEqual(status, 0)
+        self.assertIn('requires non-interactive sudo', output)
+        self.assertNotIn('SidePulse is installed.', output)
+        self.assertEqual(self.calls(), [
+            ['sudo', ['-n', '-H', str(self.install_root / 'venv/bin/sidepulse'), 'sdejectguard', 'start', '--scope', 'system']],
+        ])
+
+    def test_headless_setup_can_skip_system_guard_without_sudo(self):
+        status, output = self.run_piped_setup_in_terminal(headless=True, skip_guard=True)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(self.calls(), [
+            ['new', ['setup', '--no-sd-eject-guard']],
+            ['new', ['--version']],
+        ])
 
     def test_macos_menu_bar_is_stopped_before_replacement_and_resumed_on_failure(self):
         self.assertEqual(self.install(self.old).returncode, 0)
@@ -381,7 +443,7 @@ print(settings)
         result = self.install(
             self.new, SIDEPULSE_TEST_SETUP_FAIL='1',
             SIDEPULSE_TEST_LAUNCH_STATE=str(state),
-            PATH=f'{stubs}:{os.environ["PATH"]}',
+            PATH=f'{stubs}:{self.env["PATH"]}',
         )
         self.assertNotEqual(result.returncode, 0)
         actions = [(who, args[0]) for who, args in self.calls()]

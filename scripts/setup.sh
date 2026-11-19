@@ -2,12 +2,15 @@
 set -eu
 
 HEADLESS=${SIDEPULSE_SETUP_NONINTERACTIVE:-0}
+SELECT_EJECT_GUARD=1
 for option do
     case "$option" in
         --headless) HEADLESS=1 ;;
+        --no-sd-eject-guard) SELECT_EJECT_GUARD=0 ;;
         -h|--help)
-            printf 'Usage: sh setup.sh [--headless]\n'
-            printf '  --headless  Install all available components without prompting.\n'
+            printf 'Usage: sh setup.sh [--headless] [--no-sd-eject-guard]\n'
+            printf '  --headless           Install the selected components without prompting.\n'
+            printf '  --no-sd-eject-guard  Skip system-wide SD card ejection prevention.\n'
             exit 0
             ;;
         *)
@@ -27,7 +30,10 @@ AGENTS='codex claude grok cursor junie'
 MAC_COMPONENTS='sd-eject-guard status-bar'
 selected_components=" $AGENTS "
 if [ "$PLATFORM" = Darwin ]; then
-    selected_components=" $MAC_COMPONENTS $AGENTS "
+    selected_components="${selected_components}status-bar "
+    if [ "$SELECT_EJECT_GUARD" -eq 1 ]; then
+        selected_components="${selected_components}sd-eject-guard "
+    fi
 fi
 terminal_settings=
 
@@ -84,7 +90,7 @@ draw_group() {
             checkbox_color=${row_color:-$menu_checked}
         fi
         case "$component" in
-            sd-eject-guard) label='SD card ejection prevention (important for deep sleep)' ;;
+            sd-eject-guard) label='SD card ejection prevention (system-wide, important for deep sleep)' ;;
             codex) label='Codex' ;;
             claude) label='Claude Code' ;;
             grok) label='Grok' ;;
@@ -357,6 +363,14 @@ SIDEPULSE_WHEEL=$1
 
 progress 4 'Installing SidePulse and command links'
 
+if component_selected sd-eject-guard && [ -n "$terminal_settings" ] && [ "$(id -u)" -ne 0 ]; then
+    printf '      Administrator access is required for system-wide SD card ejection prevention.\n' >&3
+    if ! sudo -p '[SidePulse] Administrator password for %p: ' -v </dev/tty; then
+        printf 'Could not authorize system-wide SD card ejection prevention.\n' >&2
+        exit 1
+    fi
+fi
+
 if [ -x "$VENV/bin/sidepulse" ] && "$VENV/bin/sidepulse" service status >/dev/null 2>&1; then
     "$VENV/bin/sidepulse" service stop
     SERVICE_STOPPED=1
@@ -402,8 +416,27 @@ case "$selected_agents" in
         ;;
 esac
 if [ "$PLATFORM" = Darwin ]; then
-    if ! component_selected sd-eject-guard; then
-        set -- "$@" --no-sd-eject-guard
+    # Run the rest of setup as the login user. Only the guard needs root.
+    set -- "$@" --no-sd-eject-guard
+    if component_selected sd-eject-guard; then
+        printf '      Installing system-wide SD card ejection prevention…\n' >&3
+        if [ "$(id -u)" -eq 0 ]; then
+            "$VENV/bin/sidepulse" sdejectguard start --scope system
+        else
+            sudo_input=/dev/null
+            if [ -n "$terminal_settings" ]; then
+                sudo_input=/dev/tty
+            fi
+            if ! sudo -n -H "$VENV/bin/sidepulse" sdejectguard start --scope system <"$sudo_input"; then
+                printf 'System-wide SD card ejection prevention could not be installed.\n' >&2
+                if [ -z "$terminal_settings" ]; then
+                    printf 'Headless setup requires non-interactive sudo for the eject guard. Rerun in a terminal to authorize it.\n' >&2
+                fi
+                exit 1
+            fi
+            # Retire the old per-user guard only after the system job starts.
+            "$VENV/bin/sidepulse" sdejectguard uninstall --scope user
+        fi
     fi
     if ! component_selected status-bar; then
         set -- "$@" --no-status-bar

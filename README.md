@@ -47,6 +47,11 @@ macOS and Linux. The macOS integrations group lists SD card ejection prevention
 unchecked skips its setup for this run. The core CLI and background service are
 included in every install.
 
+The one-command installer sets up SD card ejection prevention as a system-wide
+LaunchDaemon so it can run before login. Selecting it requests administrator
+approval during interactive setup. Setup removes the old per-user guard after
+the system guard starts.
+
 Setup shows progress as it checks requirements, prepares Python, builds and
 installs packages, and configures services and selected components.
 It keeps detailed output in
@@ -61,7 +66,9 @@ bash -o pipefail -c 'curl -fsSL https://sidepulse.io/setup.sh | env SIDEPULSE_SE
 ```
 
 From a checkout, run `sh scripts/setup.sh --headless`. For an existing install,
-run `sidepulse update --headless`.
+run `sidepulse update --headless`. Headless macOS setup needs non-interactive
+`sudo` to install the system eject guard. To skip the guard from a checkout,
+use `sh scripts/setup.sh --headless --no-sd-eject-guard`.
 
 `sp` is a short alias for `sidepulse`; for example, `sp status` runs
 `sidepulse status`.
@@ -649,9 +656,9 @@ Use `--no-agent-monitor`, `--no-sd-eject-guard`, or `--no-status-bar` to skip
 individual components.
 
 SidePulse Pro Eject Prevention keeps the built-in SD reader attached after
-macOS hibernate or lock-screen mount refusals. By default setup installs it
-system-wide when already running with system permissions, otherwise as a
-per-user LaunchAgent:
+macOS hibernate or lock-screen mount refusals. When you run `sidepulse setup`
+directly, its `auto` scope chooses a system-wide daemon if the command already
+has administrator privileges and a per-user LaunchAgent otherwise.
 
 The guard checks whether macOS restarted Disk Arbitration. If it did, the
 guard exits and launchd starts it again with a fresh disk session. KeepAlive
