@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -64,8 +65,8 @@ def measure_status_bar_cpu():
         )
 
     app = NSApplication.sharedApplication()
-    if app is None or NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion():
-        print("CPU check requires an AppKit session with Reduce Motion off", file=sys.stderr)
+    if app is None:
+        print("CPU check requires an AppKit session", file=sys.stderr)
         return 77
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     app.finishLaunching()
@@ -82,7 +83,14 @@ def measure_status_bar_cpu():
     # Keep the run loop alive in the idle case without introducing periodic work.
     keepalive = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(60, False, lambda _: None)
     samples = {}
+    # Measure real animations regardless of the host's accessibility preference.
+    # Only override the preference query in this isolated benchmark process.
+    workspace = Mock(wraps=NSWorkspace.sharedWorkspace())
+    workspace.accessibilityDisplayShouldReduceMotion.return_value = False
+    workspace_patch = patch.object(status_bar, "NSWorkspace", wraps=NSWorkspace)
     try:
+        workspace_class = workspace_patch.start()
+        workspace_class.sharedWorkspace.return_value = workspace
         for name, state in (
             ("idle", status_bar.STATE_IDLE),
             ("working", status_bar.STATE_WORKING),
@@ -118,6 +126,7 @@ def measure_status_bar_cpu():
         keepalive.invalidate()
         controller.applicationWillTerminate_(None)
         bar.removeStatusItem_(item)
+        workspace_patch.stop()
     print(json.dumps(samples))
     return 0
 
