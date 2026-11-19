@@ -167,6 +167,8 @@ def session_open_target(
         link = valid_t3_link(status.t3_link)
         return ("url", link) if link else None
     if action == SESSION_OPEN_APP:
+        if status.provider.lower() == "antigravity" and status.origin == "Antigravity App" and status.session_id:
+            return "antigravity", status.session_id
         url = session_deep_link(status)
         return ("url", url) if url else None
     if action == SESSION_OPEN_VSCODE:
@@ -205,6 +207,8 @@ def session_open_action_label(
             return "Open in Codex"
         if provider == "claude":
             return "Open Claude App"
+        if provider == "antigravity":
+            return "Open in Antigravity"
         return "Open App"
     if action == SESSION_OPEN_VSCODE:
         return "Open in VS Code"

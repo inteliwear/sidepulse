@@ -952,8 +952,10 @@ accounted OSC-style JSON through the daemon socket. Settings are stored at
 
 Google Antigravity's app, IDE, and CLI share a global hook configuration.
 Run `sidepulse setup antigravity` to track each conversation as it starts,
-runs tools, requests input, and finishes. CLI sessions can resume from
-the SidePulse menu in Terminal. The SidePulse hook group appears in the
+runs tools, requests input, and finishes. On macOS, click an Antigravity App
+session in the SidePulse menu to select its conversation in the app. This uses
+macOS Accessibility to follow the conversation's sidebar link. CLI sessions
+resume in Terminal. The SidePulse hook group appears in the
 CLI's `/hooks` view and the app and IDE's Hooks settings.
 [Antigravity hook reference](https://antigravity.google/docs/hooks)
 

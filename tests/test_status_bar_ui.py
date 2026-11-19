@@ -126,6 +126,21 @@ def make_status(
     )
 
 
+def test_antigravity_desktop_primary_action_opens_the_clicked_conversation():
+    status = make_status(provider="antigravity", origin="Antigravity App")
+    controller = sb.StatusBarController.alloc().init()
+    controller.settings = AgentMonitorSettings()
+    sender = sb.build_session_menu_item(status, datetime.now(timezone.utc), controller)
+    assert sender.action() == "openSessionPrimary:"
+    with patch.object(sb.threading, "Thread") as thread:
+        controller.openSessionPrimary_(sender)
+    thread.assert_called_once_with(target=controller.open_antigravity_conversation,
+                                   args=(status.session_id,), daemon=True)
+    thread.return_value.start.assert_called_once()
+    assert sb.default_session_open_target(replace(status, origin="Antigravity CLI"))[0] == "terminal"
+    assert sb.default_session_open_target(replace(status, session_id=None)) is None
+
+
 def make_snapshot(statuses=(), stale_statuses=()) -> MonitorSnapshot:
     now = datetime.now(timezone.utc)
     statuses = tuple(statuses)

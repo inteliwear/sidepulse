@@ -2329,6 +2329,8 @@ class StatusBarController(NSObject):
                 custom_terminal_path=self.settings.custom_terminal_path,
                 session_hints=terminal_session_hints(status),
             )
+        elif kind == "antigravity":
+            threading.Thread(target=self.open_antigravity_conversation, args=(value,), daemon=True).start()
         elif kind == "ide":
             if value.app_path:
                 subprocess.Popen(["open", "-a", value.app_path, value.project_path])
@@ -2349,6 +2351,33 @@ class StatusBarController(NSObject):
             except Exception as exc:
                 self.set_settings_message(f"Could not save open preference: {exc}")
                 self.settings = load_settings()
+
+    def open_antigravity_conversation(self, session_id: str) -> None:
+        script = Path(__file__).with_name("resources") / "open_antigravity.js"
+        try:
+            subprocess.run(
+                ["/usr/bin/open", "-b", "com.google.antigravity"], check=True,
+                capture_output=True, timeout=8,
+            )
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-l", "JavaScript", str(script), session_id],
+                check=True, capture_output=True, text=True, timeout=12,
+            )
+            message = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            log_status_bar(f"Antigravity session opening failed: {exc}")
+            message = "Could not open the conversation in the Antigravity app."
+        if message:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "showAntigravityOpenError:", message, False,
+            )
+
+    def showAntigravityOpenError_(self, message):
+        self.set_settings_message(message)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Open in Antigravity")
+        alert.setInformativeText_(message)
+        alert.runModal()
 
     def close_status_menu(self) -> None:
         try:
