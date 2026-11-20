@@ -93,6 +93,8 @@ def session_resume_command(status: AgentStatus) -> str | None:
         return f"cd {cwd} && claude --resume {session_id}"
     if provider == "grok":
         return f"cd {cwd} && grok --resume {session_id}"
+    if provider == "antigravity" and status.origin == "Antigravity CLI":
+        return f"cd {cwd} && agy --conversation {session_id}"
     if provider == "junie":
         return f"cd {cwd} && junie --session-id={session_id} --resume"
     if provider == "opencode":
@@ -165,6 +167,8 @@ def session_open_target(
         link = valid_t3_link(status.t3_link)
         return ("url", link) if link else None
     if action == SESSION_OPEN_APP:
+        if status.provider.lower() == "antigravity" and status.origin == "Antigravity App" and status.session_id:
+            return "antigravity", status.session_id
         url = session_deep_link(status)
         return ("url", url) if url else None
     if action == SESSION_OPEN_VSCODE:
@@ -203,6 +207,8 @@ def session_open_action_label(
             return "Open in Codex"
         if provider == "claude":
             return "Open Claude App"
+        if provider == "antigravity":
+            return "Open in Antigravity"
         return "Open App"
     if action == SESSION_OPEN_VSCODE:
         return "Open in VS Code"

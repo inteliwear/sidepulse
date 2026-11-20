@@ -86,7 +86,7 @@ from sidepulse.collector import MonitorSnapshot, SourceSpec  # noqa: E402
 from sidepulse.models import AgentMode, AgentStatus, AggregateStatus  # noqa: E402
 from sidepulse.providers import HOOK_PROVIDERS  # noqa: E402
 from sidepulse.session_actions import IdeOpenTarget  # noqa: E402
-from sidepulse.settings import AgentMonitorSettings  # noqa: E402
+from sidepulse.settings import AgentMonitorSettings, save_settings  # noqa: E402
 
 
 # A selector literal: camelCase identifier ending in a single colon.
@@ -124,6 +124,51 @@ def make_status(
         origin=origin,
         stale=stale,
     )
+
+
+def test_antigravity_desktop_primary_action_opens_the_clicked_conversation():
+    status = make_status(provider="antigravity", origin="Antigravity App")
+    controller = sb.StatusBarController.alloc().init()
+    controller.settings = AgentMonitorSettings()
+    sender = sb.build_session_menu_item(status, datetime.now(timezone.utc), controller)
+    assert sender.action() == "openSessionPrimary:"
+    with patch.object(sb, "antigravity_access_missing", return_value=False), \
+         patch.object(sb, "confirm_antigravity_access") as offer, \
+         patch.object(controller.antigravity_open_queue, "submit") as submit:
+        controller.openSessionPrimary_(sender)
+    offer.assert_not_called()
+    submit.assert_called_once_with(controller.open_antigravity_conversation, status.session_id, False)
+    assert sb.default_session_open_target(replace(status, origin="Antigravity CLI"))[0] == "terminal"
+    assert sb.default_session_open_target(replace(status, session_id=None)) is None
+
+
+def test_antigravity_permission_choice_is_remembered_for_both_answers(tmp_path):
+    status = make_status(provider="antigravity", origin="Antigravity App")
+    for review in (False, True):
+        path = tmp_path / str(review) / "settings.json"
+        controller = sb.StatusBarController.alloc().init()
+        controller.settings = sb.load_settings(path)
+        with patch.object(sb, "antigravity_access_missing", return_value=True) as check, \
+             patch.object(sb, "confirm_antigravity_access", return_value=review) as offer, \
+             patch.object(sb, "save_settings", side_effect=lambda s: save_settings(s, path)), \
+             patch.object(controller.antigravity_open_queue, "submit") as submit:
+            controller.open_session(status, None, remember=False)
+            assert submit.call_args.args[1:] == (status.session_id, review)
+            controller.settings = sb.load_settings(path)
+            controller.open_session(status, None, remember=False)
+            assert submit.call_args.args[1:] == (status.session_id, False)
+        check.assert_called_once()
+        offer.assert_called_once()
+
+
+def test_antigravity_opens_the_app_for_both_choices():
+    controller = sb.StatusBarController.alloc().init()
+    for review, action in ((False, "select"), (True, "request-and-select")):
+        with patch.object(sb.subprocess, "run") as run, \
+             patch.object(sb, "run_antigravity_helper", return_value="") as helper:
+            controller.open_antigravity_conversation("example-chat", review)
+        assert run.call_args.args[0] == ["/usr/bin/open", "-b", "com.google.antigravity"]
+        helper.assert_called_once_with(action, "example-chat")
 
 
 def make_snapshot(statuses=(), stale_statuses=()) -> MonitorSnapshot:

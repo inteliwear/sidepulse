@@ -42,7 +42,7 @@ at `~/.local/bin/sidepulse`, and runs `sidepulse setup`.
 All available components are checked by default, and **Install** is focused.
 Use the up and down arrow keys to move, Space to toggle a checkbox, and Enter
 on **Install** to start setup. Press `q` to cancel.
-The Agent hooks group lists Codex, Claude Code, Grok, Cursor, and Junie on
+The Agent hooks group lists Codex, Claude Code, Grok, Cursor, Junie, and Antigravity on
 macOS and Linux. The macOS integrations group lists SD card ejection prevention
 (important for deep sleep) and the status-bar indicator. Leaving an item
 unchecked skips its setup for this run. The core CLI and background service are
@@ -521,7 +521,7 @@ SidePulse Pro and SidePulse Dot.
 
 #### AI Agent Monitoring
 
-SidePulse monitors Codex, Claude, Grok, Cursor, and Junie through hooks and
+SidePulse monitors Codex, Claude, Grok, Cursor, Junie, and Antigravity through hooks and
 OpenCode and Herdr through plugins. Agent activity drives the LED status.
 
 Agent status modes:
@@ -603,6 +603,7 @@ The monitor currently supports:
 | Codex | `~/.codex/config.toml` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/codex.jsonl` |
 | Claude | `~/.claude/settings.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/claude.jsonl` |
 | Grok | `~/.grok/hooks/sidepulse.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/grok.jsonl` |
+| Antigravity | `~/.gemini/config/hooks.json` | `${XDG_STATE_HOME:-~/.local/state}/sidepulse/agent-monitor/antigravity.jsonl` |
 
 #### Local reply classifier (Apple Silicon)
 
@@ -672,7 +673,7 @@ sidepulse setup
 ```
 
 `sidepulse setup` installs or refreshes all supported agent integrations, including
-Junie CLI, the OpenCode plugin, and the Herdr plugin when Herdr is available. On macOS it installs SidePulse Pro Eject Prevention, writes the status-bar
+Junie CLI, Google Antigravity, the OpenCode plugin, and the Herdr plugin when Herdr is available. On macOS it installs SidePulse Pro Eject Prevention, writes the status-bar
 LaunchAgent, starts both helpers immediately, and enables them at login. This is
 intentionally an explicit command instead of a `pip install` side effect. To set
 up only one provider, pass its name, for example `sidepulse setup junie`.
@@ -741,6 +742,7 @@ sidepulse setup claude
 sidepulse setup grok
 sidepulse setup cursor
 sidepulse setup junie
+sidepulse setup antigravity
 sidepulse setup opencode
 sidepulse setup herdr
 ```
@@ -843,6 +845,7 @@ sidepulse setup claude --uninstall
 sidepulse setup grok --uninstall
 sidepulse setup cursor --uninstall
 sidepulse setup junie --uninstall
+sidepulse setup antigravity --uninstall
 sidepulse setup opencode --uninstall
 sidepulse setup herdr --uninstall
 ```
@@ -942,10 +945,26 @@ firmware/websim `sdled.wasm` engine, then AppKit only draws the returned RGB
 frames.
 
 Open `Settings...` from the dropdown to manage agent integrations. The settings
-window can manage Codex, Claude, Grok, Cursor, and Junie hooks and the OpenCode and Herdr plugins.
+window can manage Codex, Claude, Grok, Cursor, Junie, and Antigravity hooks and the OpenCode and Herdr plugins.
 The transcript checkboxes apply only to explicit file-based diagnostics. The status-bar app reads
 accounted OSC-style JSON through the daemon socket. Settings are stored at
 `${XDG_CONFIG_HOME:-~/.config}/sidepulse/agent-monitor/settings.json`.
+
+Google Antigravity's app, IDE, and CLI share a global hook configuration.
+Run `sidepulse setup antigravity` to track each conversation as it starts,
+runs tools, requests input, and finishes. On macOS, clicking a desktop session
+opens Antigravity and uses **⌘K**, the chat title, and **Return** to select the conversation.
+SidePulse checks the opened chat ID. If multiple chats share the title, it leaves search open.
+If the launcher needs Accessibility access, SidePulse offers
+a one-time choice. **Review Permission…** opens Accessibility settings and shows **SidePulse Chat Opener**
+in Finder. Enable it in Settings, or drag it into the list if it is missing. After granting access, click the session again.
+**Open App Only** remembers your choice and brings the app forward on each click.
+Use **⌘K** to find the chat. You can grant or revoke access later in System Settings
+→ Privacy & Security → Accessibility under **SidePulse Chat Opener**. Choose
+**Review Chat Access…** in a desktop session’s options to revisit the choice.
+CLI sessions resume in Terminal. The SidePulse hook group appears in the
+CLI's `/hooks` view and the app and IDE's Hooks settings.
+[Antigravity hook reference](https://antigravity.google/docs/hooks)
 
 Junie support uses its user-level `~/.junie/config.json` hooks. Junie currently
 emits hooks from its interactive and batch CLI hosts, including CLI sessions

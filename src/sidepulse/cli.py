@@ -28,6 +28,7 @@ from .device_writer import (
 from .hook import hook_log_main
 from .install import (
     configure_t3code_monitoring,
+    configure_antigravity_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -190,6 +191,7 @@ def build_sidepulse_parser() -> argparse.ArgumentParser:
     setup.add_argument("--claude-log", type=Path, help="Claude JSONL log path.")
     setup.add_argument("--grok-log", type=Path, help="Grok JSONL log path.")
     setup.add_argument("--cursor-log", type=Path, help="Cursor JSONL log path.")
+    setup.add_argument("--antigravity-log", type=Path, help="Antigravity JSONL log path.")
     setup.add_argument("--junie-log", type=Path, help="Junie JSONL log path.")
     setup.add_argument("--dry-run", action="store_true", help="Show what would change.")
     setup.add_argument(
@@ -296,7 +298,7 @@ def add_hook_log_parser(subparsers: argparse._SubParsersAction) -> None:
     hook_log = subparsers.add_parser("hook-log", help="Internal hook logging entry point.")
     hook_log.add_argument("--provider", choices=LOG_HOOK_PROVIDERS, required=True)
     hook_log.add_argument("--log", type=Path, required=True)
-    hook_log.add_argument("--event", help="Provider-native lifecycle event name (used by cursor).")
+    hook_log.add_argument("--event", help="Provider-native lifecycle event name.")
     hook_log.set_defaults(func=cmd_hook_log)
 
 
@@ -1261,6 +1263,8 @@ def install_hook_results(args: argparse.Namespace):
             results.append(install_codex_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "claude":
             results.append(install_claude_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(configure_antigravity_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "cursor":
             results.append(install_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":
@@ -1303,6 +1307,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             results.append(uninstall_codex_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "claude":
             results.append(uninstall_claude_hooks(log_path=log_path, dry_run=args.dry_run))
+        elif provider == "antigravity":
+            results.append(configure_antigravity_hooks(log_path=log_path, dry_run=args.dry_run, uninstall=True))
         elif provider == "cursor":
             results.append(uninstall_cursor_hooks(log_path=log_path, dry_run=args.dry_run))
         elif provider == "grok":

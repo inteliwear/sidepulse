@@ -9,7 +9,8 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -115,6 +116,7 @@ from .herdr import (
 )
 from .install import (
     configure_t3code_monitoring,
+    configure_antigravity_hooks,
     install_claude_hooks,
     install_codex_hooks,
     install_cursor_hooks,
@@ -148,11 +150,13 @@ from .lid_sleep import (
     sleep_helper_install_command,
     sleep_helper_installed,
 )
+from .antigravity_opener import run_antigravity_helper
 from .agent_terminal import AgentTerminal, claude_session_terminal, junie_session_terminal
 from .junie_index import junie_session_info
 from .models import AgentMode, AgentStatus, MODE_LABELS, REMOTE_HERDR_ORIGIN, provider_label
 from .providers import (
     ProviderConfig,
+    detect_antigravity_config,
     detect_claude_config,
     detect_codex_config,
     detect_cursor_config,
@@ -513,6 +517,7 @@ class StatusBarController(NSObject):
             return None
 
         self.settings = load_settings()
+        self.antigravity_open_queue = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chat-opener")
         self.app_build = BuildInfo.current()
         self.open_settings_on_launch = False
         self.monitor = self.build_monitor()
@@ -789,6 +794,14 @@ class StatusBarController(NSObject):
         menu.popUpMenuPositioningItem_atLocation_inView_(None, (0, height), sender)
 
     @objc.IBAction
+    def reviewAntigravityAccess_(self, sender):
+        status = sender.representedObject()
+        if not isinstance(status, AgentStatus):
+            return
+        if confirm_antigravity_access():
+            self.antigravity_open_queue.submit(self.open_antigravity_conversation, status.session_id, True)
+
+    @objc.IBAction
     def openSessionWithAction_(self, sender):
         payload = sender.representedObject()
         if not isinstance(payload, dict):
@@ -961,6 +974,14 @@ class StatusBarController(NSObject):
     @objc.IBAction
     def uninstallCursorHooks_(self, _sender):
         self.update_hooks("cursor", install=False)
+
+    @objc.IBAction
+    def installAntigravityHooks_(self, _sender):
+        self.update_hooks("antigravity", install=True)
+
+    @objc.IBAction
+    def uninstallAntigravityHooks_(self, _sender):
+        self.update_hooks("antigravity", install=False)
 
     @objc.IBAction
     def installJunieHooks_(self, _sender):
@@ -1651,6 +1672,10 @@ class StatusBarController(NSObject):
         claude = detect_claude_config()
         grok = detect_grok_config()
         cursor = detect_cursor_config()
+        set_field_value(
+            self.settings_fields.get("antigravity_hook_status"),
+            hook_status_text(detect_antigravity_config()),
+        )
         junie = detect_junie_config()
         opencode = detect_opencode_config()
         self.refresh_t3_monitoring()
@@ -1888,6 +1913,8 @@ class StatusBarController(NSObject):
                 result = install_cursor_hooks()
             elif provider == "cursor":
                 result = uninstall_cursor_hooks()
+            elif provider == "antigravity":
+                result = configure_antigravity_hooks(uninstall=not install)
             elif provider == "junie" and install:
                 result = install_junie_hooks()
             elif provider == "junie":
@@ -2313,6 +2340,16 @@ class StatusBarController(NSObject):
                 custom_terminal_path=self.settings.custom_terminal_path,
                 session_hints=terminal_session_hints(status),
             )
+        elif kind == "antigravity":
+            request_access = False
+            if not self.settings.antigravity_access_explained and antigravity_access_missing():
+                request_access = confirm_antigravity_access()
+                self.settings = replace(self.settings, antigravity_access_explained=True)
+                try:
+                    save_settings(self.settings)
+                except OSError as exc:
+                    log_status_bar(f"Could not remember the Antigravity permission choice: {exc}")
+            self.antigravity_open_queue.submit(self.open_antigravity_conversation, value, request_access)
         elif kind == "ide":
             if value.app_path:
                 subprocess.Popen(["open", "-a", value.app_path, value.project_path])
@@ -2333,6 +2370,31 @@ class StatusBarController(NSObject):
             except Exception as exc:
                 self.set_settings_message(f"Could not save open preference: {exc}")
                 self.settings = load_settings()
+
+    @objc.python_method
+    def open_antigravity_conversation(self, session_id: str, request_access: bool) -> None:
+        try:
+            subprocess.run(
+                ["/usr/bin/open", "-b", "com.google.antigravity"], check=True,
+                capture_output=True, timeout=8,
+            )
+            message = run_antigravity_helper(
+                "request-and-select" if request_access else "select", session_id,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log_status_bar(f"Antigravity session opening failed: {exc}")
+            message = "Could not open the conversation in the Antigravity app."
+        if message:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "showAntigravityOpenError:", message, False,
+            )
+
+    def showAntigravityOpenError_(self, message):
+        self.set_settings_message(message)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Open in Antigravity")
+        alert.setInformativeText_(message)
+        alert.runModal()
 
     def close_status_menu(self) -> None:
         try:
@@ -3434,6 +3496,30 @@ def build_setup_window(target: StatusBarController) -> NSWindow:
     return window
 
 
+def antigravity_access_missing() -> bool:
+    try:
+        return run_antigravity_helper("check") == "missing"
+    except (OSError, subprocess.SubprocessError) as exc:
+        log_status_bar(f"Could not check Antigravity accessibility access: {exc}")
+        return False
+
+
+def confirm_antigravity_access() -> bool:
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Open the selected chat in Antigravity?")
+    alert.setInformativeText_(
+        "SidePulse can use Accessibility access to open ⌘K in Antigravity, type the chat title, and press Return. "
+        "In System Settings, enable SidePulse Chat Opener. If it’s missing, drag the selected "
+        "app from Finder into the list. Then click the session again.\n\n"
+        "Choose Open App Only to bring Antigravity forward. You can then press ⌘K to choose a chat. "
+        "You can change access later in System Settings → Privacy & Security → Accessibility."
+    )
+    alert.addButtonWithTitle_("Review Permission…")
+    decline = alert.addButtonWithTitle_("Open App Only")
+    decline.setKeyEquivalent_("\x1b")
+    return alert.runModal() == NSAlertFirstButtonReturn
+
+
 def confirm_linked_phone_removal(name: str) -> bool:
     alert = NSAlert.alloc().init()
     alert.setMessageText_(f"Remove {name}?")
@@ -4275,51 +4361,55 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         install_title="Enable", uninstall_title="Disable",
     )
 
-    add_separator(agents_tab, section_x, 274, tab_width - 48)
-    add_label(agents_tab, "Session Opening", section_x, 248, 240, 24)
-    add_label(agents_tab, "Terminal App", primary_action_x, 248, 200, 24)
+    antigravity_status = add_hook_row(
+        "Antigravity", 262, "installAntigravityHooks:", "uninstallAntigravityHooks:"
+    )
 
-    add_label(agents_tab, "Codex", label_x, 212, 90, 22)
+    add_separator(agents_tab, section_x, 248, tab_width - 48)
+    add_label(agents_tab, "Session Opening", section_x, 222, 240, 24)
+    add_label(agents_tab, "Terminal App", primary_action_x, 222, 200, 24)
+
+    add_label(agents_tab, "Codex", label_x, 186, 90, 22)
     codex_opener = add_provider_opener_popup(
-        agents_tab, "codex", value_x, 210, target, width=value_width
+        agents_tab, "codex", value_x, 184, target, width=value_width
     )
-    add_label(agents_tab, "Claude", label_x, 184, 90, 22)
+    add_label(agents_tab, "Claude", label_x, 158, 90, 22)
     claude_opener = add_provider_opener_popup(
-        agents_tab, "claude", value_x, 182, target, width=value_width
+        agents_tab, "claude", value_x, 156, target, width=value_width
     )
-    add_label(agents_tab, "Grok", label_x, 156, 90, 22)
+    add_label(agents_tab, "Grok", label_x, 130, 90, 22)
     grok_opener = add_provider_opener_popup(
-        agents_tab, "grok", value_x, 154, target, width=value_width
+        agents_tab, "grok", value_x, 128, target, width=value_width
     )
-    add_label(agents_tab, "Junie", label_x, 128, 90, 22)
+    add_label(agents_tab, "Junie", label_x, 102, 90, 22)
     junie_opener = add_provider_opener_popup(
-        agents_tab, "junie", value_x, 126, target, width=value_width
+        agents_tab, "junie", value_x, 100, target, width=value_width
     )
 
-    add_label(agents_tab, "T3 Code", label_x, 100, 90, 22)
+    add_label(agents_tab, "T3 Code", label_x, 74, 90, 22)
     t3code_opener = add_provider_opener_popup(
-        agents_tab, "t3code", value_x, 98, target, width=value_width
+        agents_tab, "t3code", value_x, 72, target, width=value_width
     )
 
     terminal_popup = add_terminal_popup(
-        agents_tab, primary_action_x, 210, target, width=200
+        agents_tab, primary_action_x, 184, target, width=200
     )
     custom_terminal_path = add_label(
-        agents_tab, "", primary_action_x, 178, 200, 22
+        agents_tab, "", primary_action_x, 152, 200, 22
     )
     add_button(
         agents_tab,
         "Choose...",
         secondary_action_x,
-        142,
+        116,
         100,
         28,
         target,
         "chooseSessionTerminal:",
     )
 
-    add_separator(agents_tab, section_x, 78, tab_width - 48)
-    add_label(agents_tab, "Transcript Monitoring", section_x, 50, 240, 24)
+    add_separator(agents_tab, section_x, 66, tab_width - 48)
+    add_label(agents_tab, "Transcript Monitoring", section_x, 40, 240, 24)
     codex_transcripts = add_checkbox(
         agents_tab,
         "CLI fallback: Codex transcripts",
@@ -4558,6 +4648,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
         "cursor_hook_status": cursor_status,
+        "antigravity_hook_status": antigravity_status,
         "junie_hook_status": junie_status,
         "opencode_hook_status": opencode_status,
         "herdr_hook_status": herdr_status,
@@ -5365,6 +5456,8 @@ def hook_status_text(config: ProviderConfig) -> str:
         if config.hooks_enabled:
             return "Plugin installed"
         return "Existing plugin is unmanaged" if config.exists else "Plugin not installed"
+    if config.provider == "antigravity" and config.hook_events and not config.hooks_enabled:
+        return "Disabled in Antigravity"
     if not config.exists:
         return "Not installed — config created on install"
     if config.hook_events:
@@ -5568,6 +5661,13 @@ def build_session_options_menu(
             target,
             selected=action == selected,
         )
+    if status.provider == "antigravity" and status.origin == "Antigravity App" and status.session_id:
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Review Chat Access…", "reviewAntigravityAccess:", "",
+        )
+        item.setRepresentedObject_(status)
+        item.setTarget_(target)
+        menu.addItem_(item)
     if status.session_link:
         item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Copy mobile session link", "copySessionLink:", "")
         item.setTarget_(target)

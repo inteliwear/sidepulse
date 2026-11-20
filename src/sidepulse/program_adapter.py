@@ -116,7 +116,10 @@ def hook_report(provider: str, line: dict) -> dict | None:
     if record.event_name == 'PermissionRequest':
         status['id'] = wait_id(record)
     if status['state'] == 'blocked':
-        status['kind'] = 'permission' if 'permission' in record.event_name.lower() else 'question'
+        permission = 'permission' in record.event_name.lower() or (
+            provider == 'antigravity' and record.tool_name == 'ask_permission'
+        )
+        status['kind'] = 'permission' if permission else 'question'
     message = interpreted.message
     if mode == 'waiting_for_input':
         message = question_text(record.raw.get('tool_input')) or message

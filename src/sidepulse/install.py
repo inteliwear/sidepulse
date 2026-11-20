@@ -26,6 +26,9 @@ except ModuleNotFoundError:  # Python 3.10
 from .hook_commands import observer_script, WINDOWS_MARKER
 
 from .providers import (
+    ANTIGRAVITY_EVENTS,
+    antigravity_config_path,
+    is_antigravity_handler,
     CLAUDE_EVENTS,
     CODEX_EVENTS,
     CURSOR_EVENTS,
@@ -200,6 +203,64 @@ def install_grok_hooks(
         target_log.touch(exist_ok=True)
 
     return InstallResult("grok", config, target_log, changed, backup, dry_run)
+
+
+def configure_antigravity_hooks(
+    log_path: Path | None = None,
+    config_path: Path | None = None,
+    dry_run: bool = False,
+    *,
+    uninstall: bool = False,
+) -> InstallResult:
+    config = config_path or antigravity_config_path()
+    target_log = (log_path or detect_log_path("antigravity")).expanduser()
+    data = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
+    if not isinstance(data, dict) or not isinstance(data.get("sidepulse", {}), dict):
+        raise ValueError(f"Expected named Antigravity hook groups in {config}")
+    original = json.dumps(data)
+    group = data.get("sidepulse", {})
+    removed = False
+    for event in ANTIGRAVITY_EVENTS:
+        entries = group.get(event, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"Expected a list of {event} handlers in {config}")
+        tool_event = event in {"PreToolUse", "PostToolUse"}
+        kept = []
+        for entry in entries:
+            if tool_event and isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+                handlers = [h for h in entry["hooks"] if not is_antigravity_handler(h)]
+                if handlers != entry["hooks"]:
+                    removed = True
+                    if handlers:
+                        kept.append({**entry, "hooks": handlers})
+                    continue
+            elif is_antigravity_handler(entry):
+                removed = True
+                continue
+            kept.append(entry)
+        if not uninstall:
+            command = hook_command("antigravity", target_log, event=event)
+            handler = {"type": "command", "command": command}
+            kept.append({"matcher": "*", "hooks": [handler]} if tool_event else handler)
+        if kept:
+            group[event] = kept
+        elif entries:
+            group.pop(event)
+    if not uninstall:
+        data["sidepulse"] = group
+    elif removed and not (group.keys() - {"enabled"}):
+        del data["sidepulse"]
+    changed = json.dumps(data) != original
+    backup = None
+    if not dry_run:
+        if not uninstall:
+            target_log.parent.mkdir(parents=True, exist_ok=True)
+            target_log.touch(exist_ok=True)
+        if changed:
+            config.parent.mkdir(parents=True, exist_ok=True)
+            backup = backup_file(config)
+            config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return InstallResult("antigravity", config, target_log, changed, backup, dry_run)
 
 
 def install_junie_hooks(
@@ -529,38 +590,7 @@ def cursor_hook_command(
     log_path: Path,
     python_executable: str | None = None,
 ) -> str:
-    executable = python_executable or sys.executable or "python3"
-    if os.name == 'nt':
-        return windows_hook_command(executable, 'cursor', log_path, event=event_name,
-                                    frozen=getattr(sys, 'frozen', False) and python_executable is None)
-    if getattr(sys, "frozen", False) and python_executable is None:
-        command = " ".join(
-            [
-                shlex.quote(executable),
-                "hook-log",
-                "--provider",
-                "cursor",
-                "--event",
-                shlex.quote(event_name),
-                "--log",
-                shlex.quote(str(log_path.expanduser())),
-            ]
-        )
-        return fail_open_command(command)
-    entry_point = Path(__file__).with_name("hook_entry.py")
-    command = " ".join(
-        [
-            shlex.quote(executable),
-            shlex.quote(str(entry_point)),
-            "--provider",
-            "cursor",
-            "--event",
-            shlex.quote(event_name),
-            "--log",
-            shlex.quote(str(log_path.expanduser())),
-        ]
-    )
-    return fail_open_command(command)
+    return hook_command("cursor", log_path, python_executable, event=event_name)
 
 
 def remove_cursor_hook_entries(entries: list[Any]) -> list[Any]:
@@ -583,35 +613,19 @@ def hook_command(
     provider: str,
     log_path: Path,
     python_executable: str | None = None,
+    *,
+    event: str | None = None,
 ) -> str:
     executable = python_executable or sys.executable or "python3"
-    if os.name == 'nt':
-        return windows_hook_command(executable, provider, log_path,
-                                    frozen=getattr(sys, 'frozen', False) and python_executable is None)
-    if getattr(sys, "frozen", False) and python_executable is None:
-        command = " ".join(
-            [
-                shlex.quote(executable),
-                "hook-log",
-                "--provider",
-                shlex.quote(provider),
-                "--log",
-                shlex.quote(str(log_path.expanduser())),
-            ]
-        )
-        return fail_open_command(command)
-    entry_point = Path(__file__).with_name("hook_entry.py")
-    command = " ".join(
-        [
-            shlex.quote(executable),
-            shlex.quote(str(entry_point)),
-            "--provider",
-            shlex.quote(provider),
-            "--log",
-            shlex.quote(str(log_path.expanduser())),
-        ]
-    )
-    return fail_open_command(command)
+    frozen = getattr(sys, "frozen", False) and python_executable is None
+    if os.name == "nt":
+        return windows_hook_command(executable, provider, log_path, event=event, frozen=frozen)
+    entry = "hook-log" if frozen else str(Path(__file__).with_name("hook_entry.py"))
+    args = [executable, entry, "--provider", provider]
+    if event:
+        args.extend(["--event", event])
+    args.extend(["--log", str(log_path.expanduser())])
+    return fail_open_command(shlex.join(args))
 
 
 def fail_open_command(command: str) -> str:
