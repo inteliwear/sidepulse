@@ -539,10 +539,10 @@ Agent status modes:
 Each mode can be configured independently in **Settings... → Animations**.
 Every state uses the same animation library: **Idle Pulse**, **Cyan Roll**,
 **Amber Pulse**, **Solid Green**, **KITT Scanner**, **KITT Scanner Red**, and
-the **Ember** and **Purple** animation families, plus any named custom animation.
+the **Ember**, **Neon**, and **Purple** animation families, plus any named custom animation.
 **Add Custom…** adds a reusable `LEDS.LED` program to that shared
 library, and animation profiles save or apply all state selections together.
-The built-in profiles are **Cyan** (the default), **Ember**, and **Purple**.
+The built-in profiles are **Cyan** (the default), **Ember**, **Neon**, and **Purple**.
 Built-ins live in `src/sidepulse/resources/animations/` as `.LED` files; patterns
 that depend on the hardware layout have only `-2.LED` and `-8.LED` variants.
 Custom programs are stored in the `animations/` folder beside `settings.json`.

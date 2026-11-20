@@ -153,11 +153,17 @@ from sidepulse.settings import (
     AGENT_ANIMATION_KITT_RED,
     AGENT_ANIMATION_LID_CLOSED,
     AGENT_ANIMATION_LID_OPEN,
+    AGENT_ANIMATION_NEON_ATTENTION,
+    AGENT_ANIMATION_NEON_COMPLETE,
+    AGENT_ANIMATION_NEON_IDLE,
+    AGENT_ANIMATION_NEON_LID_OPEN,
+    AGENT_ANIMATION_NEON_ROLL,
     AGENT_ANIMATION_NIGHT_RIDER,
     AGENT_ANIMATION_IMMEDIATE_OFF,
     AGENT_ANIMATION_SLOW_OFF,
     AGENT_ANIMATION_PROFILE_CYAN,
     AGENT_ANIMATION_PROFILE_EMBER,
+    AGENT_ANIMATION_PROFILE_NEON,
     AGENT_ANIMATION_PROFILE_PURPLE,
     AGENT_ANIMATION_PURPLE_ATTENTION,
     AGENT_ANIMATION_PURPLE_COMPLETE,
@@ -4486,6 +4492,34 @@ class AgentMonitorTests(unittest.TestCase):
             "#FF00FF 220ms ease",
             builtin_animation_program(AGENT_ANIMATION_PURPLE_LID_OPEN, 8),
         )
+        self.assertEqual(
+            builtin_animation_file_name(AGENT_ANIMATION_NEON_IDLE, 2),
+            "neon-idle-2.LED",
+        )
+        self.assertIn(
+            "2:#580098 3:#00F5FF 4:#00F5FF 5:#580098 2s ease",
+            builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 8),
+        )
+        self.assertIn(
+            "0:#00F5FF 760ms pulse 0ms; 1:#FF00CC 760ms pulse 260ms",
+            builtin_animation_program(AGENT_ANIMATION_NEON_ROLL, 2),
+        )
+        self.assertIn(
+            "7:#FF1A8C 760ms pulse 665ms",
+            builtin_animation_program(AGENT_ANIMATION_NEON_ROLL, 8),
+        )
+        self.assertIn(
+            "#FF006E 1.6s pulse",
+            builtin_animation_program(AGENT_ANIMATION_NEON_ATTENTION, 8),
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_NEON_COMPLETE, 8),
+            "#00FF9D 320ms cosine",
+        )
+        self.assertIn(
+            "#00FF9D 220ms ease",
+            builtin_animation_program(AGENT_ANIMATION_NEON_LID_OPEN, 8),
+        )
 
     def test_color_profiles_use_the_exact_cyan_animation_shapes(self) -> None:
         def without_colors(program: str) -> str:
@@ -4510,31 +4544,44 @@ class AgentMonitorTests(unittest.TestCase):
                 ),
                 cyan_idle_shape,
             )
+            self.assertEqual(
+                without_colors(
+                    builtin_animation_program(
+                        AGENT_ANIMATION_NEON_IDLE,
+                        led_count,
+                    )
+                ),
+                cyan_idle_shape,
+            )
 
         corresponding_animations = (
             (
                 AGENT_ANIMATION_CYAN_ROLL,
                 AGENT_ANIMATION_EMBER_TIDE,
                 AGENT_ANIMATION_PURPLE_TIDE,
+                AGENT_ANIMATION_NEON_ROLL,
             ),
             (
                 AGENT_ANIMATION_AMBER_PULSE,
                 AGENT_ANIMATION_EMBER_ATTENTION,
                 AGENT_ANIMATION_PURPLE_ATTENTION,
+                AGENT_ANIMATION_NEON_ATTENTION,
             ),
             (
                 AGENT_ANIMATION_CYAN_COMPLETE,
                 AGENT_ANIMATION_EMBER_COMPLETE,
                 AGENT_ANIMATION_PURPLE_COMPLETE,
+                AGENT_ANIMATION_NEON_COMPLETE,
             ),
             (
                 AGENT_ANIMATION_LID_OPEN,
                 AGENT_ANIMATION_EMBER_LID_OPEN,
                 AGENT_ANIMATION_PURPLE_LID_OPEN,
+                AGENT_ANIMATION_NEON_LID_OPEN,
             ),
         )
         for led_count in (2, 8):
-            for cyan_id, ember_id, purple_id in corresponding_animations:
+            for cyan_id, ember_id, purple_id, neon_id in corresponding_animations:
                 cyan_shape = without_colors(
                     builtin_animation_program(cyan_id, led_count)
                 )
@@ -4552,12 +4599,20 @@ class AgentMonitorTests(unittest.TestCase):
                         ),
                         cyan_shape,
                     )
+                with self.subTest(profile="Neon", animation=cyan_id, leds=led_count):
+                    self.assertEqual(
+                        without_colors(
+                            builtin_animation_program(neon_id, led_count)
+                        ),
+                        cyan_shape,
+                    )
 
     def test_idle_profiles_use_a_symmetric_center_bright_gradient(self) -> None:
         for animation_id in (
             AGENT_ANIMATION_IDLE_PULSE,
             AGENT_ANIMATION_EMBER_IDLE,
             AGENT_ANIMATION_PURPLE_IDLE,
+            AGENT_ANIMATION_NEON_IDLE,
         ):
             with self.subTest(animation=animation_id):
                 colors = re.findall(
@@ -4628,6 +4683,51 @@ class AgentMonitorTests(unittest.TestCase):
             builtin_animation_program(AGENT_ANIMATION_EMBER_IDLE, 8),
             "off 2s\n"
             "2:#972310 3:#F23819 4:#F23819 5:#972310 2s ease\n"
+            "repeat",
+        )
+
+    def test_neon_profile_uses_electric_neon_palette_and_valid_programs(self) -> None:
+        neon_animations = (
+            AGENT_ANIMATION_NEON_IDLE,
+            AGENT_ANIMATION_NEON_ROLL,
+            AGENT_ANIMATION_NEON_ATTENTION,
+            AGENT_ANIMATION_NEON_COMPLETE,
+            AGENT_ANIMATION_NEON_LID_OPEN,
+        )
+        for led_count in (2, 8):
+            for animation_id in neon_animations:
+                with self.subTest(animation=animation_id, leds=led_count):
+                    program = program_for_agent_mode(
+                        AgentMode.WORKING,
+                        led_count=led_count,
+                        animation_style=animation_id,
+                    )
+                    validate_led_text(program)
+                    self.assertLessEqual(len(program.encode("utf-8")), 512)
+        self.assertEqual(
+            re.findall(
+                r"#[0-9A-Fa-f]{6}",
+                builtin_animation_program(AGENT_ANIMATION_NEON_ROLL, 8),
+            ),
+            [
+                "#00F5FF",
+                "#00C2FF",
+                "#2680FF",
+                "#5B42FF",
+                "#9B1CFF",
+                "#D400FF",
+                "#FF00CC",
+                "#FF1A8C",
+            ],
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 2),
+            "off 2s\n0:#007A8C 1:#580098 2s ease\nrepeat",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 8),
+            "off 2s\n"
+            "2:#580098 3:#00F5FF 4:#00F5FF 5:#580098 2s ease\n"
             "repeat",
         )
 
@@ -5812,6 +5912,11 @@ class AgentMonitorTests(unittest.TestCase):
             AGENT_ANIMATION_PURPLE_ATTENTION,
             AGENT_ANIMATION_PURPLE_COMPLETE,
             AGENT_ANIMATION_PURPLE_LID_OPEN,
+            AGENT_ANIMATION_NEON_IDLE,
+            AGENT_ANIMATION_NEON_ROLL,
+            AGENT_ANIMATION_NEON_ATTENTION,
+            AGENT_ANIMATION_NEON_COMPLETE,
+            AGENT_ANIMATION_NEON_LID_OPEN,
             AGENT_ANIMATION_NIGHT_RIDER,
             AGENT_ANIMATION_LID_OPEN,
             AGENT_ANIMATION_LID_CLOSED,
@@ -5911,11 +6016,36 @@ class AgentMonitorTests(unittest.TestCase):
             AGENT_ANIMATION_LID_CLOSED,
         )
 
+        neon = settings.with_applied_agent_animation_profile(
+            AGENT_ANIMATION_PROFILE_NEON
+        )
+        self.assertEqual(
+            neon.matching_agent_animation_profile_id(),
+            AGENT_ANIMATION_PROFILE_NEON,
+        )
+        self.assertEqual(
+            neon.agent_animation_id(AgentMode.WORKING),
+            AGENT_ANIMATION_NEON_ROLL,
+        )
+        self.assertEqual(
+            neon.agent_animation_id(AgentMode.COMPLETED),
+            AGENT_ANIMATION_NEON_COMPLETE,
+        )
+        self.assertEqual(
+            neon.agent_animation_id(ANIMATION_STATE_LID_OPEN),
+            AGENT_ANIMATION_NEON_LID_OPEN,
+        )
+        self.assertEqual(
+            neon.agent_animation_id(ANIMATION_STATE_LID_CLOSED),
+            AGENT_ANIMATION_LID_CLOSED,
+        )
+
     def test_shipped_profile_json_matches_builtin_profiles(self) -> None:
         profiles = builtin_agent_animation_profiles()
         expected = {
             "cyan": AGENT_ANIMATION_PROFILE_CYAN,
             "ember": AGENT_ANIMATION_PROFILE_EMBER,
+            "neon": AGENT_ANIMATION_PROFILE_NEON,
             "purple": AGENT_ANIMATION_PROFILE_PURPLE,
         }
         for file_stem, profile_id in expected.items():
@@ -5968,6 +6098,7 @@ class AgentMonitorTests(unittest.TestCase):
             {
                 AGENT_ANIMATION_PROFILE_CYAN,
                 AGENT_ANIMATION_PROFILE_EMBER,
+                AGENT_ANIMATION_PROFILE_NEON,
                 AGENT_ANIMATION_PROFILE_PURPLE,
             },
         )

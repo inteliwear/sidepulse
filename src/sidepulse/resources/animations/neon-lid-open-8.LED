@@ -1,0 +1,5 @@
+off 90ms cosine
+3:#00F5FF 180ms ease; 4:#00F5FF 180ms ease; 2:#2680FF 180ms ease 80ms; 5:#2680FF 180ms ease 80ms
+1:#9B1CFF 180ms ease; 6:#9B1CFF 180ms ease; 0:#FF00CC 180ms ease 80ms; 7:#FF00CC 180ms ease 80ms
+#00FF9D 220ms ease
+off 320ms ease-out

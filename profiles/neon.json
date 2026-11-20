@@ -1,0 +1,18 @@
+{
+  "animations": {
+    "blocked_error": "neon-attention",
+    "completed": "neon-complete",
+    "idle_ready": "neon-idle",
+    "lid_closed": "lid-closed",
+    "lid_open": "neon-lid-open",
+    "long_task_progress": "neon-roll",
+    "tool_running": "neon-roll",
+    "unknown": "neon-idle",
+    "waiting_for_input": "neon-attention",
+    "working": "neon-roll"
+  },
+  "custom_animations": {},
+  "format": "sidepulse-animation-profile",
+  "name": "Neon",
+  "version": 1
+}
