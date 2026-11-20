@@ -25,6 +25,7 @@ try:
         NSAppearanceNameDarkAqua,
         NSAlert,
         NSAlertFirstButtonReturn,
+        NSAlertSecondButtonReturn,
         NSAffineTransform,
         NSBackingStoreBuffered,
         NSBezierPath,
@@ -171,6 +172,7 @@ from .sd_eject_guard_launch import (
     sd_eject_guard_installed,
     uninstall_sd_eject_guard,
 )
+from .service_launch import service_is_running, stop_service
 from .session_actions import (
     SESSION_OPEN_APP,
     SESSION_OPEN_JETBRAINS,
@@ -527,6 +529,7 @@ class StatusBarController(NSObject):
         self.open_settings_on_launch = False
         self.monitor = self.build_monitor()
         self.event_server = None
+        self.daemon_recovery_thread = None
         self.status_item = None
         self.status_icon_timer = None
         self.status_icon_renderer = None
@@ -1223,6 +1226,29 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def quit_(self, _sender):
+        NSApp.activateIgnoringOtherApps_(True)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Also stop the SidePulse background service?")
+        alert.setInformativeText_("Keeping the service running lets SidePulse continue monitoring sessions and updating devices.")
+        alert.addButtonWithTitle_("Quit Status Bar Only")
+        alert.addButtonWithTitle_("Stop Service and Quit")
+        alert.addButtonWithTitle_("Cancel").setKeyEquivalent_("\x1b")
+        choice = alert.runModal()
+        if choice == NSAlertSecondButtonReturn:
+            # Finish any pending recovery before unloading the service.
+            if self.daemon_recovery_thread is not None:
+                self.daemon_recovery_thread.join()
+            try:
+                if not stop_service() and service_is_running():
+                    raise RuntimeError("The background service is still running.")
+            except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+                error = NSAlert.alloc().init()
+                error.setMessageText_("Couldn’t stop the SidePulse background service")
+                error.setInformativeText_(str(exc))
+                error.runModal()
+                return
+        elif choice != NSAlertFirstButtonReturn:
+            return
         NSApp.terminate_(self)
 
     def applicationWillTerminate_(self, _notification):
@@ -2872,9 +2898,8 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def restartDaemon_(self, _sender):
-        if getattr(self, 'daemon_recovery_running', False):
+        if self.daemon_recovery_thread is not None and self.daemon_recovery_thread.is_alive():
             return
-        self.daemon_recovery_running = True
         self.next_daemon_recovery = time.monotonic() + 60
         def recover():
             try:
@@ -2884,9 +2909,8 @@ class StatusBarController(NSObject):
                     log_status_bar('Daemon could not be restarted: ' + result.detail)
             except Exception as exc:
                 log_status_bar(f'Daemon restart failed: {exc}')
-            finally:
-                self.daemon_recovery_running = False
-        threading.Thread(target=recover, daemon=True).start()
+        self.daemon_recovery_thread = threading.Thread(target=recover, daemon=True)
+        self.daemon_recovery_thread.start()
 
     def status_bar_devices(self, *, remember: bool = True) -> list[StatusBarDevice]:
         entries_by_id: dict[str, StatusBarDevice] = {}

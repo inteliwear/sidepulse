@@ -2026,14 +2026,49 @@ class TrayDaemonOwnershipTests(unittest.TestCase):
             thread.call_args.kwargs['target']()
         restart.assert_called_once_with()
         install.assert_not_called()
-        self.assertFalse(target.daemon_recovery_running)
+        thread.return_value.start.assert_called_once_with()
 
-    def test_quitting_tray_does_not_stop_daemon_behavior(self):
+    def test_quit_prompt_choices(self):
         target = sb.StatusBarController.alloc().init()
-        with patch.object(sb, 'NSApp') as app, patch.object(sb, 'daemon_command') as command:
-            sb.StatusBarController.quit_(target, None)
-        app.terminate_.assert_called_once_with(target)
-        command.assert_not_called()
+        from AppKit import NSAlertThirdButtonReturn
+
+        for choice, should_quit, should_stop in (
+            (sb.NSAlertFirstButtonReturn, True, False),
+            (sb.NSAlertSecondButtonReturn, True, True),
+            (NSAlertThirdButtonReturn, False, False),
+        ):
+            with self.subTest(choice=choice), patch.object(sb, 'NSApp') as app, \
+                 patch.object(sb, 'NSAlert') as alerts, patch.object(sb, 'stop_service') as stop:
+                alert = alerts.alloc.return_value.init.return_value
+                alert.runModal.return_value = choice
+                target.quit_(None)
+                self.assertEqual(
+                    [call.args[0] for call in alert.addButtonWithTitle_.call_args_list],
+                    ['Quit Status Bar Only', 'Stop Service and Quit', 'Cancel'],
+                )
+                self.assertEqual(stop.call_count, int(should_stop))
+                self.assertEqual(app.terminate_.call_count, int(should_quit))
+
+    def test_quit_waits_for_recovery_and_handles_service_stop_failure(self):
+        target = sb.StatusBarController.alloc().init()
+        target.daemon_recovery_thread = Mock()
+        def stop():
+            target.daemon_recovery_thread.join.assert_called_once_with()
+            return False
+
+        for running in (True, False):
+            with self.subTest(running=running), patch.object(sb, 'NSApp') as app, \
+                 patch.object(sb, 'NSAlert') as alerts, patch.object(sb, 'stop_service', side_effect=stop), \
+                 patch.object(sb, 'service_is_running', return_value=running):
+                target.daemon_recovery_thread.reset_mock()
+                alert = alerts.alloc.return_value.init.return_value
+                alert.runModal.return_value = sb.NSAlertSecondButtonReturn
+                target.quit_(None)
+                if running:
+                    app.terminate_.assert_not_called()
+                    self.assertEqual(alert.runModal.call_count, 2)
+                else:
+                    app.terminate_.assert_called_once_with(target)
 
     def test_tray_termination_only_cleans_up_ui_resources(self):
         target = sb.StatusBarController.alloc().init()

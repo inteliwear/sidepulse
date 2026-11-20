@@ -89,10 +89,10 @@ The [native Windows test harness guide](docs/testing/windows-vm.md) tracks the
 Windows installation probes and the coverage still in progress.
 
 On macOS, the daemon also owns sleep prevention, low-battery safeguards, lid
-animations, battery-change previews, and status-history recording. These keep
-running when the tray is closed. The tray displays daemon observations and sends
-explicit user controls; quitting the tray does not release the daemon's sleep
-controls. Stopping the daemon releases them.
+animations, battery-change previews, and status-history recording. When you
+choose **Quit** in the status bar, **Quit Status Bar Only** keeps those features
+running. **Stop Service and Quit** also stops the daemon and releases its sleep
+controls.
 
 History samples every 15 seconds and includes CPU and case temperatures in °C
 on Macs with readable SMC sensors. CPU uses a die/package sensor; case uses the
