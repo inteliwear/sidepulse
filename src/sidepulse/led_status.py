@@ -58,6 +58,7 @@ COUNT_SPECIFIC_ANIMATIONS = frozenset(
         "purple-lid-open",
         "neon-idle",
         "neon-roll",
+        "neon-complete",
         "neon-lid-open",
         "lid-open",
         "lid-closed",

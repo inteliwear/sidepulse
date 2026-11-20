@@ -4497,7 +4497,7 @@ class AgentMonitorTests(unittest.TestCase):
             "neon-idle-2.LED",
         )
         self.assertIn(
-            "2:#580098 3:#00F5FF 4:#00F5FF 5:#580098 2s ease",
+            "1:#280066 2:#0E3CC0 3:#00E5FF 4:#00E5FF 5:#0E3CC0 6:#280066 4.6s pulse",
             builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 8),
         )
         self.assertIn(
@@ -4513,8 +4513,16 @@ class AgentMonitorTests(unittest.TestCase):
             builtin_animation_program(AGENT_ANIMATION_NEON_ATTENTION, 8),
         )
         self.assertEqual(
+            builtin_animation_file_name(AGENT_ANIMATION_NEON_COMPLETE, 2),
+            "neon-complete-2.LED",
+        )
+        self.assertEqual(
+            builtin_animation_file_name(AGENT_ANIMATION_NEON_COMPLETE, 8),
+            "neon-complete-8.LED",
+        )
+        self.assertIn(
+            "0:#2680FF 1:#00C8FF 2:#00F0D4 3:#00FF9D 4:#00FF9D 5:#00F0D4 6:#00C8FF 7:#2680FF 480ms cosine",
             builtin_animation_program(AGENT_ANIMATION_NEON_COMPLETE, 8),
-            "#00FF9D 320ms cosine",
         )
         self.assertIn(
             "#00FF9D 220ms ease",
@@ -4544,15 +4552,6 @@ class AgentMonitorTests(unittest.TestCase):
                 ),
                 cyan_idle_shape,
             )
-            self.assertEqual(
-                without_colors(
-                    builtin_animation_program(
-                        AGENT_ANIMATION_NEON_IDLE,
-                        led_count,
-                    )
-                ),
-                cyan_idle_shape,
-            )
 
         corresponding_animations = (
             (
@@ -4571,7 +4570,7 @@ class AgentMonitorTests(unittest.TestCase):
                 AGENT_ANIMATION_CYAN_COMPLETE,
                 AGENT_ANIMATION_EMBER_COMPLETE,
                 AGENT_ANIMATION_PURPLE_COMPLETE,
-                AGENT_ANIMATION_NEON_COMPLETE,
+                None,
             ),
             (
                 AGENT_ANIMATION_LID_OPEN,
@@ -4599,20 +4598,20 @@ class AgentMonitorTests(unittest.TestCase):
                         ),
                         cyan_shape,
                     )
-                with self.subTest(profile="Neon", animation=cyan_id, leds=led_count):
-                    self.assertEqual(
-                        without_colors(
-                            builtin_animation_program(neon_id, led_count)
-                        ),
-                        cyan_shape,
-                    )
+                if neon_id is not None:
+                    with self.subTest(profile="Neon", animation=cyan_id, leds=led_count):
+                        self.assertEqual(
+                            without_colors(
+                                builtin_animation_program(neon_id, led_count)
+                            ),
+                            cyan_shape,
+                        )
 
     def test_idle_profiles_use_a_symmetric_center_bright_gradient(self) -> None:
         for animation_id in (
             AGENT_ANIMATION_IDLE_PULSE,
             AGENT_ANIMATION_EMBER_IDLE,
             AGENT_ANIMATION_PURPLE_IDLE,
-            AGENT_ANIMATION_NEON_IDLE,
         ):
             with self.subTest(animation=animation_id):
                 colors = re.findall(
@@ -4625,6 +4624,25 @@ class AgentMonitorTests(unittest.TestCase):
                 outer_peak = max(bytes.fromhex(colors[0][1:]))
                 center_peak = max(bytes.fromhex(colors[1][1:]))
                 self.assertLess(outer_peak, center_peak)
+
+        neon_idle_lines = [
+            line
+            for line in builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 8).splitlines()
+            if "#" in line
+        ]
+        self.assertEqual(len(neon_idle_lines), 2)
+        for phase, line in enumerate(neon_idle_lines, start=1):
+            with self.subTest(animation=AGENT_ANIMATION_NEON_IDLE, phase=phase):
+                colors = re.findall(r"#[0-9A-Fa-f]{6}", line)
+                self.assertEqual(len(colors), 6)
+                self.assertEqual(colors[0], colors[5])
+                self.assertEqual(colors[1], colors[4])
+                self.assertEqual(colors[2], colors[3])
+                outer_peak = max(bytes.fromhex(colors[0][1:]))
+                mid_peak = max(bytes.fromhex(colors[1][1:]))
+                center_peak = max(bytes.fromhex(colors[2][1:]))
+                self.assertLess(outer_peak, mid_peak)
+                self.assertLess(mid_peak, center_peak)
 
     def test_purple_profile_uses_ff00ff_for_every_colored_animation(self) -> None:
         purple_animations = (
@@ -4722,13 +4740,52 @@ class AgentMonitorTests(unittest.TestCase):
         )
         self.assertEqual(
             builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 2),
-            "off 2s\n0:#007A8C 1:#580098 2s ease\nrepeat",
+            "brightness 80\n"
+            "off 700ms cosine\n"
+            "0:#00E5FF 1:#0E3CC0 4.6s pulse\n"
+            "off 700ms cosine\n"
+            "0:#4818C0 1:#E000FF 4.6s pulse\n"
+            "repeat",
         )
         self.assertEqual(
             builtin_animation_program(AGENT_ANIMATION_NEON_IDLE, 8),
-            "off 2s\n"
-            "2:#580098 3:#00F5FF 4:#00F5FF 5:#580098 2s ease\n"
+            "brightness 80\n"
+            "off 700ms cosine\n"
+            "1:#280066 2:#0E3CC0 3:#00E5FF 4:#00E5FF 5:#0E3CC0 6:#280066 4.6s pulse\n"
+            "off 700ms cosine\n"
+            "1:#003472 2:#4818C0 3:#E000FF 4:#E000FF 5:#4818C0 6:#003472 4.6s pulse\n"
             "repeat",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_NEON_COMPLETE, 2),
+            "brightness 160\n"
+            "#00FF9D 220ms cosine\n"
+            "0:#00FF9D 1:#00C8FF 480ms cosine\n"
+            "0:#00FF9D 1.2s none",
+        )
+        self.assertEqual(
+            builtin_animation_program(AGENT_ANIMATION_NEON_COMPLETE, 8),
+            "brightness 160\n"
+            "3:#00FF9D 4:#00FF9D 160ms cosine; 2:#00FF9D 5:#00FF9D 160ms cosine 70ms\n"
+            "1:#00FF9D 6:#00FF9D 160ms cosine; 0:#00FF9D 7:#00FF9D 160ms cosine 70ms\n"
+            "0:#2680FF 1:#00C8FF 2:#00F0D4 3:#00FF9D 4:#00FF9D 5:#00F0D4 6:#00C8FF 7:#2680FF 480ms cosine\n"
+            "0:#2680FF 1.2s none",
+        )
+        self.assertTrue(
+            program_for_agent_mode(
+                AgentMode.IDLE_READY,
+                led_count=8,
+                brightness=128,
+                animation_style=AGENT_ANIMATION_NEON_IDLE,
+            ).startswith("brightness 40\n")
+        )
+        self.assertTrue(
+            program_for_agent_mode(
+                AgentMode.COMPLETED,
+                led_count=8,
+                brightness=128,
+                animation_style=AGENT_ANIMATION_NEON_COMPLETE,
+            ).startswith("brightness 80\n")
         )
 
     def test_core_state_transitions_and_lid_close_outside_in_program(self) -> None:

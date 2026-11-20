@@ -1,0 +1,4 @@
+brightness 160
+#00FF9D 220ms cosine
+0:#00FF9D 1:#00C8FF 480ms cosine
+0:#00FF9D 1.2s none

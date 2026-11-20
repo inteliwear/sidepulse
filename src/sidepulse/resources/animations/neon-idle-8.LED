@@ -1,3 +1,6 @@
-off 2s
-2:#580098 3:#00F5FF 4:#00F5FF 5:#580098 2s ease
+brightness 80
+off 700ms cosine
+1:#280066 2:#0E3CC0 3:#00E5FF 4:#00E5FF 5:#0E3CC0 6:#280066 4.6s pulse
+off 700ms cosine
+1:#003472 2:#4818C0 3:#E000FF 4:#E000FF 5:#4818C0 6:#003472 4.6s pulse
 repeat
