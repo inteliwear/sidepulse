@@ -17,7 +17,7 @@ from .readonly_control import _plist_command, usb_address_for_volume
 def find_dots():
     from .usb_discovery import dots
 
-    return [dict(info, device=str(info['root'])) for info in dots(force=True)]
+    return [dict(info, device=str(info['root'])) for info in dots(force=True) if 'storage_active' in info]
 
 
 def select_dots(dots, selector):

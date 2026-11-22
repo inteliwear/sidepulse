@@ -246,6 +246,9 @@ sidepulse list --json
 
 The list includes mounted Pro/Dot drives and USB Dots with storage disabled.
 Mounted Dots appear once. USB Dots remain visible when their disk is unmounted.
+Dot firmware 1.1.14 also supports live LED writes when its drive never mounts.
+In that case, `sidepulse list` shows a USB selector with the firmware version
+and serial unavailable.
 
 The CLI, tray, background service and pip package share the same device discovery
 and LED writer. The Python API exposes the same targets shown by `sidepulse ls`:

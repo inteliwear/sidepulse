@@ -21,7 +21,12 @@ def dots(*, force=False):
         for bus, address in sorted(set(addresses)):
             try:
                 with usb.Device(bus=bus, address=address) as device:
-                    info = device.info()
+                    try:
+                        info = device.info()
+                    except BrokenPipeError:
+                        # Firmware 1.1.14 stalls the info request but answers SPC2 LED status.
+                        device.status()
+                        info = dict(version='unknown', serial='unassigned', led_count=2)
                 devices.append(dict(info, bus=bus, address=address,
                                     root=usb.USB_DEVICE_ROOT / f'Dot-{bus:03d}-{address:03d}'))
             except (ImportError, OSError, ValueError, RuntimeError):

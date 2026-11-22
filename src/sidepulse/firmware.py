@@ -86,7 +86,7 @@ def find_usb_devices() -> list[FirmwareDevice]:
     from .usb_discovery import dots
 
     return [FirmwareDevice(info['root'], "dot", info['version'], info['serial'])
-            for info in dots(force=True) if not info['storage_active']]
+            for info in dots(force=True) if info.get('storage_active') is False]
 
 
 def read_device(root: Path) -> FirmwareDevice:

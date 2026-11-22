@@ -69,3 +69,21 @@ def test_status_metadata_is_identical_for_list_and_python_api(tmp_path, capsys):
     assert (listed[0]['model'], listed[0]['version'], listed[0]['serial']) == (
         devices[0].model, devices[0].version, devices[0].serial)
     assert devices[0].model == 'SidePulse Dot'
+
+
+@pytest.mark.parametrize('resolve_mount', [True, False])
+def test_mounted_legacy_dot_with_serial_is_matched_by_usb_address(tmp_path, monkeypatch, resolve_mount):
+    monkeypatch.delenv('SIDEPULSE_MOUNT_ROOTS', raising=False)
+    drive = tmp_path / 'PulseDot'
+    drive.mkdir()
+    (drive / 'STATUS.TXT').write_text('app_version 1.1.14\nserial SPD-000006\n')
+    legacy = dict(root=ROOT, bus=2, address=1, serial='unassigned', led_count=2, version='unknown')
+    other = dict(legacy, address=2, root=ROOT.with_name('Dot-002-002'))
+    with patch.object(writer, 'default_mount_roots', return_value=(tmp_path,)), \
+         patch.object(readonly_control, 'usb_address_for_volume', return_value=(2, 1),
+                      side_effect=None if resolve_mount else OSError('unavailable')), \
+         patch.object(usb_discovery, 'dots', return_value=(legacy, other)):
+        devices = writer.discover_devices()
+    expected = [drive, other['root']] if resolve_mount else [drive]
+    assert [device.root for device in devices] == expected
+    assert devices[0].serial == 'SPD-000006'

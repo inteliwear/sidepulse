@@ -15,6 +15,7 @@ import time
 INDEX = 0x5350
 STATUS_BYTES = 16
 MAX_BYTES = 512
+LIBUSB_ERROR_PIPE = -9
 USB_DEVICE_ROOT = Path('/dev/sidepulse-usb')
 _contexts = {}
 _context_lock = threading.Lock()
@@ -147,7 +148,10 @@ class Device:
 
     def _check(self, result):
         if result < 0:
-            raise OSError(f'USB: {self.usb.libusb_error_name(result).decode()} ({result})')
+            message = f'USB: {self.usb.libusb_error_name(result).decode()} ({result})'
+            if result == LIBUSB_ERROR_PIPE:
+                raise BrokenPipeError(message)
+            raise OSError(message)
         return result
 
     def __enter__(self):

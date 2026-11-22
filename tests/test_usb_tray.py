@@ -1,11 +1,12 @@
 """Storage-free tray discovery, animation delivery and acknowledgement handling."""
 from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import patch
+import struct
+from unittest.mock import Mock, patch
 
 import pytest
 
-from sidepulse import battery, device_writer as writer, led_status
+from sidepulse import battery, device_writer as writer, firmware, led_status, storage
 from sidepulse import usb_control as usb, usb_discovery as discovery
 from sidepulse.models import AgentMode
 
@@ -44,6 +45,56 @@ def test_unmounted_storage_on_dot_is_available_over_usb():
     with patch.object(writer, 'discover_mounted_devices', return_value=[]), \
          patch.object(discovery, 'dots', return_value=(dict(INFO, storage_active=True),)):
         assert writer.discover_devices()[0].root == ROOT
+
+
+def test_legacy_dot_is_discovered_and_accepts_an_automatic_write(monkeypatch):
+    # Emulate 1.1.14 at the libusb boundary so the actual status decoder and
+    # acknowledged LED writer run against the same device as discovery.
+    library = Mock()
+    library.libusb_error_name.return_value = b'LIBUSB_ERROR_PIPE'
+    programs = []
+
+    def transfer(handle, direction, request, value, index, buffer, length, timeout):
+        assert index == usb.INDEX
+        if (direction, request) == (0xc0, 0x54):
+            return -9
+        if (direction, request) == (0xc0, 0x51):
+            ident, program = programs[-1] if programs else (0, b'')
+            buffer[:] = struct.pack('<4sHBBHHHH', b'SPC2', ident, 3 if programs else 0,
+                                    0, len(program), len(program), len(programs), 0)
+        elif (direction, request) == (0x40, 0x50):
+            programs.append((value, bytes(buffer)))
+        else:
+            pytest.fail(f'Unexpected USB request {request:#x}')
+        return length
+
+    def open_device(device, *, bus, address):
+        assert (bus, address) == (2, 1)
+        device.usb, device.handle = library, 1
+
+    library.libusb_control_transfer.side_effect = transfer
+    monkeypatch.setattr(usb.Device, '__init__', open_device)
+    monkeypatch.setattr(usb, 'enumerate_addresses', lambda: [(2, 1)])
+    monkeypatch.setattr(writer, 'discover_mounted_devices', lambda **kwargs: [])
+    monkeypatch.setattr(writer, 'device_write_lock', lambda root: nullcontext())
+
+    [dot] = writer.discover_devices()
+    assert (dot.root, dot.connection, dot.version, dot.serial) == (ROOT, 'USB', 'unknown', 'unassigned')
+    assert led_status.led_count_for_target(dot.target) == 2
+    assert storage.find_dots() == firmware.find_usb_devices() == []
+    assert programs == []
+    assert writer.write_led_program('off') == ROOT
+    assert [program for _, program in programs] == [b'off']
+
+
+def test_legacy_probe_requires_valid_led_status():
+    with patch.object(usb, 'enumerate_addresses', return_value=[(2, 1)]), \
+         patch.object(usb, 'Device') as opened:
+        device = opened.return_value.__enter__.return_value
+        device.info.side_effect = BrokenPipeError()
+        device.status.side_effect = ValueError('not a SidePulse USB-control v2 response')
+        assert discovery.dots() == ()
+        device.status.assert_called_once_with()
 
 
 def test_restricted_mount_roots_do_not_discover_usb(monkeypatch):

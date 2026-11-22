@@ -298,17 +298,26 @@ def discover_devices(
     if mount_root is not None or 'SIDEPULSE_MOUNT_ROOTS' in os.environ or file_name.upper() != DEFAULT_FILE_NAME:
         return candidates
     mounted_serials = {item.serial for item in candidates if item.serial != 'unassigned'}
+    usb_dots = dots(force=True)
+    unmatched = [info for info in usb_dots if info['serial'] not in mounted_serials]
+    if not unmatched:
+        return candidates
+    matched_serials = mounted_serials.intersection(info['serial'] for info in usb_dots)
     mounted_addresses = set()
+    unresolved_dot_mount = False
     from .readonly_control import usb_address_for_volume
 
     for item in candidates:
-        if item.model == 'SidePulse Dot' and item.serial == 'unassigned':
+        if item.model == 'SidePulse Dot' and item.serial not in matched_serials:
             try:
                 mounted_addresses.add(usb_address_for_volume(item.root))
             except (OSError, ValueError, RuntimeError, SubprocessError):
-                pass
-    for info in dots(force=True):
-        if info['serial'] in mounted_serials or (info['bus'], info['address']) in mounted_addresses:
+                unresolved_dot_mount = True
+    for info in unmatched:
+        if (info['bus'], info['address']) in mounted_addresses:
+            continue
+        # A legacy Dot has no USB identity to distinguish it from an unresolved mount.
+        if unresolved_dot_mount and 'storage_active' not in info:
             continue
         root = info['root']
         identity = f"sidepulse:{info['serial']}" if info['serial'] != 'unassigned' else str(root)
