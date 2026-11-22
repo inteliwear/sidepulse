@@ -3,6 +3,23 @@
 Firmware ZIP files are organized by version. Download the ZIP for your SidePulse
 model; firmware is specific to each model.
 
+## v1.1.17
+
+| Model | Download |
+| --- | --- |
+| SidePulse Dot revision 2 | [sidepulse-dot-1.1.17-ota.zip](v1.1.17/sidepulse-dot-1.1.17-ota.zip) |
+| SidePulse Pro | [sidepulse-pro-1.1.17-ota.zip](v1.1.17/sidepulse-pro-1.1.17-ota.zip) |
+
+[SHA-256 checksums](v1.1.17/SHA256SUMS.txt).
+
+### SidePulse Dot revision 2
+
+Hide the Dot’s USB drive with `sidepulse storage off` to help meet enterprise policies that restrict USB storage. You can still control the LEDs over USB while the drive is hidden. Use `sidepulse storage on` to show it again. The Dot remembers your choice when you unplug it.
+
+### SidePulse Pro
+
+Improved reliability when waking from sleep or hibernation.
+
 ## v1.1.14
 
 | Model | Download |

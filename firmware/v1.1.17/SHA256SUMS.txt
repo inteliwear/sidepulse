@@ -1,0 +1,2 @@
+52897608decf9fec79e7f4a89affa4359df070a6d7f653cfa379ee3004a59130  sidepulse-dot-1.1.17-ota.zip
+cce5eed47886ecaff8b77a54cdd8c84cde46790c10e5ef72c72f4b4fd9e1e10d  sidepulse-pro-1.1.17-ota.zip
