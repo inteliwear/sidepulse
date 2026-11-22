@@ -11,5 +11,6 @@ completion checks together when updating this client.
 `utils/usb-control/sidepulse_usb_control.py`: packaged libusb discovery,
 mount-to-USB selection, and ambiguous-write reconciliation are added here.
 
-The application exposes these transports only for LED writes on firmware
-1.1 or newer. Firmware updates are outside the automatic fallback API.
+LED writes use the model-specific transport on firmware 1.1 or newer. The
+firmware updater also uses READ2ME for a Pro mounted read-only on macOS.
+Dot USB control can enable the drive for a copy-based firmware update.

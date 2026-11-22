@@ -13,9 +13,13 @@ is a bus/address selector, not a filesystem path. It can be passed to
 The client never claims an interface, changes storage settings or resets USB to
 read the version. Mounted Dots are not duplicated in the results.
 
-Copy-based firmware upgrades require the mounted drive. The CLI rejects an
-upgrade addressed to a USB selector before downloading or opening any update
-file. Enable storage and reconnect before choosing that drive for an OTA update.
+`sidepulse firmware upgrade --all` includes storage-off Dots. When a newer
+package is available, the CLI enables storage and reconnects the selected Dot,
+checks its identity at the new address, and locates its mounted drive. It saves
+the original storage preference before copying firmware. The preference takes
+effect at the next restart or reconnection. Dry runs and already-current devices
+leave storage settings alone. A Dot still requires a host that permits storage
+writes. A read-only Pro on macOS can use its READ2ME firmware channel.
 
 Hardware verification: revision-2 Dot SPD-000006 running `storage-info-test`
 reported its version and serial through the installed CLI with MSC hidden after

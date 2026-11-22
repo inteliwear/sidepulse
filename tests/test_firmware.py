@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sidepulse.cli import sidepulse_main
@@ -98,6 +101,78 @@ class FirmwareTests(unittest.TestCase):
             download.assert_not_called()
         self.assertIn('--device', self.stderr.getvalue())
 
+    def test_all_selects_one_package_per_model_and_writes_each_drive(self):
+        dot = self.make_device('dot')
+        other_dot = self.root / 'Dot 2'
+        other_dot.mkdir()
+        (other_dot / 'STATUS.TXT').write_text('app_version 1.0.5\nserial SPD-2\n')
+
+        def load(product, version, path):
+            self.assertEqual(version, '1.1.0')
+            self.assertIsNone(path)
+            return firmware.FirmwarePackage(product, version, product.encode())
+
+        with patch.dict('os.environ', {'SIDEPULSE_MOUNT_ROOTS': str(self.root)}), \
+             patch.object(firmware, 'load_package', side_effect=load) as packages:
+            self.assertEqual(sidepulse_main(['firmware', 'upgrade', '--all', '--version', '1.1.0']), 0)
+        self.assertEqual(packages.call_count, 2)
+        for drive, payload in ((dot, b'dot'), (other_dot, b'dot'), (self.device, b'pro')):
+            self.assertEqual((drive / 'FIRMWARE.BIN').read_bytes(), payload)
+
+    def test_all_continues_after_wrong_model_and_returns_failure(self):
+        dot = self.make_device('dot')
+        with patch.dict('os.environ', {'SIDEPULSE_MOUNT_ROOTS': str(self.root)}):
+            self.assertEqual(sidepulse_main(['firmware', 'upgrade', '--all', '--file', str(self.make_package())]), 1)
+        self.assertIn(str(dot.resolve()), self.stderr.getvalue())
+        self.assertFalse((dot / 'FIRMWARE.BIN').exists())
+        self.assertEqual((self.device / 'FIRMWARE.BIN').read_bytes(), b'encrypted firmware payload')
+
+    def test_all_and_device_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit) as error:
+            sidepulse_main(['firmware', 'upgrade', '--all', '--device', str(self.device)])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_readonly_pro_uses_firmware_channel_and_dot_reports_write_requirement(self):
+        open_path = Path.open
+
+        def readonly_open(path, mode='r', *args, **kwargs):
+            if path.name == 'FIRMWARE.BIN' and mode == 'wb':
+                raise OSError(errno.EROFS, 'Read-only file system')
+            return open_path(path, mode, *args, **kwargs)
+
+        pro_package = self.make_package()
+        dot_package = self.make_package('dot')
+        dot = self.make_device('dot')
+        with patch.object(Path, 'open', readonly_open), patch('sidepulse._vendor.read2me.Channel') as channel:
+            self.assertEqual(self.upgrade(pro_package), 0)
+            channel.assert_called_once_with(self.device.resolve() / 'setup.html')
+            channel.return_value.__enter__.return_value.upload.assert_called_once_with(
+                b'encrypted firmware payload', 'FIRMWARE.BIN')
+            self.assertEqual(sidepulse_main(['firmware', 'upgrade', '--device', str(dot), '--file', str(dot_package)]), 1)
+            self.assertEqual(channel.call_count, 1)
+            self.assertIn('writable drive', self.stderr.getvalue())
+
+    @unittest.skipUnless(hasattr(os, 'statvfs'), 'POSIX mount flags')
+    def test_dry_run_detects_readonly_dot_drive(self):
+        dot = self.make_device('dot')
+        package = self.make_package('dot')
+        with patch.object(os, 'statvfs', return_value=SimpleNamespace(f_flag=os.ST_RDONLY)):
+            self.assertEqual(sidepulse_main(['firmware', 'upgrade', '--device', str(dot),
+                                            '--file', str(package), '--dry-run']), 1)
+        self.assertIn('writable drive', self.stderr.getvalue())
+        self.assertFalse((dot / 'FIRMWARE.BIN').exists())
+
+    def test_read_only_option_uses_pro_channel_even_on_writable_drive(self):
+        package = self.make_package()
+        with patch('sidepulse._vendor.read2me.Channel') as channel:
+            receiver = channel.return_value.__enter__.return_value
+            receiver.status.return_value = dict(state='IDLE', capacity=65536)
+            self.assertEqual(self.upgrade(package, '--read-only', '--dry-run'), 0)
+            receiver.upload.assert_not_called()
+            self.assertEqual(self.upgrade(package, '--read-only'), 0)
+            receiver.upload.assert_called_once_with(b'encrypted firmware payload', 'FIRMWARE.BIN')
+        self.assertFalse((self.device / 'FIRMWARE.BIN').exists())
+
     def test_invalid_or_ambiguous_status_is_rejected(self):
         for status in ('hello\n', 'release_version 1.0.5\napp_version 1.0.5\n'):
             (self.device / 'STATUS.TXT').write_text(status)
@@ -146,8 +221,10 @@ class FirmwareTests(unittest.TestCase):
         self.assertFalse((self.device / 'FIRMWARE.BIN').exists())
 
     def test_failed_flush_is_not_reported_as_success(self):
-        with patch.object(firmware.os, 'fsync', side_effect=OSError('write failed')):
+        with patch.object(firmware.os, 'fsync', side_effect=OSError(errno.EROFS, 'write failed')), \
+             patch('sidepulse._vendor.read2me.Channel') as channel:
             self.assertEqual(self.upgrade(self.make_package()), 1)
+            channel.assert_not_called()
         self.assertNotIn('transferred', self.stdout.getvalue())
         self.assertIn('did not finish', self.stderr.getvalue())
 
