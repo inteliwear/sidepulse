@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -324,6 +325,53 @@ class DeviceDisplaySetting:
 
 
 @dataclass(frozen=True)
+class DarkHours:
+    enabled: bool = False
+    start_minute: int = 0
+    end_minute: int = 390
+    weekdays: tuple[int, ...] = tuple(range(7))
+    allow_waiting: bool = False
+    allow_error: bool = False
+
+    def is_active(self, local_time: datetime | None = None) -> bool:
+        if not self.enabled:
+            return False
+        now = local_time or datetime.now()
+        minute = now.hour * 60 + now.minute
+        day = now.weekday()
+        if self.start_minute < self.end_minute:
+            return day in self.weekdays and self.start_minute <= minute < self.end_minute
+        # An overnight window belongs to its start day. Equal times span 24 hours.
+        if minute >= self.start_minute:
+            return day in self.weekdays
+        return minute < self.end_minute and (day - 1) % 7 in self.weekdays
+
+    def allows_alert(self, mode: AgentMode) -> bool:
+        return ((self.allow_waiting and mode == AgentMode.WAITING_FOR_INPUT)
+                or (self.allow_error and mode == AgentMode.BLOCKED_ERROR))
+
+    @classmethod
+    def from_dict(cls, data: object) -> "DarkHours":
+        if not isinstance(data, dict):
+            return cls()
+        defaults = cls()
+        def minute(key: str, default: int) -> int:
+            value = data.get(key)
+            return value if type(value) is int and 0 <= value < 1440 else default
+
+        days = data.get("weekdays")
+        return cls(
+            enabled=_bool_setting(data.get("enabled"), False),
+            start_minute=minute("start_minute", defaults.start_minute),
+            end_minute=minute("end_minute", defaults.end_minute),
+            weekdays=tuple(sorted({day for day in days if type(day) is int and 0 <= day < 7}))
+            if isinstance(days, (list, tuple)) else defaults.weekdays,
+            allow_waiting=_bool_setting(data.get("allow_waiting"), False),
+            allow_error=_bool_setting(data.get("allow_error"), False),
+        )
+
+
+@dataclass(frozen=True)
 class AgentMonitorSettings:
     codex_transcripts_enabled: bool = False
     claude_transcripts_enabled: bool = False
@@ -359,6 +407,7 @@ class AgentMonitorSettings:
     show_menu_bar_icon: bool = True
     phone_session_sync: dict[str, bool] = field(default_factory=dict)
     antigravity_access_explained: bool = False
+    dark_hours: DarkHours = field(default_factory=DarkHours)
 
     def transcript_enabled(self, provider: str) -> bool:
         if provider == "codex":
@@ -834,6 +883,7 @@ class AgentMonitorSettings:
         return {
             "led_display": self.led_display,
             "show_menu_bar_icon": self.show_menu_bar_icon,
+            "dark_hours": {**asdict(self.dark_hours), "weekdays": list(self.dark_hours.weekdays)},
             "antigravity_access_explained": self.antigravity_access_explained,
             "t3code_enabled": self.t3code_enabled,
             "phone_session_sync": dict(sorted(self.phone_session_sync.items())),
@@ -992,6 +1042,7 @@ def load_settings(path: Path | None = None) -> AgentMonitorSettings:
         phone_session_sync = {}
     return AgentMonitorSettings(
         antigravity_access_explained=_bool_setting(data.get("antigravity_access_explained"), False),
+        dark_hours=DarkHours.from_dict(data.get("dark_hours")),
         show_menu_bar_icon=_bool_setting(data.get("show_menu_bar_icon"), True),
         phone_session_sync={
             key: value for key, value in phone_session_sync.items()

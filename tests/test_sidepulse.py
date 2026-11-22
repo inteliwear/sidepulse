@@ -2111,7 +2111,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertEqual(len(tab_views), 1)
         self.assertEqual(
             [str(item.label()) for item in tab_views[0].tabViewItems()],
-            ["Agents", "Animations", "Advanced", "History", "Diagnostics"],
+            ["Agents", "Animations", "Dark Hours", "Advanced", "History", "Diagnostics"],
         )
         animations_tab = next(
             tab_views[0].tabViewItemAtIndex_(index)

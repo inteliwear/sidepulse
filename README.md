@@ -933,6 +933,15 @@ status. In **Settings → Advanced**, `Show battery for 7s on plug/unplug` can
 briefly show the battery animation for seven seconds after the power source
 changes when agent status is selected.
 
+Open **Settings → Dark Hours** to schedule lights-out for SidePulse Pro and Dot
+devices displaying agent or battery status. Enable the schedule, choose local
+start and end times, and select the days it starts. The default is midnight to
+6:30 a.m. every day. You can allow waiting-for-input and error alerts through.
+After Dark Hours, the LEDs resume their current display at the saved brightness.
+The schedule also applies when the service starts or the computer wakes. The
+menu bar, SidePulse Notch, linked phones, session history, and sleep prevention
+continue operating throughout.
+
 The Devices section also offers **Add SidePulse Notch**, an optional virtual
 eight-LED device. It appears as a notch-shaped status-bar overlay that covers
 the camera island/notch footprint and adds a straight 5 px LED band along the

@@ -4,6 +4,8 @@ import os
 import json
 import tempfile
 from pathlib import Path
+from dataclasses import replace
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -16,8 +18,8 @@ from sidepulse.lid_sleep import MacSleepSnapshot
 from sidepulse.program_presentation import DaemonMonitor
 from sidepulse.program_transport import daemon_command, submit_report
 from sidepulse.service import SidePulseService
-from sidepulse.settings import (AgentMonitorSettings, SLEEP_PREVENTION_AGENTS,
-    SLEEP_PREVENTION_NEVER, LID_ANIMATION_CLOSED)
+from sidepulse.settings import (AgentMonitorSettings, DarkHours, LED_DISPLAY_BATTERY,
+    SLEEP_PREVENTION_AGENTS, SLEEP_PREVENTION_NEVER, LID_ANIMATION_CLOSED)
 
 
 @pytest.fixture
@@ -69,6 +71,50 @@ def background(tmp_path):
 
 def report(state):
     return {'v':1, 'type':'program_status', 'scope':'session', 'status':{'state':state}}
+
+
+def test_dark_hours_on_start_wake_and_alert_changes(background):
+    b = background
+    device = b.devices.return_value[0]
+    device_id = str(device.root)
+    b.settings.return_value = AgentMonitorSettings(
+        dark_hours=DarkHours(enabled=True, allow_waiting=True),
+        sleep_prevention_policy=SLEEP_PREVENTION_AGENTS,
+    ).with_device_display(device_id, LED_DISPLAY_BATTERY).with_device_brightness(device_id, 77)
+    b.service.battery_preview_until = 1000
+    submit_report(report("working"), path=b.path)
+    with patch("sidepulse.settings.datetime") as clock:
+        clock.now.return_value = datetime(2026, 11, 22, 2)
+        b.tick(100)
+        b.writes.assert_called_once_with("off", device_path=device.target)
+        assert b.runtime.keep_awake.process_running()
+        assert DaemonMonitor(b.path).snapshot().aggregate.mode.value == "working"
+        b.service.play_lid_animation(LID_ANIMATION_CLOSED)
+        b.tick(101)
+        assert b.writes.call_count == 1
+        submit_report(report("blocked"), path=b.path)
+        b.tick(115)
+        alert = b.writes.call_args.args[0]
+        assert alert.startswith("brightness 77\n")
+        assert json.loads(b.history.read_text().splitlines()[-1])["agent_status"] == "waiting_for_input"
+        submit_report(report("error"), path=b.path)
+        b.tick(116)
+        assert b.writes.call_args.args[0] == "off"
+        clock.now.return_value = datetime(2026, 11, 22, 8)
+        b.tick(117)
+        battery = b.writes.call_args.args[0]
+        assert battery.startswith("brightness 77\n") and battery != alert
+
+        # Wake in the next window with a held lid frame and an unexpired preview.
+        b.service.animation_until = 1000
+        b.runtime.lid_closed_led_hold_active = True
+        clock.now.return_value = datetime(2026, 11, 23, 3)
+        b.tick(118)
+        assert b.writes.call_args.args[0] == "off"
+        assert not b.runtime.lid_closed_led_hold_active
+        b.settings.return_value = replace(b.settings.return_value, dark_hours=DarkHours())
+        b.tick(119)
+        assert b.writes.call_args.args[0] == battery
 
 
 @pytest.mark.parametrize('platform', ['linux', 'win32'])

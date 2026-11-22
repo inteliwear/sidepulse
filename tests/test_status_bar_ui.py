@@ -359,6 +359,22 @@ class AdvancedAutosaveTests(StatusBarTestCase):
         checkbox.performClick_(None)
         self.assertFalse(self.saved[-1].hide_sessions_on_exit)
 
+    def test_dark_hours_tab_saves_times_start_days_and_alerts(self):
+        self.tabs.selectTabViewItemWithIdentifier_("dark_hours")
+        controls = self.target.settings_fields["dark_hours"]
+        self.assertFalse(sb.checkbox_is_on(controls["enabled"]))
+        self.assertEqual(sb.dark_hours_picker_minute(controls["end"]), 390)
+        self.assertTrue(all(sb.checkbox_is_on(day) for day in controls["weekdays"]))
+        controls["enabled"].performClick_(None)
+        picker = controls["start"]
+        picker.setDateValue_(sb.NSDate.dateWithTimeIntervalSince1970_(23 * 3600))
+        picker.sendAction_to_(picker.action(), picker.target())
+        controls["weekdays"][0].performClick_(None)
+        controls["allow_error"].performClick_(None)
+        self.assertEqual(self.saved[-1].dark_hours, sb.DarkHours(
+            enabled=True, start_minute=1380, weekdays=tuple(range(1, 7)), allow_error=True,
+        ))
+
     def test_menu_hides_exits_only_when_enabled(self):
         from sidepulse.program_adapter import hook_report
         from sidepulse.program_presentation import ProgramMonitor
@@ -1595,20 +1611,26 @@ class WindowBuildTests(StatusBarTestCase):
             finally:
                 image.unlockFocus()
 
-    def test_show_settings_window_brings_it_forward_and_starts_previews(self):
-        self.controller.settings_window = None
+    def test_settings_previews_only_animate_on_the_animations_tab(self):
+        controller = sb.StatusBarController.alloc().init()
         with patch.object(sb, 'read_status_history_records') as read_history:
-            self.controller.show_settings_window()
+            controller.show_settings_window()
             read_history.assert_not_called()
-            tabs = self.controller.settings_fields['tabs']
+            tabs = controller.settings_fields['tabs']
+            self.assertIsNone(controller.agent_animation_preview_timer)
+            tabs.selectTabViewItemWithIdentifier_('animations')
+            self.assertIsNotNone(controller.agent_animation_preview_timer)
+            tabs.selectTabViewItemWithIdentifier_('dark_hours')
+            controller.redrawAgentAnimationPreviews_(None)
+            self.assertIsNone(controller.agent_animation_preview_timer)
             tabs.selectTabViewItemWithIdentifier_('history')
             read_history.assert_called_once()
         try:
-            self.assertTrue(self.controller.settings_window.isVisible())
-            self.assertIsNotNone(self.controller.agent_animation_preview_timer)
+            self.assertTrue(controller.settings_window.isVisible())
+            self.assertIsNone(controller.agent_animation_preview_timer)
         finally:
-            self.controller.stop_agent_animation_preview_timer()
-            self.controller.settings_window.orderOut_(None)
+            controller.stop_agent_animation_preview_timer()
+            controller.settings_window.orderOut_(None)
 
 
 class StatusIconAnimationTests(StatusBarTestCase):
@@ -1938,6 +1960,17 @@ class IconTests(StatusBarTestCase):
 
 
 class PureUiLogicTests(unittest.TestCase):
+    def test_project_label_reuses_probes_and_detects_new_repositories(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(sb.time, "monotonic") as clock:
+            cwd = str(Path(directory) / "child")
+            clock.return_value = 60
+            self.assertEqual(sb.project_name_from_cwd(cwd), "child")
+            (Path(directory) / ".git").mkdir()
+            with patch.object(Path, "exists", side_effect=AssertionError("repeated filesystem probe")):
+                self.assertEqual(sb.project_name_from_cwd(cwd), "child")
+            clock.return_value += 60
+            self.assertEqual(sb.project_name_from_cwd(cwd), Path(directory).name)
+
     """Label and formatting helpers -- no AppKit objects, fast and exhaustive."""
 
     def test_format_byte_count_is_monotonic_and_labelled(self):

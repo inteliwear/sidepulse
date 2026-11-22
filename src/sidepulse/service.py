@@ -159,26 +159,35 @@ class SidePulseService:
         connected = {candidate.device_id or str(candidate.root.expanduser()) for candidate in self.runtime.devices}
         self.output_errors = {key: error for key, error in self.output_errors.items() if key in connected}
         now = time.monotonic()
-        if not self.outputs_enabled or now < max(self.ui_pause_until, self.manual_pause_until, self.animation_until):
+        if not self.outputs_enabled or now < self.ui_pause_until:
             return
-        if self.runtime.lid_closed_led_hold_active:
+        settings = load_settings()
+        dark_hours = settings.dark_hours.is_active()
+        if dark_hours:
+            # The scheduled output supersedes a preview or held lid animation.
+            self.manual_pause_until = self.animation_until = 0.0
+            self.runtime.lid_closed_led_hold_active = False
+        elif now < max(self.manual_pause_until, self.animation_until):
+            return
+        elif self.runtime.lid_closed_led_hold_active:
             if self.runtime.should_hold_lid_closed_led_state():
                 return
             self.runtime.lid_closed_led_hold_active = False
-        settings = load_settings()
         snapshot = self.monitor.snapshot(include_stale=False)
         mode = snapshot.aggregate.mode
+        lights_out = dark_hours and not settings.dark_hours.allows_alert(mode)
         battery = self.runtime.last_battery_snapshot
 
         active_targets: set[str] = set()
         for candidate in self.runtime.devices:
             device_id = candidate.device_id or str(candidate.root.expanduser())
             display = settings.display_for_device(device_id)
-            if display != LED_DISPLAY_CUSTOM and now < self.battery_preview_until:
-                display = LED_DISPLAY_BATTERY
             if display == LED_DISPLAY_CUSTOM:
                 continue
-            if display == LED_DISPLAY_BATTERY and battery is not None:
+            show_battery = display == LED_DISPLAY_BATTERY or now < self.battery_preview_until
+            if lights_out:
+                program = "off"
+            elif not dark_hours and show_battery and battery is not None:
                 program = program_for_battery(
                     battery,
                     led_count=led_count_for_target(candidate.target),
@@ -228,6 +237,8 @@ class SidePulseService:
             if not self.outputs_enabled or time.monotonic() < max(self.ui_pause_until, self.manual_pause_until):
                 return
             settings = load_settings()
+            if settings.dark_hours.is_active():
+                return
             animation = settings.lid_animation(kind)
             # Lid presets and custom profiles share the configured animation state.
             from .settings import ANIMATION_STATE_LID_CLOSED, ANIMATION_STATE_LID_OPEN
@@ -294,11 +305,14 @@ class SidePulseService:
                 if 'battery_preview_seconds' in command:
                     self.battery_preview_until = time.monotonic() + preview
                 if not enabled:
+                    dark_hours = load_settings().dark_hours.is_active()
                     for candidate in self.runtime.devices:
                         try:
                             from .models import AgentMode
-                            write_led_program(program_for_agent_mode(AgentMode.IDLE_READY,
-                                led_count=led_count_for_target(candidate.target)), device_path=candidate.target)
+                            program = "off" if dark_hours else program_for_agent_mode(
+                                AgentMode.IDLE_READY, led_count=led_count_for_target(candidate.target),
+                            )
+                            write_led_program(program, device_path=candidate.target)
                             self.output_errors.pop(candidate.device_id or str(candidate.root.expanduser()), None)
                         except Exception as exc:
                             self.output_errors[candidate.device_id or str(candidate.root)] = str(exc)
@@ -313,6 +327,8 @@ class SidePulseService:
                 program, target = command.get('program'), command.get('target')
                 if not isinstance(program, str) or not isinstance(target, str) or not target:
                     raise StatusError('Invalid LED write command')
+                if program.strip() != "off" and load_settings().dark_hours.is_active():
+                    raise StatusError('Device previews are paused during Dark Hours')
                 result = write_led_program(program, device_path=Path(target))
                 self.manual_pause_until = time.monotonic() + hold
                 # Automatic mode must restore even if it matches an older write.

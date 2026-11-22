@@ -33,6 +33,9 @@ try:
         NSButton,
         NSButtonTypeSwitch,
         NSColor,
+        NSDatePicker,
+        NSHourMinuteDatePickerElementFlag,
+        NSTextFieldAndStepperDatePickerStyle,
         NSCompositingOperationSourceOver,
         NSCompositingOperationSourceIn,
         NSEventTrackingRunLoopMode,
@@ -71,7 +74,7 @@ try:
         NSWindowStyleMaskTitled,
         NSSquareStatusItemLength,
     )
-    from Foundation import NSMutableAttributedString, NSRunLoop, NSRunLoopCommonModes, NSObject, NSString, NSTimer, NSURL
+    from Foundation import NSDate, NSMutableAttributedString, NSRunLoop, NSRunLoopCommonModes, NSObject, NSString, NSTimer, NSTimeZone, NSURL
 except ImportError as exc:  # pragma: no cover - only exercised on non-macOS setups.
     raise SystemExit(
         f"The status-bar app requires PyObjC/AppKit ({exc}):\n"
@@ -252,6 +255,7 @@ from .settings import (
     TERMINAL_APP_WARP,
     TERMINAL_APP_WEZTERM,
     AgentMonitorSettings,
+    DarkHours,
     LedAnimationSetting,
     agent_animation_profile_document,
     agent_animation_profile_id,
@@ -924,6 +928,28 @@ class StatusBarController(NSObject):
         self.refresh_settings_window()
 
     @objc.IBAction
+    def saveDarkHours_(self, _sender):
+        controls = self.settings_fields["dark_hours"]
+        schedule = DarkHours(
+            enabled=checkbox_is_on(controls["enabled"]),
+            start_minute=dark_hours_picker_minute(controls["start"]),
+            end_minute=dark_hours_picker_minute(controls["end"]),
+            weekdays=tuple(i for i, button in enumerate(controls["weekdays"]) if checkbox_is_on(button)),
+            allow_waiting=checkbox_is_on(controls["allow_waiting"]),
+            allow_error=checkbox_is_on(controls["allow_error"]),
+        )
+        try:
+            settings = replace(load_settings(), dark_hours=schedule)
+            save_settings(settings)
+        except OSError as exc:
+            refresh_dark_hours_controls(controls, self.settings.dark_hours)
+            self.set_settings_message(f"Could not save Dark Hours: {exc}")
+            return
+        self.settings = settings
+        refresh_dark_hours_controls(controls, schedule)
+        self.set_settings_message("")
+
+    @objc.IBAction
     def setHideSessionsOnExit_(self, sender):
         settings = self.settings.with_hide_sessions_on_exit(checkbox_is_on(sender))
         try:
@@ -1421,7 +1447,8 @@ class StatusBarController(NSObject):
             self.settings_window = build_settings_window(self)
         self.refresh_settings_window()
         self.settings_window.makeKeyAndOrderFront_(None)
-        self.start_agent_animation_preview_timer()
+        if self.animation_previews_visible():
+            self.start_agent_animation_preview_timer()
         NSApp.activateIgnoringOtherApps_(True)
 
     def tabView_didSelectTabViewItem_(self, tab_view, tab_item) -> None:
@@ -1429,6 +1456,8 @@ class StatusBarController(NSObject):
         if window is None:
             return
         identifier = str(tab_item.identifier())
+        if identifier == "animations" and window.isVisible():
+            self.start_agent_animation_preview_timer()
         if identifier == 'history' and self.settings_window is not None:
             self.refresh_history_chart()
         height = {
@@ -1458,6 +1487,13 @@ class StatusBarController(NSObject):
         if message is not None:
             message.setFrameSize_((width - 48, 22))
         window.center()
+
+    def animation_previews_visible(self) -> bool:
+        return (
+            self.settings_window is not None and self.settings_window.isVisible()
+            and str(self.settings_fields["tabs"].selectedTabViewItem().identifier()) == "animations"
+        )
+
     def start_agent_animation_preview_timer(self) -> None:
         if self.agent_animation_preview_timer is not None:
             return
@@ -1485,9 +1521,7 @@ class StatusBarController(NSObject):
 
     @objc.IBAction
     def redrawAgentAnimationPreviews_(self, _sender):
-        settings_visible = (
-            self.settings_window is not None and self.settings_window.isVisible()
-        )
+        settings_visible = self.animation_previews_visible()
         editor_visible = (
             self.agent_animation_editor_window is not None
             and self.agent_animation_editor_window.isVisible()
@@ -1689,6 +1723,9 @@ class StatusBarController(NSObject):
     def refresh_settings_window(self) -> None:
         if self.settings_window is None:
             return
+
+        if controls := self.settings_fields.get("dark_hours"):
+            refresh_dark_hours_controls(controls, self.settings.dark_hours)
 
         set_checkbox_state(
             self.settings_buttons.get("show_menu_bar_icon"),
@@ -4294,6 +4331,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
         tab_width,
         tab_height,
     )
+    dark_hours_tab = add_settings_tab(tab_view, "dark_hours", "Dark Hours", tab_width, tab_height)
     behavior_tab = add_settings_tab(
         tab_view,
         "behavior",
@@ -4673,6 +4711,7 @@ def build_settings_window(target: StatusBarController) -> NSWindow:
 
     target.settings_fields = {
         "tabs": tab_view,
+        "dark_hours": build_dark_hours_controls(dark_hours_tab, target, target_settings.dark_hours),
         "codex_hook_status": codex_status,
         "claude_hook_status": claude_status,
         "grok_hook_status": grok_status,
@@ -4899,6 +4938,55 @@ def build_agent_animation_profile_editor_window(
         "saveAgentAnimationProfile:",
     )
     return window
+
+
+def build_dark_hours_controls(parent, target, schedule: DarkHours):
+    def checkbox(title, x, y, width):
+        return add_checkbox(parent, title, x, y, width, 24, target, "saveDarkHours:")
+
+    controls = {"enabled": checkbox("Enable Dark Hours", 28, 396, 220)}
+    add_label(parent, "Turn off agent and battery LEDs on SidePulse Pro and Dot. Times are local.", 32, 366, 580, 22)
+    for key, label, x in (("start", "From", 32), ("end", "Until", 252)):
+        add_label(parent, label, x, 315, 62, 24)
+        picker = NSDatePicker.alloc().initWithFrame_(((x + 60, 312), (126, 28)))
+        picker.setDatePickerStyle_(NSTextFieldAndStepperDatePickerStyle)
+        picker.setDatePickerElements_(NSHourMinuteDatePickerElementFlag)
+        # Use a fixed reference date and zone for editing wall-clock hours and minutes.
+        picker.setTimeZone_(NSTimeZone.timeZoneForSecondsFromGMT_(0))
+        picker.setTarget_(target)
+        picker.setAction_("saveDarkHours:")
+        picker.cell().setSendsActionOnEndEditing_(True)
+        parent.addSubview_(picker)
+        controls[key] = picker
+
+    add_label(parent, "Start days", 32, 266, 140, 24)
+    controls["weekdays"] = [
+        checkbox(day, 32 + index * 78, 237, 74)
+        for index, day in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+    ]
+    add_label(parent, "Overnight schedules continue into the next day. Matching times span 24 hours.",
+              32, 205, 570, 24)
+    add_separator(parent, 24, 180, 580)
+    add_label(parent, "Allow these alerts during Dark Hours", 32, 140, 360, 24)
+    controls["allow_waiting"] = checkbox("Waiting for input", 32, 106, 200)
+    controls["allow_error"] = checkbox("Blocked / Error", 32, 76, 200)
+    refresh_dark_hours_controls(controls, schedule)
+    return controls
+
+
+def dark_hours_picker_minute(picker) -> int:
+    return int(picker.dateValue().timeIntervalSince1970() // 60) % 1440
+
+
+def refresh_dark_hours_controls(controls, schedule: DarkHours) -> None:
+    for key in ("enabled", "allow_waiting", "allow_error"):
+        set_checkbox_state(controls[key], getattr(schedule, key))
+    for key, minute in (("start", schedule.start_minute), ("end", schedule.end_minute)):
+        picker = controls[key]
+        if dark_hours_picker_minute(picker) != minute:
+            picker.setDateValue_(NSDate.dateWithTimeIntervalSince1970_(minute * 60))
+    for index, button in enumerate(controls["weekdays"]):
+        set_checkbox_state(button, index in schedule.weekdays)
 
 
 def add_settings_tab(tab_view, identifier: str, title: str, width: int, height: int):
@@ -6257,6 +6345,12 @@ def strip_session_short_id(display_name: str, session_id: str | None) -> str:
 def project_name_from_cwd(cwd: str | None) -> str | None:
     if not cwd:
         return None
+    # Reuse directory probes across menu refreshes, but notice new or moved repositories.
+    return _cached_project_name(cwd, int(time.monotonic() // 60))
+
+
+@lru_cache(maxsize=512)
+def _cached_project_name(cwd: str, time_bucket: int) -> str:
     path = Path(cwd)
     for candidate in (path, *path.parents):
         if (candidate / ".git").exists():
