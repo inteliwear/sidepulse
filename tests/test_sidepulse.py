@@ -7813,6 +7813,14 @@ class AgentMonitorTests(unittest.TestCase):
                                 },
                             }
                         ),
+                        json.dumps(
+                            {
+                                "timestamp": now.isoformat(),
+                                "type": "user",
+                                "isCompactSummary": True,
+                                "message": {"role": "user", "content": "Summary of the previous conversation."},
+                            }
+                        ),
                     ]
                 )
                 + "\n"

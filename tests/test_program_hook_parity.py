@@ -137,6 +137,34 @@ def test_notifications_survive_migration_without_reviving_completed_work(runtime
     assert store.pending_events('phone') == events
 
 
+def test_claude_idle_auto_compaction_does_not_restart_work(runtime):
+    store, _, _ = runtime
+    emit(runtime, 'Stop')
+    emit(runtime, 'Notification', notification_type='idle_prompt', message='Claude is waiting for your input')
+    for event, fields in [
+        ('PreCompact', {'trigger': 'auto'}),
+        ('SubagentStop', {'agent_id': 'summary-agent'}),
+        ('SessionStart', {'source': 'compact'}),
+        ('PostCompact', {'trigger': 'auto'}),
+    ]:
+        actual, legacy = emit(runtime, event, **fields)
+        for snapshot in (actual, legacy):
+            assert snapshot.aggregate.mode in {AgentMode.COMPLETED, AgentMode.IDLE_READY}
+    assert store.statuses()[0].event_name == 'SessionStart'
+    actual, legacy = emit(runtime, 'UserPromptSubmit', prompt='Continue')
+    assert actual.aggregate.mode == legacy.aggregate.mode == AgentMode.WORKING
+
+
+def test_claude_compaction_hooks_preserve_active_status(runtime):
+    store, _, _ = runtime
+    emit(runtime, 'PreToolUse', tool_name='Bash')
+    events = store.pending_events('phone')
+    for event in ('PreCompact', 'PostCompact'):
+        actual, legacy = emit(runtime, event, trigger='manual')
+        assert actual.aggregate.mode == legacy.aggregate.mode == AgentMode.TOOL_RUNNING
+    assert store.pending_events('phone') == events
+
+
 def test_internal_codex_session_stays_suppressed_across_sparse_hooks(runtime):
     for event, fields in [('UserPromptSubmit', {'prompt': 'Generate 0 to 3 hyperpersonalized suggestions'}), ('PreToolUse', {'tool_name': 'shell'}), ('Stop', {})]:
         actual, expected = emit(runtime, event, provider='codex', **fields)
