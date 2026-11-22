@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote
 
+from .models import provider_label
+
 
 @dataclass(frozen=True)
 class JetBrainsIDE:
@@ -15,6 +17,9 @@ class JetBrainsIDE:
     bundle_id: str
     settings_vendor: str
     settings_prefix: str
+
+    def terminal_origin_label(self, provider: str) -> str:
+        return f"{provider_label(provider)} CLI in {self.name}"
 
 
 @dataclass(frozen=True)

@@ -197,7 +197,8 @@ class JunieProviderTests(unittest.TestCase):
             **{**status.__dict__, "provider": "claude", "origin": "Claude in JetBrains IDE"}
         )
         self.assertIsNone(session_open_target(claude_status, SESSION_OPEN_JETBRAINS))
-        self.assertEqual(default_session_open_action(claude_status), "vscode")
+        with patch("sidepulse.session_actions.vscode_url_available", return_value=True):
+            self.assertEqual(default_session_open_action(claude_status), "vscode")
 
     def test_installer_preserves_existing_config_and_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

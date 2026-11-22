@@ -944,6 +944,25 @@ class WindowBuildTests(StatusBarTestCase):
         self.assertEqual(field.toolTip(), "/service/t3/logs/provider")
         self.assertEqual(self.controller.settings_fields["t3code_links"].stringValue(), "Thread links: available")
 
+    def test_phpstorm_terminal_click_focuses_ide(self):
+        status = make_status(origin="Claude CLI in PhpStorm")
+        with (
+            patch.object(self.controller, "settings", AgentMonitorSettings()),
+            patch("sidepulse.session_actions.installed_app_paths_for_bundle_id", return_value=("/ide",)),
+            patch("sidepulse.session_actions.vscode_url_available", return_value=False),
+            patch.object(sb, "claude_session_terminal") as terminal,
+            patch.object(sb, "open_terminal_command") as resume,
+            patch.object(sb.subprocess, "Popen") as launch,
+        ):
+            menu = sb.build_session_options_menu(status, datetime.now(timezone.utc), self.controller)
+            self.assertEqual(menu.itemWithTitle_("Open in PhpStorm").state(), 1)
+            self.assertIsNone(menu.itemWithTitle_("Open in VS Code"))
+            self.controller.open_session(status, None, remember=False)
+
+        launch.assert_called_once_with(["open", "-b", "com.jetbrains.PhpStorm"])
+        terminal.assert_not_called()
+        resume.assert_not_called()
+
     def test_open_junie_session_in_ide_uses_bundle_identifier_fallback(self):
         status = make_status(provider="junie", cwd="/tmp/junie-project")
         with (

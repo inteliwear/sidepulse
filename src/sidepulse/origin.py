@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import quote
 
+from .jetbrains import JETBRAINS_IDES
 from .models import provider_label
 
 T3_BUNDLE_ID = "com.t3tools.t3code"
@@ -66,6 +67,9 @@ def detect_agent_origin(
         source = 'env:TERM_PROGRAM' if active_env.get('TERM_PROGRAM') else 'env:WT_SESSION'
         return surface_origin(normalized_provider, "cli", source)
 
+    if normalized_provider == "claude" and active_env.get("CLAUDE_CODE_ENTRYPOINT") == "cli":
+        return surface_origin("claude", "cli", "env:CLAUDE_CODE_ENTRYPOINT")
+
     return AgentOrigin(
         kind=f"{normalized_provider}_unknown",
         label=provider_label(normalized_provider),
@@ -98,6 +102,7 @@ def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigi
     if term_program == "vscode" or any(key.startswith("VSCODE_") for key in env):
         return surface_origin(provider, "vscode", "env:VSCODE")
 
+    jedi_term = env.get("TERMINAL_EMULATOR", "").casefold() == "jetbrains-jediterm"
     bundle_id = str(env.get("__CFBundleIdentifier") or "").strip().lower()
     if bundle_id:
         if provider == "codex" and any(part in bundle_id for part in ("openai", "chatgpt", "codex")):
@@ -106,10 +111,21 @@ def origin_from_environment(provider: str, env: Mapping[str, str]) -> AgentOrigi
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
         if provider == "grok" and "grok" in bundle_id:
             return surface_origin(provider, "app", "env:__CFBundleIdentifier")
-        if provider == "junie" and "jetbrains" in bundle_id:
+        if provider == "junie" and "jetbrains" in bundle_id and not jedi_term:
             return surface_origin(provider, "ide", "env:__CFBundleIdentifier")
 
-    return None
+    for ide in JETBRAINS_IDES:
+        if bundle_id == ide.bundle_id.lower():
+            return AgentOrigin(
+                f"{provider}_cli", ide.terminal_origin_label(provider), "env:__CFBundleIdentifier"
+            )
+    if bundle_id.startswith("com.jetbrains."):
+        source = "env:__CFBundleIdentifier"
+    elif jedi_term:
+        source = "env:TERMINAL_EMULATOR"
+    else:
+        return None
+    return AgentOrigin(f"{provider}_cli", f"{provider_label(provider)} CLI in JetBrains terminal", source)
 
 
 def origin_from_processes(

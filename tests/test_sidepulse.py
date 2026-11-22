@@ -1122,6 +1122,7 @@ class AgentMonitorTests(unittest.TestCase):
             0.0,
         )
 
+    @patch("sidepulse.session_actions.vscode_url_available", new=lambda url: True)
     def test_status_bar_session_row_has_inline_options(self) -> None:
         try:
             from sidepulse import status_bar
@@ -1192,6 +1193,7 @@ class AgentMonitorTests(unittest.TestCase):
         self.assertNotIn("Claude in VS Code", title)
         self.assertNotEqual(title, "Working  Claude in VS Code  functions")
 
+    @patch("sidepulse.session_actions.vscode_url_available", new=lambda url: True)
     def test_status_bar_session_row_shows_origin_when_known(self) -> None:
         try:
             from sidepulse import status_bar
@@ -8398,6 +8400,7 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             "cd '/tmp/project with spaces' && codex resume 019ee395-2f64-7cc3-b566-afcc1d626160",
         )
 
+    @patch("sidepulse.session_actions.vscode_url_available", new=lambda url: True)
     def test_session_default_open_action_follows_origin(self) -> None:
         def status_for(provider: str, origin: str) -> AgentStatus:
             return AgentStatus(
@@ -8433,6 +8436,7 @@ team id YOUR_TEAM_ID, push key '/path/to/AuthKey_YOUR_KEY_ID.p8'
             SESSION_OPEN_APP,
         )
 
+    @patch("sidepulse.session_actions.vscode_url_available", new=lambda url: True)
     def test_claude_session_actions_build_app_link_and_resume_command(self) -> None:
         status = AgentStatus(
             provider="claude",

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from .jetbrains import jetbrains_launch_for_project
+from .jetbrains import (
+    JETBRAINS_IDES,
+    JetBrainsIDE,
+    installed_app_paths_for_bundle_id,
+    jetbrains_launch_for_project,
+)
 from .junie_index import junie_session_project_dir
 from .models import AgentStatus, provider_label
 from .origin import valid_t3_link
@@ -30,7 +36,7 @@ SESSION_OPEN_VSCODE_SURFACES = ("vscode", "vs code", "visual studio code")
 @dataclass(frozen=True)
 class IdeOpenTarget:
     bundle_id: str
-    project_path: str
+    project_path: str | None
     app_path: str | None = None
     ide_name: str | None = None
 
@@ -58,7 +64,34 @@ def session_vscode_link(status: AgentStatus) -> str | None:
     )
 
 
+def vscode_url_available(url: str) -> bool:
+    if sys.platform != "darwin":
+        return True
+    from AppKit import NSWorkspace
+    from Foundation import NSURL
+
+    ns_url = NSURL.URLWithString_(url)
+    return (
+        ns_url is not None
+        and NSWorkspace.sharedWorkspace().URLForApplicationToOpenURL_(ns_url) is not None
+    )
+
+
+def jetbrains_terminal_ide(status: AgentStatus) -> JetBrainsIDE | None:
+    if not status.origin or " CLI in " not in status.origin:
+        return None
+    for ide in JETBRAINS_IDES:
+        if status.origin == ide.terminal_origin_label(status.provider):
+            return ide
+    return None
+
+
 def session_jetbrains_target(status: AgentStatus) -> IdeOpenTarget | None:
+    ide = jetbrains_terminal_ide(status)
+    if ide is not None:
+        if installed_app_paths_for_bundle_id(ide.bundle_id):
+            return IdeOpenTarget(ide.bundle_id, None, ide_name=ide.name)
+        return None
     project_dir = session_jetbrains_project_dir(status)
     if not project_dir:
         return None
@@ -126,7 +159,7 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
     if status.t3_link or is_t3_origin(status.origin):
         return (SESSION_OPEN_T3, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP, SESSION_OPEN_VSCODE)
     if origin:
-        if status.provider.lower() == "junie" and "jetbrains" in origin:
+        if jetbrains_terminal_ide(status) or (status.provider.lower() == "junie" and "jetbrains" in origin):
             return (SESSION_OPEN_JETBRAINS, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP)
         if any(surface in origin for surface in SESSION_OPEN_VSCODE_SURFACES):
             return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
@@ -138,7 +171,7 @@ def preferred_session_open_actions(status: AgentStatus) -> tuple[str, ...]:
             return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 
     if status.provider.lower() == "claude":
-        return (SESSION_OPEN_VSCODE, SESSION_OPEN_APP, SESSION_OPEN_TERMINAL)
+        return (SESSION_OPEN_VSCODE, SESSION_OPEN_TERMINAL, SESSION_OPEN_APP)
     return (SESSION_OPEN_APP, SESSION_OPEN_TERMINAL, SESSION_OPEN_VSCODE)
 
 
@@ -173,7 +206,7 @@ def session_open_target(
         return ("url", url) if url else None
     if action == SESSION_OPEN_VSCODE:
         url = session_vscode_link(status)
-        return ("url", url) if url else None
+        return ("url", url) if url and vscode_url_available(url) else None
     if action == SESSION_OPEN_TERMINAL:
         command = session_resume_command(status)
         return ("terminal", command) if command else None

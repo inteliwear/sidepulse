@@ -187,6 +187,7 @@ from .session_actions import (
     default_session_open_action,
     default_session_open_target,
     is_t3_origin,
+    jetbrains_terminal_ide,
     preferred_session_open_actions,
     session_open_action_label,
     session_open_origin,
@@ -2372,28 +2373,32 @@ class StatusBarController(NSObject):
         if not isinstance(status, AgentStatus):
             return
         provider = status.provider.lower()
-        terminal_lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
         open_origin = session_open_origin(status)
         requested_action = action or self.settings.session_open_action(provider, open_origin)
-        t3_session = is_t3_origin(open_origin)
-        should_focus_terminal = (
-            requested_action == SESSION_OPEN_TERMINAL if t3_session
-            else action in {None, SESSION_OPEN_TERMINAL}
-        )
-        if terminal_lookup and should_focus_terminal:
-            terminal = terminal_lookup(status.session_id)
-            if terminal is not None:
-                if not focus_agent_terminal(terminal, provider=provider, session_id=status.session_id):
-                    self.set_settings_message(
-                        f"{provider_label(provider)} is running, but its terminal tab could not be selected."
-                    )
-                return
+        prefer_host = is_t3_origin(open_origin) or jetbrains_terminal_ide(status) is not None
+
+        def focus_live_terminal() -> bool:
+            lookup = {"junie": junie_session_terminal, "claude": claude_session_terminal}.get(provider)
+            terminal = lookup(status.session_id) if lookup else None
+            if terminal is None:
+                return False
+            if not focus_agent_terminal(terminal, provider=provider, session_id=status.session_id):
+                self.set_settings_message(
+                    f"{provider_label(provider)} is running, but its terminal tab could not be selected."
+                )
+            return True
+
+        if not prefer_host and action in {None, SESSION_OPEN_TERMINAL} and focus_live_terminal():
+            return
+
         target = session_open_target(status, requested_action) if requested_action else None
         if target is None:
             default = default_session_open_target(status, skip_action=requested_action)
             if default is not None:
                 requested_action, target = default
 
+        if prefer_host and requested_action == SESSION_OPEN_TERMINAL and focus_live_terminal():
+            return
         if target is None:
             self.set_settings_message(f"No open action available for {status.display_name}.")
             return
@@ -2419,10 +2424,10 @@ class StatusBarController(NSObject):
                     log_status_bar(f"Could not remember the Antigravity permission choice: {exc}")
             self.antigravity_open_queue.submit(self.open_antigravity_conversation, value, request_access)
         elif kind == "ide":
-            if value.app_path:
-                subprocess.Popen(["open", "-a", value.app_path, value.project_path])
-            else:
-                subprocess.Popen(["open", "-b", value.bundle_id, value.project_path])
+            args = ["open", "-a", value.app_path] if value.app_path else ["open", "-b", value.bundle_id]
+            if value.project_path:
+                args.append(value.project_path)
+            subprocess.Popen(args)
         else:
             self.set_settings_message(f"Unknown open action for {status.display_name}.")
             return
