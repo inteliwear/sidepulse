@@ -130,7 +130,14 @@ def virtual_led_colors(
         return [(0.0, scale, 0.4 * scale, 1.0)] * LED_COUNT
     if state == LedDisplayState.ASK:
         amount = 0.5 - 0.5 * math.cos(2.0 * math.pi * (elapsed % 1.6) / 1.6)
-        return [(scale * amount, 0.227 * scale * amount, 0.0, amount)] * LED_COUNT
+        return [(scale * amount, 0.690 * scale * amount, 0.0, amount)] * LED_COUNT
+    if state == LedDisplayState.BLOCKED:
+        # Mirrors blocked-blink.LED: two 140 ms flashes, 140 ms apart, then a
+        # 900 ms rest. Total cycle 1.32 s.
+        phase = elapsed % 1.32
+        lit = phase < 0.14 or (0.28 <= phase < 0.42)
+        amount = 1.0 if lit else 0.0
+        return [(scale * amount, 0.149 * scale * amount, 0.0, amount)] * LED_COUNT
     if state == LedDisplayState.IDLE:
         amount = 0.5 - 0.5 * math.cos(2.0 * math.pi * (elapsed % 6.0) / 6.0)
         dim = 2.0 / 255.0
@@ -521,7 +528,7 @@ class VirtualStatusDevice(NSObject):
     def set_state(self, state: LedDisplayState, brightness: int | float):
         self.show()
         self.view.setState_brightness_(state, brightness)
-        if state in {LedDisplayState.WORKING, LedDisplayState.ASK}:
+        if state in {LedDisplayState.WORKING, LedDisplayState.ASK, LedDisplayState.BLOCKED}:
             self._ensure_timer(FRAME_INTERVAL)
         elif state == LedDisplayState.IDLE:
             self._ensure_timer(IDLE_FRAME_INTERVAL)
