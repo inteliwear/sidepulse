@@ -14,6 +14,29 @@ from sidepulse.providers import parse_log_line
 
 SESSION_ID = "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
 MEMORY_PROMPT = "Consolidate the supplied rollout summaries into memory_summary.md"
+CODEX_V1_MEMORY_PROMPT = (
+    "## Memory Writing Agent: Phase 2 (Consolidation)\n\n"
+    "You are a Memory Writing Agent."
+)
+CODEX_V2_MEMORY_PROMPT = (
+    "Consolidate the supplied rollout summaries into `memory_summary.md` so another\n"
+    "agent understands the user, finds relevant prior work, and continues correctly."
+)
+
+
+def rendered_memory_prompt(directory, memory_dir):
+    memory_root = str(memory_dir)
+    if directory == "memories":
+        return (
+            f"{CODEX_V1_MEMORY_PROMPT}\n\n"
+            f"Folder structure (under {memory_root}/):\n\n"
+            "- memory_summary.md\n- MEMORY.md\n"
+        )
+    return (
+        f"{CODEX_V2_MEMORY_PROMPT}\n\n"
+        f"Read `{memory_root}/phase2_workspace_diff.md` in `{memory_root}/` first.\n\n"
+        f"Create or update `{memory_root}/memory_summary.md` in the required format.\n"
+    )
 
 
 def write_rollout(root, source, *, padding=0, prompt=MEMORY_PROMPT, session_id=SESSION_ID):
@@ -145,6 +168,249 @@ def test_transcriptless_session_start_in_memory_directory_reports_idle():
         "hook_event_name": "SessionStart", "session_id": SESSION_ID, "cwd": "/work/memories_v2",
     })
     assert report["status"]["state"] == "idle"
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_transcriptless_memory_jobs_stay_hidden_through_live_hooks(tmp_path, monkeypatch, directory):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    prompt = rendered_memory_prompt(directory, memory_dir)
+    if directory == "memories_v2":
+        prompt = prompt.replace(
+            "Consolidate the supplied rollout summaries into",
+            "Consolidate the supplied rollout\nsummaries into",
+        )
+        prompt = prompt.replace("Create or update ", "Create or\nupdate ")
+    else:
+        prompt = prompt.replace("Folder structure (under ", "Folder structure\n(under ")
+    state = ProgramState()
+    legacy = LiveAgentMonitor()
+    try:
+        for event, fields in [
+            ("SessionStart", {}),
+            ("UserPromptSubmit", {"prompt": prompt + "\n\nAdditional rollout content."}),
+            ("PreToolUse", {"tool_name": "exec_command"}),
+            ("PostToolUse", {"tool_name": "exec_command"}),
+            ("Stop", {"last_assistant_message": "Memory updated."}),
+        ]:
+            payload = {
+                "hook_event_name": event,
+                "session_id": SESSION_ID,
+                "cwd": str(memory_dir),
+                "transcript_path": None,
+                **fields,
+            }
+            report = hook_report("codex", payload)
+            if event == "SessionStart":
+                assert report is None
+            else:
+                if event == "UserPromptSubmit":
+                    assert report["status"]["state"] == "clear"
+                state.submit(report)
+            legacy.ingest_record(parse_log_line("codex", json.dumps(payload)))
+            for snapshot in (ProgramMonitor(state).snapshot(), legacy.snapshot(include_stale=True)):
+                assert snapshot.statuses == (), event
+                assert snapshot.stale_statuses == (), event
+                assert snapshot.aggregate.active_count == 0, event
+                assert snapshot.aggregate.mode == AgentMode.IDLE_READY, event
+    finally:
+        state.close()
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_transcriptless_memory_job_is_suppressed_during_hook_log_recovery(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    prompt = rendered_memory_prompt(directory, memory_dir)
+    path = tmp_path / "codex.jsonl"
+    path.write_text("".join(json.dumps({
+        "hook_event_name": event,
+        "session_id": SESSION_ID,
+        "cwd": str(memory_dir),
+        "transcript_path": None,
+        **fields,
+    }) + "\n" for event, fields in [
+        ("SessionStart", {}),
+        ("UserPromptSubmit", {"prompt": prompt + "\n\nAdditional rollout content."}),
+        ("PreToolUse", {"tool_name": "exec_command"}),
+    ]))
+    sources = (SourceSpec("codex", path),)
+
+    snapshot = AgentMonitor(sources=sources).snapshot(include_stale=True)
+    assert snapshot.statuses == snapshot.stale_statuses == ()
+    assert snapshot.aggregate.active_count == 0
+
+    live = LiveAgentMonitor()
+    live.ingest_record(parse_log_line("codex", json.dumps({
+        "hook_event_name": "PreToolUse", "session_id": SESSION_ID, "tool_name": "exec_command",
+    })))
+    assert live.snapshot().aggregate.active_count == 1
+    live.recovery_sources = sources
+    live.reconcile_recovery_sources()
+    snapshot = live.snapshot(include_stale=True)
+    assert snapshot.statuses == snapshot.stale_statuses == ()
+    assert snapshot.aggregate.active_count == 0
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_ordinary_first_prompt_in_managed_memory_directory_remains_visible(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    state = ProgramState()
+    legacy = LiveAgentMonitor()
+    try:
+        start = hook_report("codex", {
+            "hook_event_name": "SessionStart", "session_id": SESSION_ID,
+            "cwd": str(memory_dir), "transcript_path": None,
+        })
+        assert start is None
+
+        for event, fields, mode in [
+            ("UserPromptSubmit", {"prompt": "Please edit the memory summary for this task."}, AgentMode.WORKING),
+            ("PreToolUse", {"tool_name": "exec_command"}, AgentMode.TOOL_RUNNING),
+            ("Stop", {"last_assistant_message": "Done."}, AgentMode.COMPLETED),
+        ]:
+            payload = {
+                "hook_event_name": event, "session_id": SESSION_ID,
+                "cwd": str(memory_dir), "transcript_path": None, **fields,
+            }
+            report = hook_report("codex", payload)
+            state.submit(report)
+            legacy.ingest_record(parse_log_line("codex", json.dumps(payload)))
+            for snapshot in (ProgramMonitor(state).snapshot(), legacy.snapshot()):
+                assert len(snapshot.statuses) == 1, event
+                assert snapshot.statuses[0].mode == mode, event
+                assert snapshot.aggregate.active_count == int(
+                    mode in {AgentMode.WORKING, AgentMode.TOOL_RUNNING}
+                ), event
+    finally:
+        state.close()
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_memory_prompt_or_directory_lookalikes_do_not_hide_user_work(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    memory_dir = codex_home / directory
+    memory_dir.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    prompt = CODEX_V1_MEMORY_PROMPT if directory == "memories" else CODEX_V2_MEMORY_PROMPT
+
+    lookalike_payload = {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(tmp_path / "other" / directory), "transcript_path": None,
+        "prompt": prompt,
+    }
+    assert hook_report("codex", lookalike_payload)["status"]["state"] == "working"
+
+    wrong_prompt_payload = {
+        **lookalike_payload,
+        "cwd": str(codex_home / directory),
+        "prompt": "Please work on this memory folder.",
+    }
+    assert hook_report("codex", wrong_prompt_payload)["status"]["state"] == "working"
+
+    wrong_root_payload = {
+        **lookalike_payload,
+        "cwd": str(memory_dir),
+        "prompt": rendered_memory_prompt(directory, tmp_path / "other" / directory),
+    }
+    assert hook_report("codex", wrong_root_payload)["status"]["state"] == "working"
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_quoted_opening_and_unrelated_workspace_mention_do_not_hide_user_work(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    opening = CODEX_V1_MEMORY_PROMPT if directory == "memories" else CODEX_V2_MEMORY_PROMPT
+    prompt = (
+        f"{opening}\n\n"
+        f"I am quoting this template opening for discussion: {opening}\n\n"
+        f"The workspace is `{memory_dir}/`, but this is an ordinary request."
+    )
+    report = hook_report("codex", {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(memory_dir), "transcript_path": None, "prompt": prompt,
+    })
+    assert report["status"]["state"] == "working"
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_rendered_memory_prompt_for_another_root_does_not_hide_user_work(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    other_memory_dir = codex_home / "another-memory-root"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    report = hook_report("codex", {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(memory_dir), "transcript_path": None,
+        "prompt": rendered_memory_prompt(directory, other_memory_dir),
+    })
+    assert report["status"]["state"] == "working"
+
+
+@pytest.mark.parametrize("directory", ["memories", "memories_v2"])
+def test_rendered_memory_prompt_matches_workspace_with_spaces_and_punctuation(
+    tmp_path, monkeypatch, directory,
+):
+    codex_home = tmp_path / "codex home [test] & notes"
+    memory_dir = codex_home / directory
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    report = hook_report("codex", {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(memory_dir), "transcript_path": None,
+        "prompt": rendered_memory_prompt(directory, memory_dir),
+    })
+    assert report["status"]["state"] == "clear"
+
+
+def test_unmarked_transcript_prevents_prompt_fallback_from_hiding_user_work(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / "memories"
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    transcript = tmp_path / "ordinary-rollout.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "session_meta", "payload": {"id": SESSION_ID, "source": "cli"},
+    }) + "\n")
+    report = hook_report("codex", {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(memory_dir), "transcript_path": str(transcript),
+        "prompt": CODEX_V1_MEMORY_PROMPT,
+    })
+    assert report["status"]["state"] == "working"
+
+
+def test_missing_transcript_field_does_not_use_memory_prompt_fallback(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex-home"
+    memory_dir = codex_home / "memories"
+    memory_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    report = hook_report("codex", {
+        "hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID,
+        "cwd": str(memory_dir), "prompt": CODEX_V1_MEMORY_PROMPT,
+    })
+    assert report["status"]["state"] == "working"
 
 
 def test_large_valid_header_identifies_memory_session(tmp_path):

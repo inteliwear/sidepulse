@@ -33,6 +33,16 @@ CLAUDE_TRANSCRIPT_PROVIDER = "claude-transcripts"
 CODEX_TRANSCRIPT_MAX_FILES = 12
 CODEX_TRANSCRIPT_MAX_LINES = 500
 CODEX_TRANSCRIPT_MAX_HEADER_BYTES = 8 * 1024 * 1024
+CODEX_MEMORY_PROMPT_PREFIXES = {
+    "memories": (
+        "## Memory Writing Agent: Phase 2 (Consolidation)\n\n"
+        "You are a Memory Writing Agent."
+    ),
+    "memories_v2": (
+        "Consolidate the supplied rollout summaries into `memory_summary.md` so another\n"
+        "agent understands the user, finds relevant prior work, and continues correctly."
+    ),
+}
 CLAUDE_TRANSCRIPT_MAX_FILES = 24
 CLAUDE_TRANSCRIPT_MAX_LINES = 500
 TRANSCRIPT_FILE_LIST_CACHE_SECONDS = 5.0
@@ -1185,6 +1195,8 @@ def mode_for_event(record: HookEvent) -> AgentMode | None:
     if event in {"SessionEnd"}:
         return AgentMode.COMPLETED
     if event == "SessionStart":
+        if record.provider == "codex" and is_codex_ephemeral_memory_candidate(record):
+            return None
         return AgentMode.IDLE_READY
     return None
 
@@ -1576,6 +1588,15 @@ def _codex_memory_session_id(path: Path, signature: tuple[float, int]) -> str | 
 def is_codex_memory_consolidation(record: HookEvent) -> bool:
     if record.provider != "codex" or not record.session_id:
         return False
+    if "transcript_path" in record.raw and record.raw.get("transcript_path") is None:
+        if record.event_name != "UserPromptSubmit":
+            return False
+        directory = _codex_ephemeral_memory_directory(record)
+        prompt = record.raw.get("prompt")
+        if directory is None or not isinstance(prompt, str):
+            return False
+        return _codex_ephemeral_memory_prompt_matches(prompt, directory)
+
     transcript_path = _string_or_none(record.raw.get("transcript_path"))
     if not transcript_path:
         return False
@@ -1585,6 +1606,60 @@ def is_codex_memory_consolidation(record: HookEvent) -> bool:
     except ValueError:
         return False
     return signature is not None and _codex_memory_session_id(path, signature) == record.session_id
+
+
+def _codex_ephemeral_memory_directory(record: HookEvent) -> str | None:
+    if (
+        record.provider != "codex"
+        or not record.session_id
+        or "transcript_path" not in record.raw
+        or record.raw.get("transcript_path") is not None
+        or not isinstance(record.cwd, str)
+        or not record.cwd
+    ):
+        return None
+
+    codex_home = os.environ.get("CODEX_HOME")
+    home = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    try:
+        working_directory = Path(record.cwd).expanduser().resolve()
+        memory_directories = {
+            directory: (home / directory).resolve()
+            for directory in ("memories", "memories_v2")
+        }
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return next(
+        (directory for directory, path in memory_directories.items() if working_directory == path),
+        None,
+    )
+
+
+def _codex_ephemeral_memory_prompt_matches(prompt: str, directory: str) -> bool:
+    normalized_prompt = " ".join(prompt.split())
+    expected_opening = " ".join(CODEX_MEMORY_PROMPT_PREFIXES[directory].split())
+    if not normalized_prompt.startswith(expected_opening):
+        return False
+
+    codex_home = os.environ.get("CODEX_HOME")
+    memory_root = (Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / directory
+    if directory == "memories":
+        instruction = (
+            r"Folder\s+structure\s+\(under\s+"
+            + re.escape(str(memory_root))
+            + r"/\s*\):"
+        )
+    else:
+        instruction = (
+            r"Create\s+or\s+update\s+`"
+            + re.escape(str(memory_root))
+            + r"/memory_summary\.md`\s+in\s+the\s+required\s+format\."
+        )
+    return re.search(instruction, prompt) is not None
+
+
+def is_codex_ephemeral_memory_candidate(record: HookEvent) -> bool:
+    return _codex_ephemeral_memory_directory(record) is not None
 
 
 def is_codex_internal_session(record: HookEvent) -> bool:
